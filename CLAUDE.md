@@ -21,6 +21,9 @@ cd server && npx prisma generate
 # DB studio
 cd server && npx prisma studio
 
+# Typecheck (tsc --noEmit per workspace)
+npm run typecheck
+
 # Tests (vitest, per-workspace configs — run from root)
 npm run test:ci          # lint-free CI run (junit reporter)
 npm test                 # all workspace tests
@@ -30,6 +33,23 @@ npm run test --workspace client   # client only
 
 Note: run tests via the npm scripts above (per-workspace vitest configs). Running
 `npx vitest` from the repo root uses the wrong environment and will fail.
+
+## Language / TypeScript
+
+The codebase is **TypeScript (strict)** across both workspaces (see
+`docs/adr/0001-typescript-for-frontend-and-backend.md`). Key points:
+
+- **Server** runs `.ts` directly via **`tsx`** (`tsx watch index.ts` in dev, `tsx index.ts`
+  in prod) — no build/emit step. `npm run typecheck --workspace server` runs `tsc --noEmit`.
+  NodeNext ESM: relative imports **keep the `.js` extension** even though sources are `.ts`.
+- **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are
+  **extensionless**. `tsc --noEmit` for typecheck.
+- **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both
+  sides: branded `Cents` money helpers, Tiltify webhook payload types, and `claim_data` helpers.
+  It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
+- `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
+- Tests and `*.config.js` files remain JavaScript (allowJs stays enabled for this reason);
+  no `.js`/`.jsx` **source** files remain.
 
 ## Docker Deployment
 
@@ -69,31 +89,31 @@ npm run dev
 
 ## Architecture
 
-npm workspaces monorepo: `server/` (Express + Prisma + SQLite) and `client/` (React + Vite + Tailwind). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.js`).
+npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.js`).
 
 ### Server
 
-- `server/index.js` — Express entry point. The Tiltify webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
-- `server/lib/prisma.js` — Prisma singleton using `globalThis` cache to survive hot reloads.
-- `server/services/tiltify.js` — OAuth2 client-credentials token fetch with in-memory cache (refreshed ~60s before expiry). Calls Tiltify v5 API. Supports multiple scopes (`public`, `webhooks:write`).
-- `server/services/donation.js` — Shared `processDonation()` (upserts donor + donation, sends magic link, auto-fulfills pledge) used by both webhook and simulation. Also exports `checkBlockedWords()` for custom poll entry validation.
-- `server/services/spend.js` — Reusable `tx`-aware spend helpers (`claimRewardTx`, `votePollTx`, `contributeGoalTx`) shared between HTTP routes and pledge fulfillment.
-- `server/services/pledge.js` — Pledge lifecycle: `createPledge()` (validates items, persists `PendingPledge`), `resolvePledge()` (by token or email fallback), `fulfillPledge()` (executes items inside a donation transaction), `createRelayForPledge()` (creates Tiltify relay key for deterministic linkage).
-- `server/services/email.js` — Nodemailer magic link sender; called fire-and-forget from the webhook handler.
-- `server/middleware/adminAuth.js` — Checks `X-Admin-Key` header against `ADMIN_API_KEY` env var.
-- `server/middleware/donorAuth.js` — Resolves `?token=` query param to a `Donor` record; sets `req.donor`.
-- `server/middleware/moderatorAuth.js` — Chains `donorAuth` then checks `req.donor.is_moderator`. Moderator access via magic link, no separate API key.
-- `server/routes/moderator.js` — Moderator CRUD for polls, rewards, goals, claims, and custom entry approval.
+- `server/index.ts` — Express entry point. The Tiltify webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
+- `server/lib/prisma.ts` — Prisma singleton using `globalThis` cache to survive hot reloads.
+- `server/services/tiltify.ts` — OAuth2 client-credentials token fetch with in-memory cache (refreshed ~60s before expiry). Calls Tiltify v5 API. Supports multiple scopes (`public`, `webhooks:write`).
+- `server/services/donation.ts` — Shared `processDonation()` (upserts donor + donation, sends magic link, auto-fulfills pledge) used by both webhook and simulation. Also exports `checkBlockedWords()` for custom poll entry validation.
+- `server/services/spend.ts` — Reusable `tx`-aware spend helpers (`claimRewardTx`, `votePollTx`, `contributeGoalTx`) shared between HTTP routes and pledge fulfillment.
+- `server/services/pledge.ts` — Pledge lifecycle: `createPledge()` (validates items, persists `PendingPledge`), `resolvePledge()` (by token or email fallback), `fulfillPledge()` (executes items inside a donation transaction), `createRelayForPledge()` (creates Tiltify relay key for deterministic linkage).
+- `server/services/email.ts` — Nodemailer magic link sender; called fire-and-forget from the webhook handler.
+- `server/middleware/adminAuth.ts` — Checks `X-Admin-Key` header against `ADMIN_API_KEY` env var.
+- `server/middleware/donorAuth.ts` — Resolves `?token=` query param to a `Donor` record; sets `req.donor`.
+- `server/middleware/moderatorAuth.ts` — Chains `donorAuth` then checks `req.donor.is_moderator`. Moderator access via magic link, no separate API key.
+- `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, and custom entry approval.
 
 ### Moderator Setup
 
 Set `MODERATOR_EMAILS` env var to a comma-separated list of emails. When a donation webhook fires for a matching email, the donor gets `is_moderator: true`. Moderators access their dashboard via their magic link — the Navbar shows a "Moderate" link when `is_moderator` is true. Moderators can CRUD polls/rewards/goals, view/fulfill claims, and approve custom poll entries. They cannot access `/api/admin/*` routes (require `X-Admin-Key`).
 
-### Webhook flow (`server/routes/webhook.js`)
+### Webhook flow (`server/routes/webhook.ts`)
 
 1. HMAC-SHA256 verify (`x-tiltify-signature` + `x-tiltify-timestamp`). Skipped if `TILTIFY_WEBHOOK_SECRET` is unset (useful for local testing).
 2. Handles both standard `donation.completed` events and `private:relay:donation_updated` relay events. For relay events, extracts `pledge_token` from `meta.relay_key_id` and only processes `payment_status: completed`.
-3. Delegates to `processDonation()` in `server/services/donation.js` — upserts donor (credits balance, extends token TTL without rotating, sets `is_moderator` only when matching), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink.
+3. Delegates to `processDonation()` in `server/services/donation.ts` — upserts donor (credits balance, extends token TTL without rotating, sets `is_moderator` only when matching), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink.
 
 ### Pledge / Cart Flow
 
@@ -108,15 +128,15 @@ The smart donation cart lets donors select incentives before donating. The flow:
 
 ### Balance mutations
 
-All balance changes (reward claims, poll votes, goal contributions) use `prisma.$transaction` with the shared `tx`-aware helpers in `server/services/spend.js` to keep `Donor.balance_remaining` and the associated record creation atomic. Both HTTP routes and pledge fulfillment use the same helpers.
+All balance changes (reward claims, poll votes, goal contributions) use `prisma.$transaction` with the shared `tx`-aware helpers in `server/services/spend.ts` to keep `Donor.balance_remaining` and the associated record creation atomic. Both HTTP routes and pledge fulfillment use the same helpers.
 
 ### Client
 
-- `client/src/api/client.js` — axios instance that auto-attaches `?token=` from `localStorage.donor_token` to every request.
-- `client/src/api/admin.js` — separate axios instance that auto-attaches `X-Admin-Key` from `localStorage.admin_key`.
-- `client/src/api/moderator.js` — axios instance that auto-attaches `?token=` from `localStorage.donor_token` for moderator routes.
-- `client/src/pages/MyWallet.jsx` — reads `?token=` from the URL on mount and persists it to localStorage.
-- `client/src/pages/admin/AdminLayout.jsx` — renders a key-entry gate if `localStorage.admin_key` is absent; logout clears the key.
+- `client/src/api/client.ts` — axios instance that auto-attaches `?token=` from `localStorage.donor_token` to every request.
+- `client/src/api/admin.ts` — separate axios instance that auto-attaches `X-Admin-Key` from `localStorage.admin_key`.
+- `client/src/api/moderator.ts` — axios instance that auto-attaches `?token=` from `localStorage.donor_token` for moderator routes.
+- `client/src/pages/MyWallet.tsx` — reads `?token=` from the URL on mount and persists it to localStorage.
+- `client/src/pages/admin/AdminLayout.tsx` — renders a key-entry gate if `localStorage.admin_key` is absent; logout clears the key.
 
 ### Database
 
