@@ -5,14 +5,14 @@ import ProgressBar from '../../src/components/ProgressBar';
 describe('ProgressBar', () => {
   it('renders the progress bar', () => {
     const { container } = render(<ProgressBar value={50} max={100} />);
-    const bar = container.querySelector('[style*="width"]');
+    const bar = container.querySelector('[style*="width"]') as HTMLElement;
     expect(bar).toBeDefined();
     expect(bar.style.width).toBe('50%');
   });
 
   it('caps at 100%', () => {
     const { container } = render(<ProgressBar value={150} max={100} />);
-    const bar = container.querySelector('[style*="width"]');
+    const bar = container.querySelector('[style*="width"]') as HTMLElement;
     expect(bar.style.width).toBe('100%');
   });
 
@@ -28,7 +28,7 @@ describe('ProgressBar', () => {
 
   it('handles zero max', () => {
     const { container } = render(<ProgressBar value={0} max={0} />);
-    const bar = container.querySelector('[style*="width"]');
+    const bar = container.querySelector('[style*="width"]') as HTMLElement;
     expect(bar.style.width).toBe('0%');
   });
 });

@@ -200,7 +200,7 @@ compiled types package; tends to stall as a permanent half-measure.
 - [ ] `npm run typecheck` clean under `strict`.
 - [ ] `npm run lint` clean.
 - [ ] `scripts/smoke-test.sh` passes against runtime images.
-- [ ] No `.js`/`.jsx` source files remain (config files excepted).
+- [ ] No `.js`/`.jsx` source or test files remain; `allowJs` off (only `*.config.js` excepted).
 
 ### Reversibility
 

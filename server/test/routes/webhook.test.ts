@@ -39,7 +39,7 @@ describe('POST /api/webhooks/tiltify', () => {
   });
 
   it('processes a valid donation.completed event', async () => {
-    processDonation.mockResolvedValue({ donor: { id: 'donor-1' } });
+    vi.mocked(processDonation).mockResolvedValue({ donor: { id: 'donor-1' } } as any);
 
     const payload = {
       meta: { event_type: 'donation.completed' },

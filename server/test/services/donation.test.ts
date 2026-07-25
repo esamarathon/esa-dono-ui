@@ -31,15 +31,15 @@ describe('processDonation', () => {
     process.env.MODERATOR_EMAILS = '';
     // Make pledge resolution return null (no pledge) by default
     const prisma = (await import('../../lib/prisma.js')).default;
-    prisma.pendingPledge.findUnique.mockResolvedValue(null);
-    prisma.pendingPledge.findFirst.mockResolvedValue(null);
+    vi.mocked(prisma.pendingPledge.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.pendingPledge.findFirst).mockResolvedValue(null);
   });
 
   it('creates donor and donation for first-time donor', async () => {
     const donor = { id: 'donor-1', email: 'alice@example.com', magic_token: 'abc123' };
     mockTxDonor.upsert.mockResolvedValue(donor);
     mockTxDonation.create.mockResolvedValue({});
-    prisma.$transaction.mockImplementation((cb) => cb(mockTx));
+    vi.mocked(prisma.$transaction).mockImplementation((cb: any) => cb(mockTx));
 
     const { processDonation } = await import('../../services/donation.js');
     const result = await processDonation({
@@ -50,9 +50,9 @@ describe('processDonation', () => {
       comment: 'Nice!',
     });
 
-    expect(result.duplicate).toBeUndefined();
-    expect(result.donor).toBe(donor);
-    expect(result.token).toBe('abc123');
+    expect((result as any).duplicate).toBeUndefined();
+    expect((result as any).donor).toBe(donor);
+    expect((result as any).token).toBe('abc123');
     expect(mockTxDonor.upsert).toHaveBeenCalledOnce();
     expect(mockTxDonor.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -80,16 +80,16 @@ describe('processDonation', () => {
   it('returns { duplicate: true } when tiltify_id already exists', async () => {
     const donor = { id: 'donor-1', email: 'alice@example.com', magic_token: 'abc123' };
     mockTxDonor.upsert.mockResolvedValue(donor);
-    const p2002 = new Error('Unique constraint failed');
+    const p2002 = new Error('Unique constraint failed') as Error & { code: string };
     p2002.code = 'P2002';
     mockTxDonation.create.mockRejectedValue(p2002);
 
-    const $transaction = vi.fn().mockImplementation((cb) =>
-      cb(mockTx).catch((e) => {
+    const $transaction = vi.fn().mockImplementation((cb: any) =>
+      cb(mockTx).catch((e: unknown) => {
         throw e;
       }),
     );
-    prisma.$transaction.mockImplementation($transaction);
+    vi.mocked(prisma.$transaction).mockImplementation($transaction);
 
     const { processDonation } = await import('../../services/donation.js');
     const result = await processDonation({
@@ -108,7 +108,7 @@ describe('processDonation', () => {
     const donor = { id: 'donor-1', email: 'alice@example.com', magic_token: 'stable-token' };
     mockTxDonor.upsert.mockResolvedValue(donor);
     mockTxDonation.create.mockResolvedValue({});
-    prisma.$transaction.mockImplementation((cb) => cb(mockTx));
+    vi.mocked(prisma.$transaction).mockImplementation((cb: any) => cb(mockTx));
 
     const { processDonation } = await import('../../services/donation.js');
     const result = await processDonation({
@@ -119,7 +119,7 @@ describe('processDonation', () => {
       comment: 'Another one!',
     });
 
-    expect(result.token).toBe('stable-token');
+    expect((result as any).token).toBe('stable-token');
     expect(mockTxDonor.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { email: 'alice@example.com' },
@@ -133,7 +133,7 @@ describe('processDonation', () => {
     const donor = { id: 'donor-1', email: 'bob@example.com', magic_token: 'abc' };
     mockTxDonor.upsert.mockResolvedValue(donor);
     mockTxDonation.create.mockResolvedValue({});
-    prisma.$transaction.mockImplementation((cb) => cb(mockTx));
+    vi.mocked(prisma.$transaction).mockImplementation((cb: any) => cb(mockTx));
 
     const { processDonation } = await import('../../services/donation.js');
     await processDonation({
@@ -161,7 +161,7 @@ describe('processDonation', () => {
     };
     mockTxDonor.upsert.mockResolvedValue(donor);
     mockTxDonation.create.mockResolvedValue({});
-    prisma.$transaction.mockImplementation((cb) => cb(mockTx));
+    vi.mocked(prisma.$transaction).mockImplementation((cb: any) => cb(mockTx));
 
     process.env.MODERATOR_EMAILS = '';
 

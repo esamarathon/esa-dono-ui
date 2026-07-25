@@ -34,7 +34,9 @@ vi.mock('../../lib/prisma.js', () => ({
     balanceAdjustment: {
       create: vi.fn(),
     },
-    $transaction: vi.fn((ops) => Promise.all(ops.map((o) => (typeof o === 'function' ? o() : o)))),
+    $transaction: vi.fn((ops: any[]) =>
+      Promise.all(ops.map((o) => (typeof o === 'function' ? o() : o))),
+    ),
   },
 }));
 
@@ -44,6 +46,9 @@ vi.mock('../../services/donation.js', () => ({
 
 import prisma from '../../lib/prisma.js';
 import adminRouter from '../../routes/admin.js';
+
+// Loose alias for configuring the mocked Prisma client with partial fixtures.
+const px = prisma as unknown as Record<string, any>;
 
 function createApp() {
   const app = express();
@@ -61,10 +66,10 @@ describe('Admin donor management', () => {
   const auth = { 'x-admin-key': 'test-key' };
 
   it('GET /donors lists donors', async () => {
-    prisma.donor.findMany.mockResolvedValue([
+    px.donor.findMany.mockResolvedValue([
       { id: 'd1', email: 'a@b.com', total_donated: 1000, balance_remaining: 500 },
     ]);
-    prisma.donor.count.mockResolvedValue(1);
+    px.donor.count.mockResolvedValue(1);
 
     const res = await request(createApp()).get('/api/admin/donors').set(auth);
 
@@ -75,7 +80,7 @@ describe('Admin donor management', () => {
   });
 
   it('GET /donors/:id returns wallet', async () => {
-    prisma.donor.findUnique.mockResolvedValue({
+    px.donor.findUnique.mockResolvedValue({
       id: 'd1',
       email: 'a@b.com',
       total_donated: 1000,
@@ -96,7 +101,7 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/revoke-token clears token', async () => {
-    prisma.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', magic_token: null });
+    px.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', magic_token: null });
 
     const res = await request(createApp()).post('/api/admin/donors/d1/revoke-token').set(auth);
 
@@ -108,7 +113,7 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/freeze toggles frozen status', async () => {
-    prisma.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', is_frozen: true });
+    px.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', is_frozen: true });
 
     const res = await request(createApp())
       .post('/api/admin/donors/d1/freeze')
@@ -120,13 +125,13 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/adjust-balance adjusts balance', async () => {
-    prisma.donor.findUnique.mockResolvedValue({
+    px.donor.findUnique.mockResolvedValue({
       id: 'd1',
       email: 'a@b.com',
       balance_remaining: 500,
     });
-    prisma.donor.update.mockResolvedValue({ id: 'd1' });
-    prisma.balanceAdjustment.create.mockResolvedValue({});
+    px.donor.update.mockResolvedValue({ id: 'd1' });
+    px.balanceAdjustment.create.mockResolvedValue({});
 
     const res = await request(createApp())
       .post('/api/admin/donors/d1/adjust-balance')
@@ -139,7 +144,7 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/adjust-balance rejects negative result', async () => {
-    prisma.donor.findUnique.mockResolvedValue({
+    px.donor.findUnique.mockResolvedValue({
       id: 'd1',
       email: 'a@b.com',
       balance_remaining: 50,
@@ -155,21 +160,21 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/reverse-spend reverses a reward claim', async () => {
-    prisma.donor.findUnique.mockResolvedValue({ id: 'd1', email: 'a@b.com', balance_remaining: 0 });
-    prisma.rewardClaim.findUnique.mockResolvedValue({
+    px.donor.findUnique.mockResolvedValue({ id: 'd1', email: 'a@b.com', balance_remaining: 0 });
+    px.rewardClaim.findUnique.mockResolvedValue({
       id: 'c1',
       donor_id: 'd1',
       reward_id: 'r1',
       status: 'PENDING',
       reward: { cost_cents: 500, id: 'r1' },
     });
-    prisma.reward.findUnique.mockResolvedValue({ id: 'r1' });
-    prisma.rewardClaim.update = vi.fn().mockResolvedValue({});
-    prisma.reward.update = vi.fn().mockResolvedValue({});
-    prisma.balanceAdjustment.create.mockResolvedValue({});
+    px.reward.findUnique.mockResolvedValue({ id: 'r1' });
+    px.rewardClaim.update = vi.fn().mockResolvedValue({});
+    px.reward.update = vi.fn().mockResolvedValue({});
+    px.balanceAdjustment.create.mockResolvedValue({});
 
     // Override $transaction to actually call each op
-    prisma.$transaction.mockImplementation((ops) => Promise.all(ops));
+    px.$transaction.mockImplementation((ops: any) => Promise.all(ops));
 
     const res = await request(createApp())
       .post('/api/admin/donors/d1/reverse-spend')

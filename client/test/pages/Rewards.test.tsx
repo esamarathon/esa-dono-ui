@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Rewards from '../../src/pages/Rewards';
 
@@ -25,14 +25,14 @@ describe('Rewards page', () => {
   });
 
   it('shows warning when no donor token', async () => {
-    getRewards.mockResolvedValue([]);
+    vi.mocked(getRewards).mockResolvedValue([]);
     renderRewards();
     expect(await screen.findByText(/Visit your wallet link/)).toBeDefined();
   });
 
   it('renders rewards list', async () => {
     localStorage.setItem('donor_token', 'test-token');
-    getRewards.mockResolvedValue([
+    vi.mocked(getRewards).mockResolvedValue([
       {
         id: '1',
         title: 'Digital Reward',

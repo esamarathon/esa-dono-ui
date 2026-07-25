@@ -23,13 +23,13 @@ describe('Home page', () => {
   });
 
   it('shows loading spinner initially', () => {
-    getCampaign.mockReturnValue(new Promise(() => {})); // never resolves
+    vi.mocked(getCampaign).mockReturnValue(new Promise(() => {})); // never resolves
     renderHome();
     expect(document.querySelector('.animate-spin')).toBeDefined();
   });
 
   it('renders campaign data on success', async () => {
-    getCampaign.mockResolvedValue({
+    vi.mocked(getCampaign).mockResolvedValue({
       name: 'Test Campaign',
       description: 'A test campaign',
       amount_raised: { value: '1500.00' },
@@ -43,7 +43,7 @@ describe('Home page', () => {
   });
 
   it('shows error on failure', async () => {
-    getCampaign.mockRejectedValue(new Error('Network error'));
+    vi.mocked(getCampaign).mockRejectedValue(new Error('Network error'));
 
     renderHome();
 

@@ -19,7 +19,7 @@ describe('adminAuth middleware', () => {
     const res = createRes();
     const next = vi.fn();
 
-    adminAuth(req, res, next);
+    adminAuth(req as any, res as any, next);
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
@@ -30,7 +30,7 @@ describe('adminAuth middleware', () => {
     const res = createRes();
     const next = vi.fn();
 
-    adminAuth(req, res, next);
+    adminAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Unauthorized' });
@@ -42,7 +42,7 @@ describe('adminAuth middleware', () => {
     const res = createRes();
     const next = vi.fn();
 
-    adminAuth(req, res, next);
+    adminAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();

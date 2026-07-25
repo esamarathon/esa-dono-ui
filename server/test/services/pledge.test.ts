@@ -22,9 +22,9 @@ describe('Pledge Service', () => {
     });
 
     it('rejects invalid item kind', async () => {
-      await expect(createPledge({ items: [{ kind: 'INVALID', target_id: 'x' }] })).rejects.toThrow(
-        'Invalid item kind',
-      );
+      await expect(
+        createPledge({ items: [{ kind: 'INVALID' as any, target_id: 'x' }] }),
+      ).rejects.toThrow('Invalid item kind');
     });
 
     it('creates a reward pledge', async () => {
@@ -62,7 +62,12 @@ describe('Pledge Service', () => {
         email: 'multi@example.com',
         items: [
           { kind: 'REWARD', target_id: reward.id },
-          { kind: 'POLL_VOTE', target_id: poll.options[0].id, poll_id: poll.id, amount_cents: 200 },
+          {
+            kind: 'POLL_VOTE',
+            target_id: poll.options[0]!.id,
+            poll_id: poll.id,
+            amount_cents: 200,
+          },
           { kind: 'GOAL', target_id: goal.id, amount_cents: 1000 },
         ],
       });
@@ -87,7 +92,7 @@ describe('Pledge Service', () => {
 
       const resolved = await resolvePledge({ pledgeToken: pledge_token, amountCents: 1000 });
       expect(resolved).toBeTruthy();
-      expect(resolved.pledge_token).toBe(pledge_token);
+      expect(resolved!.pledge_token).toBe(pledge_token);
 
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
@@ -123,7 +128,7 @@ describe('Pledge Service', () => {
         amountCents: 1000,
       });
       expect(resolved).toBeTruthy();
-      expect(resolved.pledge_token).toBe(pledge_token);
+      expect(resolved!.pledge_token).toBe(pledge_token);
 
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
@@ -148,14 +153,14 @@ describe('Pledge Service', () => {
         pledgeToken: pledge_token,
       });
 
-      expect(result.pledge).toBeTruthy();
-      expect(result.pledge.totalSpent).toBe(500);
-      expect(result.pledge.skipped).toBe(0);
+      expect((result as any).pledge).toBeTruthy();
+      expect((result as any).pledge.totalSpent).toBe(500);
+      expect((result as any).pledge.skipped).toBe(0);
 
       const donor = await prisma.donor.findUnique({ where: { email: 'fulfill@example.com' } });
-      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
-      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
-      await prisma.donor.delete({ where: { id: donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
     }, 10000);
 
@@ -167,12 +172,12 @@ describe('Pledge Service', () => {
         amountCents: 1000,
       });
 
-      expect(result.pledge).toBeNull();
-      expect(result.donor.balance_remaining).toBe(1000);
+      expect((result as any).pledge).toBeNull();
+      expect((result as any).donor.balance_remaining).toBe(1000);
 
       const donor = await prisma.donor.findUnique({ where: { email: 'nopledge@example.com' } });
-      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
-      await prisma.donor.delete({ where: { id: donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
     }, 10000);
 
     it('handles duplicate donation idempotently', async () => {
@@ -183,7 +188,7 @@ describe('Pledge Service', () => {
         donorName: 'Test',
         amountCents: 1000,
       });
-      expect(result1.duplicate).toBeFalsy();
+      expect((result1 as any).duplicate).toBeFalsy();
 
       const result2 = await processDonation({
         tiltifyId,
@@ -191,11 +196,11 @@ describe('Pledge Service', () => {
         donorName: 'Test',
         amountCents: 1000,
       });
-      expect(result2.duplicate).toBe(true);
+      expect((result2 as any).duplicate).toBe(true);
 
       const donor = await prisma.donor.findUnique({ where: { email: 'dup@example.com' } });
-      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
-      await prisma.donor.delete({ where: { id: donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
     }, 10000);
   });
 });

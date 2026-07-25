@@ -43,7 +43,7 @@ describe('Modal', () => {
       </Modal>,
     );
     // Click on the backdrop (the fixed overlay)
-    fireEvent.click(container.firstChild);
+    fireEvent.click(container.firstChild as HTMLElement);
     expect(onClose).toHaveBeenCalled();
   });
 });

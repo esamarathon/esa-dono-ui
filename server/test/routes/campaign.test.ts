@@ -34,7 +34,7 @@ describe('GET /api/campaign', () => {
   it('calls Tiltify API when client ID is set', async () => {
     process.env.TILTIFY_CLIENT_ID = 'test-client-id';
     const mockCampaign = { name: 'Real Campaign', amount_raised: { value: '100.00' } };
-    getCampaign.mockResolvedValue(mockCampaign);
+    vi.mocked(getCampaign).mockResolvedValue(mockCampaign as any);
 
     const res = await request(createApp()).get('/api/campaign');
 
@@ -48,7 +48,7 @@ describe('GET /api/campaign', () => {
     process.env.TILTIFY_CLIENT_ID = 'test-client-id';
     process.env.TILTIFY_DONATE_URL = 'https://tiltify.com/donate/test';
     const mockCampaign = { name: 'Real Campaign' };
-    getCampaign.mockResolvedValue(mockCampaign);
+    vi.mocked(getCampaign).mockResolvedValue(mockCampaign as any);
 
     const res = await request(createApp()).get('/api/campaign');
 
@@ -58,7 +58,7 @@ describe('GET /api/campaign', () => {
 
   it('returns 500 when Tiltify API fails', async () => {
     process.env.TILTIFY_CLIENT_ID = 'test-client-id';
-    getCampaign.mockRejectedValue(new Error('API error'));
+    vi.mocked(getCampaign).mockRejectedValue(new Error('API error'));
 
     const res = await request(createApp()).get('/api/campaign');
 

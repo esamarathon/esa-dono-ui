@@ -5,9 +5,9 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["vite/client", "vitest/globals"],
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src", "test", "vite.config.js", "vitest.config.js"]
+  "include": ["src", "test"]
 }

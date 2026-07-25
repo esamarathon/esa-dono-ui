@@ -28,4 +28,12 @@ export default [
       'no-console': 'off',
     },
   },
+  {
+    // Test files mock partial Prisma fixtures and Express req/res objects,
+    // which requires occasional `any` casts.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 ];

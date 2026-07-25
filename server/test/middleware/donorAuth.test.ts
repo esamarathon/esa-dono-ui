@@ -29,7 +29,7 @@ describe('donorAuth middleware', () => {
     const res = createRes();
     const next = vi.fn();
 
-    await donorAuth(req, res, next);
+    await donorAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Token required' });
@@ -37,12 +37,12 @@ describe('donorAuth middleware', () => {
   });
 
   it('returns 401 when token is invalid', async () => {
-    prisma.donor.findUnique.mockResolvedValue(null);
+    vi.mocked(prisma.donor.findUnique).mockResolvedValue(null);
     const req = { query: { token: 'invalid-token' } };
     const res = createRes();
     const next = vi.fn();
 
-    await donorAuth(req, res, next);
+    await donorAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Invalid token' });
@@ -50,12 +50,12 @@ describe('donorAuth middleware', () => {
 
   it('returns 401 when token is expired', async () => {
     const pastDate = new Date(Date.now() - 100000);
-    prisma.donor.findUnique.mockResolvedValue({ token_expires_at: pastDate });
+    vi.mocked(prisma.donor.findUnique).mockResolvedValue({ token_expires_at: pastDate } as any);
     const req = { query: { token: 'expired-token' } };
     const res = createRes();
     const next = vi.fn();
 
-    await donorAuth(req, res, next);
+    await donorAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Token expired' });
@@ -63,17 +63,17 @@ describe('donorAuth middleware', () => {
 
   it('returns 403 when donor is frozen', async () => {
     const futureDate = new Date(Date.now() + 100000);
-    prisma.donor.findUnique.mockResolvedValue({
+    vi.mocked(prisma.donor.findUnique).mockResolvedValue({
       id: 'donor-1',
       email: 'frozen@example.com',
       token_expires_at: futureDate,
       is_frozen: true,
-    });
+    } as any);
     const req = { query: { token: 'frozen-token' } };
     const res = createRes();
     const next = vi.fn();
 
-    await donorAuth(req, res, next);
+    await donorAuth(req as any, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({ error: 'Account frozen' });
@@ -88,15 +88,15 @@ describe('donorAuth middleware', () => {
       token_expires_at: futureDate,
       is_frozen: false,
     };
-    prisma.donor.findUnique.mockResolvedValue(donor);
+    vi.mocked(prisma.donor.findUnique).mockResolvedValue(donor as any);
     const req = { query: { token: 'valid-token' } };
     const res = createRes();
     const next = vi.fn();
 
-    await donorAuth(req, res, next);
+    await donorAuth(req as any, res as any, next);
 
     expect(next).toHaveBeenCalled();
-    expect(req.donor).toEqual(donor);
+    expect((req as any).donor).toEqual(donor);
     expect(res.status).not.toHaveBeenCalled();
   });
 });
