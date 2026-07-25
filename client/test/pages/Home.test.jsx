@@ -3,11 +3,11 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Home from '../../src/pages/Home';
 
-vi.mock('../../src/api/campaign.js', () => ({
+vi.mock('../../src/api/campaign', () => ({
   getCampaign: vi.fn(),
 }));
 
-import { getCampaign } from '../../src/api/campaign.js';
+import { getCampaign } from '../../src/api/campaign';
 
 function renderHome() {
   return render(

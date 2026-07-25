@@ -17,13 +17,13 @@ describe('Admin API client', () => {
   });
 
   it('creates an axios instance with /api/admin base URL', async () => {
-    await import('../../src/api/admin.js');
+    await import('../../src/api/admin');
     const axios = (await import('axios')).default;
     expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api/admin' });
   });
 
   it('registers a request interceptor', async () => {
-    await import('../../src/api/admin.js');
+    await import('../../src/api/admin');
     const axios = (await import('axios')).default;
     const instance = axios.create();
     expect(instance.interceptors.request.use).toHaveBeenCalled();

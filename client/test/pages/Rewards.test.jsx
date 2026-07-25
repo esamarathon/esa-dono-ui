@@ -3,12 +3,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Rewards from '../../src/pages/Rewards';
 
-vi.mock('../../src/api/rewards.js', () => ({
+vi.mock('../../src/api/rewards', () => ({
   getRewards: vi.fn(),
   claimReward: vi.fn(),
 }));
 
-import { getRewards } from '../../src/api/rewards.js';
+import { getRewards } from '../../src/api/rewards';
 
 function renderRewards() {
   return render(

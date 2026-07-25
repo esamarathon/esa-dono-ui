@@ -18,13 +18,13 @@ describe('API client', () => {
   });
 
   it('creates an axios instance with /api base URL', async () => {
-    await import('../../src/api/client.js');
+    await import('../../src/api/client');
     const axios = (await import('axios')).default;
     expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api' });
   });
 
   it('registers a request interceptor', async () => {
-    await import('../../src/api/client.js');
+    await import('../../src/api/client');
     const axios = (await import('axios')).default;
     const instance = axios.create();
     expect(instance.interceptors.request.use).toHaveBeenCalled();
