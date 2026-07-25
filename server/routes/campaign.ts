@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { getCampaign } from '../services/tiltify.js';
 
 const router = Router();
@@ -11,7 +11,7 @@ const STUB_CAMPAIGN = {
   goal: { value: '5000.00' },
 };
 
-router.get('/', async (req, res) => {
+router.get('/', async (req: Request, res: Response) => {
   const donateUrl = process.env.TILTIFY_DONATE_URL || null;
   if (!process.env.TILTIFY_CLIENT_ID) {
     return res.json({ ...STUB_CAMPAIGN, donate_url: donateUrl });

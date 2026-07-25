@@ -1,6 +1,11 @@
-const tokenCache = {};
+interface CachedToken {
+  token: string;
+  expiresAt: number;
+}
 
-async function getAccessToken(scope = 'public') {
+const tokenCache: Record<string, CachedToken> = {};
+
+async function getAccessToken(scope = 'public'): Promise<string> {
   const cacheKey = scope;
   const cached = tokenCache[cacheKey];
   if (cached && Date.now() < cached.expiresAt - 60000) {
@@ -17,7 +22,7 @@ async function getAccessToken(scope = 'public') {
     }),
   });
   if (!res.ok) throw new Error(`Tiltify OAuth failed: ${res.status}`);
-  const data = await res.json();
+  const data = (await res.json()) as { access_token: string; expires_in: number };
   tokenCache[cacheKey] = {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
@@ -34,6 +39,6 @@ export async function getCampaign() {
     { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!res.ok) throw new Error(`Tiltify campaign fetch failed: ${res.status}`);
-  const data = await res.json();
+  const data = (await res.json()) as { data?: unknown };
   return data.data ?? data;
 }

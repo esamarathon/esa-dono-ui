@@ -1,7 +1,17 @@
 import crypto from 'crypto';
+import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
+
+interface ProcessDonationOptions {
+  tiltifyId: string;
+  email: string;
+  donorName: string;
+  amountCents: number;
+  comment?: string | null;
+  pledgeToken?: string | null;
+}
 
 /**
  * Shared donation processing — used by both the Tiltify webhook
@@ -32,7 +42,7 @@ export async function processDonation({
   amountCents,
   comment,
   pledgeToken,
-}) {
+}: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
 
   const moderatorEmails = (process.env.MODERATOR_EMAILS || '')
@@ -41,7 +51,7 @@ export async function processDonation({
   const isModerator = moderatorEmails.includes(normalizedEmail);
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -74,7 +84,7 @@ export async function processDonation({
       });
 
       // Try to resolve and fulfill a pledge
-      let pledgeResult = null;
+      let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
       try {
         const pledge = await resolvePledge({
           pledgeToken,
@@ -92,14 +102,14 @@ export async function processDonation({
         console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
       }
 
-      sendMagicLink(normalizedEmail, donor.magic_token).catch((err) =>
+      sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
         console.error('Email error:', err),
       );
 
       return { donor, token: donor.magic_token, pledge: pledgeResult };
     });
   } catch (err) {
-    if (err.code === 'P2002') {
+    if ((err as { code?: string }).code === 'P2002') {
       return { duplicate: true };
     }
     throw err;
@@ -110,7 +120,7 @@ export async function processDonation({
  * Check text against the global blocked-words dictionary.
  * Returns an error message string if a blocked word is found, or null if clean.
  */
-export async function checkBlockedWords(text) {
+export async function checkBlockedWords(text: string | null | undefined): Promise<string | null> {
   if (!text) return null;
   const blockedWords = await prisma.blockedWord.findMany();
   if (blockedWords.length === 0) return null;

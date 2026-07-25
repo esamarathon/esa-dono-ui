@@ -1,13 +1,14 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import crypto from 'crypto';
+import { amountToCents, type TiltifyWebhookPayload } from '@dono/shared';
 
 const router = Router();
 
-router.post('/', async (req, res) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const signature = req.headers['x-tiltify-signature'];
     const timestamp = req.headers['x-tiltify-timestamp'];
-    const rawBody = req.body; // Buffer from express.raw()
+    const rawBody = req.body as Buffer; // Buffer from express.raw()
 
     if (process.env.TILTIFY_WEBHOOK_SECRET) {
       if (!signature || !timestamp) {
@@ -18,7 +19,7 @@ router.post('/', async (req, res) => {
         .createHmac('sha256', process.env.TILTIFY_WEBHOOK_SECRET)
         .update(message)
         .digest('hex');
-      const sigBuffer = Buffer.from(signature);
+      const sigBuffer = Buffer.from(signature as string);
       const expectedBuffer = Buffer.from(expectedSig);
       if (
         sigBuffer.length !== expectedBuffer.length ||
@@ -28,9 +29,9 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const payload = JSON.parse(rawBody.toString());
-    const meta = payload.meta || {};
-    const eventType = meta.event_type || payload.type || '';
+    const payload = JSON.parse(rawBody.toString()) as TiltifyWebhookPayload;
+    const meta = payload.meta ?? {};
+    const eventType = meta.event_type ?? payload.type ?? '';
 
     // Handle relay events (private:relay:donation_updated)
     const isRelay = eventType.includes('relay');
@@ -41,17 +42,19 @@ router.post('/', async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    const donation = payload.data ?? payload.donation ?? payload;
+    const donation = payload.data ?? payload.donation ?? {};
     const tiltifyId = donation.id?.toString() ?? donation.legacy_id?.toString();
     const email = donation.donor_email ?? donation.campaign_donation?.donor?.email;
     const donorName = donation.donor_name ?? donation.campaign_donation?.donor?.name ?? 'Anonymous';
-    const amountCents = Math.round(
-      parseFloat(donation.amount?.value ?? donation.amount ?? 0) * 100,
-    );
+    const rawAmount =
+      typeof donation.amount === 'object' && donation.amount !== null
+        ? donation.amount.value
+        : donation.amount;
+    const amountCents = amountToCents(rawAmount ?? 0);
     const comment = donation.comment ?? donation.campaign_donation?.comment ?? null;
 
     // For relay events, extract the pledge token from relay_key_id
-    let pledgeToken = null;
+    let pledgeToken: string | null = null;
     if (isRelay && meta.relay_key_id) {
       const pledgePrefix = 'pledge_';
       if (meta.relay_key_id.startsWith(pledgePrefix)) {

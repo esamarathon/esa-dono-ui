@@ -14,7 +14,7 @@ const transporter = process.env.SMTP_HOST
     })
   : null;
 
-export async function sendMagicLink(email, token) {
+export async function sendMagicLink(email: string, token: string): Promise<void> {
   const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
   const url = `${baseUrl}/wallet?token=${token}`;
 

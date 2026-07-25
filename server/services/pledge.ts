@@ -1,15 +1,29 @@
 import crypto from 'crypto';
+import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { claimRewardTx, votePollTx, contributeGoalTx } from './spend.js';
 
 const PLEDGE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+interface PledgeItemInput {
+  kind: string;
+  target_id: string;
+  amount_cents?: number;
+  poll_id?: string | null;
+  data?: unknown;
+}
+
+interface CreatePledgeInput {
+  email?: string | null;
+  items: PledgeItemInput[];
+}
 
 /**
  * Create a pending pledge from cart items.
  * Validates each item against live state, computes total, persists.
  * Returns { pledge_token, total_cents, donate_url }.
  */
-export async function createPledge({ email, items }) {
+export async function createPledge({ email, items }: CreatePledgeInput) {
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw Object.assign(new Error('At least one item required'), { status: 400 });
   }
@@ -33,7 +47,7 @@ export async function createPledge({ email, items }) {
       }
       totalCents += reward.cost_cents;
     } else if (kind === 'POLL_VOTE') {
-      if (!Number.isInteger(amount_cents) || amount_cents < 100) {
+      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
         throw Object.assign(new Error('POLL_VOTE amount_cents (min 100) required'), {
           status: 400,
         });
@@ -52,9 +66,9 @@ export async function createPledge({ email, items }) {
       if (!option || option.poll_id !== poll_id) {
         throw Object.assign(new Error(`Option not found: ${target_id}`), { status: 404 });
       }
-      totalCents += amount_cents;
+      totalCents += amount_cents!;
     } else if (kind === 'GOAL') {
-      if (!Number.isInteger(amount_cents) || amount_cents < 100) {
+      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
         throw Object.assign(new Error('GOAL amount_cents (min 100) required'), { status: 400 });
       }
       const goal = await prisma.fundGoal.findUnique({ where: { id: target_id } });
@@ -63,7 +77,7 @@ export async function createPledge({ email, items }) {
           status: 404,
         });
       }
-      totalCents += amount_cents;
+      totalCents += amount_cents!;
     }
   }
 
@@ -103,27 +117,36 @@ export async function createPledge({ email, items }) {
  * Skips items that are no longer valid (sold out, ended, etc.) — those cents
  * remain as spendable balance_remaining.
  */
-export async function fulfillPledge(tx, pledge, donorId) {
-  const results = [];
+export async function fulfillPledge(
+  tx: Prisma.TransactionClient,
+  pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
+  donorId: string,
+) {
+  const results: Array<Record<string, unknown>> = [];
   let totalSpent = 0;
   let skipped = 0;
 
   for (const item of pledge.items) {
     try {
-      let result;
+      let result: { cost: number } | undefined;
       if (item.kind === 'REWARD') {
         const data = item.data ? JSON.parse(item.data) : {};
         result = await claimRewardTx(tx, donorId, item.target_id, data);
       } else if (item.kind === 'POLL_VOTE') {
-        result = await votePollTx(tx, donorId, item.poll_id, item.target_id, item.amount_cents);
+        result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
       } else if (item.kind === 'GOAL') {
         result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents);
       }
-      totalSpent += result.cost;
-      results.push({ item_id: item.id, kind: item.kind, status: 'fulfilled', cost: result.cost });
+      totalSpent += result!.cost;
+      results.push({ item_id: item.id, kind: item.kind, status: 'fulfilled', cost: result!.cost });
     } catch (err) {
       skipped++;
-      results.push({ item_id: item.id, kind: item.kind, status: 'skipped', reason: err.message });
+      results.push({
+        item_id: item.id,
+        kind: item.kind,
+        status: 'skipped',
+        reason: (err as Error).message,
+      });
     }
   }
 
@@ -139,7 +162,15 @@ export async function fulfillPledge(tx, pledge, donorId) {
  * Resolve a pledge token to a pending pledge, or fall back to email-based lookup.
  * Returns the pledge or null.
  */
-export async function resolvePledge({ pledgeToken, email, amountCents }) {
+export async function resolvePledge({
+  pledgeToken,
+  email,
+  amountCents,
+}: {
+  pledgeToken?: string | null;
+  email?: string | null;
+  amountCents: number;
+}) {
   if (pledgeToken) {
     const pledge = await prisma.pendingPledge.findUnique({
       where: { pledge_token: pledgeToken },
@@ -180,7 +211,7 @@ export async function resolvePledge({ pledgeToken, email, amountCents }) {
  * Requires TILTIFY_CLIENT_ID, TILTIFY_CLIENT_SECRET, TILTIFY_WEBHOOK_RELAY_ID, TILTIFY_DONATE_ID.
  * Falls back to plain donate URL if relay config is missing.
  */
-export async function createRelayForPledge(pledgeToken) {
+export async function createRelayForPledge(pledgeToken: string) {
   const relayId = process.env.TILTIFY_WEBHOOK_RELAY_ID;
   const donateId = process.env.TILTIFY_DONATE_ID;
   const donateUrl = process.env.TILTIFY_DONATE_URL;
@@ -213,7 +244,7 @@ export async function createRelayForPledge(pledgeToken) {
     return { donate_url: donateUrl || null, relay_client_key: null };
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as { data?: { client_key?: string } };
   const clientKey = data.data?.client_key;
 
   // Store the relay key info on the pledge

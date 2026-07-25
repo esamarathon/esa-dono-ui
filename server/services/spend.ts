@@ -1,4 +1,14 @@
-export async function claimRewardTx(tx, donorId, rewardId, claimData) {
+import type { Prisma } from '@prisma/client';
+import type { ClaimData } from '@dono/shared';
+
+type Tx = Prisma.TransactionClient;
+
+export async function claimRewardTx(
+  tx: Tx,
+  donorId: string,
+  rewardId: string,
+  claimData?: ClaimData | null,
+) {
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
   if (!reward || !reward.is_active)
     throw Object.assign(new Error('Reward not found'), { status: 404 });
@@ -7,13 +17,13 @@ export async function claimRewardTx(tx, donorId, rewardId, claimData) {
   }
 
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (donor.balance_remaining < reward.cost_cents) {
+  if (!donor || donor.balance_remaining < reward.cost_cents) {
     throw Object.assign(new Error('Insufficient balance'), { status: 400 });
   }
 
   const data = claimData || {};
   if (reward.type === 'PHYSICAL') {
-    const { name, address, city, country } = data;
+    const { name, address, city, country } = data as Record<string, unknown>;
     if (!name || !address || !city || !country) {
       throw Object.assign(new Error('Physical rewards require name, address, city, country'), {
         status: 400,
@@ -41,7 +51,13 @@ export async function claimRewardTx(tx, donorId, rewardId, claimData) {
   return { cost: reward.cost_cents };
 }
 
-export async function votePollTx(tx, donorId, pollId, pollOptionId, cents) {
+export async function votePollTx(
+  tx: Tx,
+  donorId: string,
+  pollId: string,
+  pollOptionId: string,
+  cents: number,
+) {
   if (!Number.isInteger(cents) || cents < 100) {
     throw Object.assign(new Error('amount_cents (min 100) required'), { status: 400 });
   }
@@ -58,7 +74,7 @@ export async function votePollTx(tx, donorId, pollId, pollOptionId, cents) {
     throw Object.assign(new Error('Option not found'), { status: 404 });
 
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (donor.balance_remaining < cents) {
+  if (!donor || donor.balance_remaining < cents) {
     throw Object.assign(new Error('Insufficient balance'), { status: 400 });
   }
 
@@ -86,7 +102,7 @@ export async function votePollTx(tx, donorId, pollId, pollOptionId, cents) {
   return { cost: cents };
 }
 
-export async function contributeGoalTx(tx, donorId, goalId, cents) {
+export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, cents: number) {
   if (!Number.isInteger(cents) || cents < 100) {
     throw Object.assign(new Error('amount_cents (min 100) required'), { status: 400 });
   }
@@ -97,7 +113,7 @@ export async function contributeGoalTx(tx, donorId, goalId, cents) {
   }
 
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (donor.balance_remaining < cents) {
+  if (!donor || donor.balance_remaining < cents) {
     throw Object.assign(new Error('Insufficient balance'), { status: 400 });
   }
 

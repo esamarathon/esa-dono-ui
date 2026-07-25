@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { createPledge, createRelayForPledge } from '../services/pledge.js';
 
 const router = Router();
@@ -9,13 +9,16 @@ const router = Router();
  * Body: { email?, items: [{ kind, target_id, amount_cents?, poll_id?, data? }] }
  * Returns: { pledge_token, total_cents, expires_at, donate_url }
  */
-router.post('/', async (req, res) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const { email, items } = req.body;
     const pledge = await createPledge({ email, items });
 
     // Create Tiltify relay key for deterministic linkage (graceful fallback)
-    let relay = { donate_url: null, relay_client_key: null };
+    let relay: { donate_url: string | null; relay_client_key: string | null | undefined } = {
+      donate_url: null,
+      relay_client_key: null,
+    };
     try {
       relay = await createRelayForPledge(pledge.pledge_token);
     } catch (relayErr) {
@@ -28,8 +31,8 @@ router.post('/', async (req, res) => {
       has_relay: !!relay.relay_client_key,
     });
   } catch (err) {
-    const status = err.status || 500;
-    res.status(status).json({ error: err.message });
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
   }
 });
 
@@ -37,7 +40,7 @@ router.post('/', async (req, res) => {
  * GET /api/pledge/:token
  * Get pledge status (for the return/confirmation page).
  */
-router.get('/:token', async (req, res) => {
+router.get('/:token', async (req: Request, res: Response) => {
   try {
     const { default: prisma } = await import('../lib/prisma.js');
     const pledge = await prisma.pendingPledge.findUnique({
@@ -58,7 +61,7 @@ router.get('/:token', async (req, res) => {
       })),
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: (err as Error).message });
   }
 });
 

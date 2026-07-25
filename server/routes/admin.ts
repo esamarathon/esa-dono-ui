@@ -128,6 +128,11 @@ router.post('/simulate-donation', async (req, res) => {
       comment: comment || null,
       pledgeToken: pledge_token || null,
     });
+    if ('duplicate' in result) {
+      // sim always uses a fresh tiltifyId, so this branch is unreachable;
+      // narrow the union for TypeScript without altering behavior.
+      throw new Error('Duplicate donation');
+    }
     res.json({
       success: true,
       token: result.token,
@@ -147,7 +152,7 @@ router.post('/simulate-donation', async (req, res) => {
 // Donor management
 router.get('/donors', async (req, res) => {
   const { q, offset } = req.query;
-  const where = q ? { email: { contains: q } } : {};
+  const where = typeof q === 'string' ? { email: { contains: q } } : {};
   const [donors, total] = await Promise.all([
     prisma.donor.findMany({
       where,
@@ -411,7 +416,9 @@ router.post('/polls', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
-      options: options?.length ? { create: options.map((o) => ({ label: o.label })) } : undefined,
+      options: options?.length
+        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+        : undefined,
     },
     include: { options: true },
   });
@@ -479,7 +486,8 @@ router.post('/blocked-words', async (req, res) => {
     const blocked = await prisma.blockedWord.create({ data: { word: word.trim().toLowerCase() } });
     res.json(blocked);
   } catch (e) {
-    if (e.code === 'P2002') return res.status(409).json({ error: 'Word already exists' });
+    if ((e as { code?: string }).code === 'P2002')
+      return res.status(409).json({ error: 'Word already exists' });
     throw e;
   }
 });

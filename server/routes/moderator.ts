@@ -42,7 +42,9 @@ router.post('/polls', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
-      options: options?.length ? { create: options.map((o) => ({ label: o.label })) } : undefined,
+      options: options?.length
+        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+        : undefined,
     },
     include: { options: true },
   });

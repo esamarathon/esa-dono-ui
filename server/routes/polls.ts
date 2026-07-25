@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
+import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { donorAuth } from '../middleware/donorAuth.js';
 import { spendLimit } from '../middleware/rateLimit.js';
@@ -7,7 +8,7 @@ import { votePollTx } from '../services/spend.js';
 
 const router = Router();
 
-router.get('/', async (req, res) => {
+router.get('/', async (req: Request, res: Response) => {
   const polls = await prisma.poll.findMany({
     where: { is_active: true },
     include: { options: { orderBy: { votes_cents: 'desc' } } },
@@ -16,7 +17,7 @@ router.get('/', async (req, res) => {
   res.json(polls);
 });
 
-router.post('/:id/custom-entry', donorAuth, async (req, res) => {
+router.post('/:id/custom-entry', donorAuth, async (req: Request, res: Response) => {
   try {
     const { label } = req.body;
     if (!label || !label.trim()) {
@@ -49,7 +50,7 @@ router.post('/:id/custom-entry', donorAuth, async (req, res) => {
     const entry = await prisma.pollCustomEntry.create({
       data: {
         poll_id: poll.id,
-        donor_id: req.donor.id,
+        donor_id: req.donor!.id,
         label: trimmed,
         status: 'PENDING',
       },
@@ -62,16 +63,16 @@ router.post('/:id/custom-entry', donorAuth, async (req, res) => {
   }
 });
 
-router.post('/:id/vote', spendLimit, donorAuth, async (req, res) => {
+router.post('/:id/vote', spendLimit, donorAuth, async (req: Request, res: Response) => {
   try {
     const { poll_option_id, amount_cents } = req.body;
-    await prisma.$transaction(async (tx) => {
-      await votePollTx(tx, req.donor.id, req.params.id, poll_option_id, Number(amount_cents));
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await votePollTx(tx, req.donor!.id, req.params.id!, poll_option_id, Number(amount_cents));
     });
     res.json({ success: true });
   } catch (err) {
-    const status = err.status || 500;
-    res.status(status).json({ error: err.message });
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
   }
 });
 
