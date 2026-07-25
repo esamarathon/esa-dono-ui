@@ -1,7 +1,7 @@
 /* eslint-disable no-undef */
 /** @type {import('lint-staged').Config} */
 export default {
-  '*.{js,jsx}': (filenames) => {
+  '*.{js,jsx,ts,tsx}': (filenames) => {
     const clientFiles = filenames.filter((f) => f.startsWith('client/'));
     const serverFiles = filenames.filter((f) => f.startsWith('server/'));
     const tasks = [];
