@@ -101,7 +101,8 @@ export default function AdminPledges() {
                   </td>
                 </tr>
                 {expanded === p.id && (
-                  <tr key={`${p.id}-items`}><td colSpan={8} className="px-8 py-4" style={{ background: 'rgba(0,0,0,.2)' }}>
+                  <tr key={`${p.id}-items`}>
+                    <td colSpan={8} className="px-8 py-4" style={{ background: 'rgba(0,0,0,.2)' }}>
                       <div className="space-y-2">
                         <div className="grid grid-cols-5 gap-2 font-mono text-[10px] uppercase tracking-wider text-off-white/55 mb-1">
                           <span>kind</span>

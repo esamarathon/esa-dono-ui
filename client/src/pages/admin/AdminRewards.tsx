@@ -49,7 +49,11 @@ export default function AdminRewards() {
     setError('');
   };
   const openEdit = (r: Reward) => {
-    setForm({ ...r, cost_cents: r.cost_cents, quantity_total: r.quantity_total ?? '' } as RewardForm);
+    setForm({
+      ...r,
+      cost_cents: r.cost_cents,
+      quantity_total: r.quantity_total ?? '',
+    } as RewardForm);
     setModal(r);
     setError('');
   };

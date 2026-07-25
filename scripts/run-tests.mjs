@@ -46,6 +46,7 @@ async function main() {
 
   if (MODE === 'ci') {
     await run('npm', ['run', 'lint']);
+    await run('npm', ['run', 'typecheck']);
     if (TARGET === 'both' || TARGET === 'server')
       await run('npm', ['run', 'test', '--workspace', 'server']);
     if (TARGET === 'both' || TARGET === 'client')

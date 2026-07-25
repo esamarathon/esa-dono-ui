@@ -243,4 +243,3 @@ export interface ModeratorStats {
   total_rewards: number;
   total_goals: number;
 }
-

@@ -145,7 +145,11 @@ export default function AdminDonors() {
                   key={d.id}
                   onClick={() => openWallet(d)}
                   className={`w-full text-left btrl-panel p-3 transition ${selected?.id === d.id ? 'ring-2' : ''}`}
-                  style={selected?.id === d.id ? ({ ringColor: 'var(--d-yellow)' } as React.CSSProperties) : {}}
+                  style={
+                    selected?.id === d.id
+                      ? ({ ringColor: 'var(--d-yellow)' } as React.CSSProperties)
+                      : {}
+                  }
                 >
                   <p className="font-data font-bold text-sm truncate text-off-white">{d.email}</p>
                   <p className="font-data text-xs text-off-white/55 mt-1">

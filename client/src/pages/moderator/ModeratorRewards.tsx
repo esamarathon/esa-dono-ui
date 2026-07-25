@@ -50,7 +50,11 @@ export default function ModeratorRewards() {
     setError('');
   };
   const openEdit = (r: Reward) => {
-    setForm({ ...r, cost_cents: String(r.cost_cents), quantity_total: r.quantity_total ?? '' } as RewardForm);
+    setForm({
+      ...r,
+      cost_cents: String(r.cost_cents),
+      quantity_total: r.quantity_total ?? '',
+    } as RewardForm);
     setModal(r);
     setError('');
   };

@@ -3,8 +3,7 @@ import prisma from '../lib/prisma.js';
 
 export async function donorAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.query.token;
-  if (!token || typeof token !== 'string')
-    return res.status(401).json({ error: 'Token required' });
+  if (!token || typeof token !== 'string') return res.status(401).json({ error: 'Token required' });
   const donor = await prisma.donor.findUnique({
     where: { magic_token: token },
   });

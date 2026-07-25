@@ -17,10 +17,13 @@ COPY package.json package-lock.json ./
 COPY client/package.json ./client/
 # server manifest is referenced by the root workspace install
 COPY server/package.json ./server/
+COPY packages/shared/package.json ./packages/shared/
 
 RUN --mount=type=cache,target=/root/.npm,id=npm \
-    npm ci --no-audit --no-fund --workspace client --include-workspace-root
+    npm ci --no-audit --no-fund --workspace client --workspace @dono/shared --include-workspace-root
 
+COPY tsconfig.base.json ./
+COPY packages ./packages
 COPY client ./client
 RUN npm run build --workspace client
 
