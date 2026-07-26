@@ -12,6 +12,7 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { apiErrorMessage, type AdminDonorSummary, type AdminDonorWallet } from '../../types';
+import { sanitizeMoneyInput } from '../../utils/money';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -454,7 +455,7 @@ function AdjustBalanceForm({
           step="0.01"
           placeholder="e.g. 10.00"
           value={amount}
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={(e) => setAmount(sanitizeMoneyInput(e.target.value, true))}
         />
       </div>
       <div>

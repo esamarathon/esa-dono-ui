@@ -5,6 +5,7 @@ import Card from '../components/Card';
 import Modal from '../components/Modal';
 import ProgressBar from '../components/ProgressBar';
 import { apiErrorMessage, type Goal } from '../types';
+import { sanitizeMoneyInput } from '../utils/money';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -102,7 +103,7 @@ export default function Goals() {
               min="1"
               className="w-full px-3 py-2 text-sm"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => setAmount(sanitizeMoneyInput(e.target.value))}
             />
           </div>
           {error && (

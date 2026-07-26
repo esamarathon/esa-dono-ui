@@ -8,6 +8,7 @@ import Card from '../components/Card';
 import ProgressBar from '../components/ProgressBar';
 import Modal from '../components/Modal';
 import client from '../api/client';
+import { sanitizeMoneyInput } from '../utils/money';
 import {
   apiErrorMessage,
   type Reward,
@@ -433,11 +434,12 @@ function PollsStep({
 
   const handleAmountChange = (poll: Poll, option: PollOption, value: string) => {
     const key = `${poll.id}-${option.id}`;
-    setAmounts((a) => ({ ...a, [key]: value }));
+    const sanitized = sanitizeMoneyInput(value);
+    setAmounts((a) => ({ ...a, [key]: sanitized }));
     // If this option is already in the cart, keep the cart amount in sync
     // as the donor types, instead of requiring another "add" click.
     if (inCart(poll.id, option.id)) {
-      const cents = Math.round(parseFloat(value) * 100);
+      const cents = Math.round(parseFloat(sanitized) * 100);
       if (!isNaN(cents) && cents >= 100) {
         onAdd({
           kind: 'POLL_VOTE',
@@ -621,7 +623,7 @@ function PollsStep({
               min="1"
               className="w-full px-3 py-2 text-sm"
               value={writeInAmount}
-              onChange={(e) => setWriteInAmount(e.target.value)}
+              onChange={(e) => setWriteInAmount(sanitizeMoneyInput(e.target.value))}
               onKeyDown={(e) => e.key === 'Enter' && handleWriteIn()}
             />
           </div>
@@ -695,7 +697,9 @@ function GoalsStep({
                   min="1"
                   className="w-20 px-2 py-1 text-sm"
                   value={amounts[g.id] || '5.00'}
-                  onChange={(e) => setAmounts((a) => ({ ...a, [g.id]: e.target.value }))}
+                  onChange={(e) =>
+                    setAmounts((a) => ({ ...a, [g.id]: sanitizeMoneyInput(e.target.value) }))
+                  }
                 />
                 {inCart(g.id) ? (
                   <button

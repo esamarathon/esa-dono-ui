@@ -2,6 +2,7 @@ import { useState } from 'react';
 import adminClient from '../../api/admin';
 import Card from '../../components/Card';
 import { apiErrorMessage } from '../../types';
+import { sanitizeMoneyInput } from '../../utils/money';
 
 interface SimulateResult {
   token: string;
@@ -81,7 +82,9 @@ export default function AdminSimulate() {
               min="1"
               className="w-full px-3 py-2 text-sm"
               value={form.amount}
-              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, amount: sanitizeMoneyInput(e.target.value) }))
+              }
             />
           </div>
           <div>
