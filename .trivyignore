@@ -43,3 +43,11 @@ CVE-2026-59874
 # vite is a build tool only — not exploitable in production.
 # Requires major version bump to fix (5.x → 6.x+).
 CVE-2026-53571
+
+# ReDoS in glob/brace tooling. Present only in build/CLI dependency chains
+# (npm's bundled node_modules, and tsx/jiti's tinyglobby → picomatch used to load
+# TypeScript configs at build time), never in the production HTTP request path.
+# brace-expansion@1.1.16 is already ahead of the 1.x backport fix; Trivy's DB only
+# records the 5.0.8 fix and flags it regardless. Not runtime-exploitable.
+CVE-2026-14257
+CVE-2026-33671
