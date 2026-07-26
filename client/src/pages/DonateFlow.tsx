@@ -25,6 +25,10 @@ function fmt(cents: number) {
 
 const STEPS = ['rewards', 'polls', 'goals', 'checkout'];
 
+// Shared debounce delay for syncing an edited amount to an already-in-cart
+// item (poll option or goal) — see PollsStep/GoalsStep for usage.
+const CART_SYNC_DEBOUNCE_MS = 400;
+
 export default function DonateFlow() {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
@@ -411,7 +415,6 @@ function PollsStep({
   // Debounce syncing an edited amount to an already-in-cart option: firing
   // onAdd on every keystroke caused the cart sidebar to re-render on every
   // digit typed. Wait for a short pause in typing instead.
-  const CART_SYNC_DEBOUNCE_MS = 400;
   const cartSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -699,7 +702,6 @@ function GoalsStep({
 
   // Debounce syncing an edited amount to an already-in-cart goal — see the
   // matching pattern in PollsStep for why.
-  const GOAL_CART_SYNC_DEBOUNCE_MS = 400;
   const cartSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -751,7 +753,7 @@ function GoalsStep({
     cartSyncTimers.current[goal.id] = setTimeout(() => {
       delete cartSyncTimers.current[goal.id];
       syncCartAmount(goal, sanitized);
-    }, GOAL_CART_SYNC_DEBOUNCE_MS);
+    }, CART_SYNC_DEBOUNCE_MS);
   };
 
   const handleAmountBlur = (goal: Goal) => {
