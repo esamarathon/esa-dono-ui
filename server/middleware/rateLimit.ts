@@ -12,11 +12,4 @@ const spendLimit = rateLimit({
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-const customEntryLimit = rateLimit({
-  windowMs: 60_000,
-  max: Number(process.env.RATE_LIMIT_CUSTOM_ENTRY) || 5,
-  keyGenerator,
-  handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
-});
-
-export { spendLimit, customEntryLimit };
+export { spendLimit };

@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { processDonation } from '../services/donation.js';
+import { TOKEN_TTL_MS } from '../config.js';
 
 const router = Router();
 router.use(adminAuth);
@@ -116,8 +118,10 @@ router.post('/simulate-donation', async (req, res) => {
   try {
     const { email, donor_name, amount_cents, comment, pledge_token } = req.body;
     const cents = Number(amount_cents);
-    if (!email || !Number.isInteger(cents) || cents < 100) {
-      return res.status(400).json({ error: 'email and amount_cents (min 100) required' });
+    if (!email || !Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
+      return res
+        .status(400)
+        .json({ error: `email and amount_cents (min ${MIN_SPEND_CENTS}) required` });
     }
     const tiltifyId = `sim-${crypto.randomUUID()}`;
     const result = await processDonation({
@@ -198,7 +202,7 @@ router.post('/donors/:id/revoke-token', async (req, res) => {
 
 router.post('/donors/:id/regenerate-token', async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
-  const tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
   const donor = await prisma.donor.update({
     where: { id: req.params.id },
     data: { magic_token: token, token_expires_at: tokenExpiresAt },

@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
+import { TOKEN_TTL_MS } from '../config.js';
 
 interface ProcessDonationOptions {
   tiltifyId: string;
@@ -53,7 +54,7 @@ export async function processDonation({
   try {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const token = crypto.randomBytes(32).toString('hex');
-      const tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
       const donor = await tx.donor.upsert({
         where: { email: normalizedEmail },

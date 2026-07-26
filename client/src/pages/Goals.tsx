@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import ProgressBar from '../components/ProgressBar';
 import { apiErrorMessage, type Goal } from '../types';
 import { sanitizeMoneyInput } from '../utils/money';
+import { DEFAULT_GOAL_AMOUNT, MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '../config';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -15,7 +16,7 @@ export default function Goals() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Goal | null>(null);
-  const [amount, setAmount] = useState('5.00');
+  const [amount, setAmount] = useState(DEFAULT_GOAL_AMOUNT);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -27,8 +28,8 @@ export default function Goals() {
   const handleContribute = async () => {
     setError('');
     const cents = Math.round(parseFloat(amount) * 100);
-    if (isNaN(cents) || cents < 100) {
-      setError('Minimum contribution is $1.00');
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
+      setError(`Minimum contribution is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
       return;
     }
     try {
@@ -69,7 +70,7 @@ export default function Goals() {
               <button
                 onClick={() => {
                   setSelected(g);
-                  setAmount('5.00');
+                  setAmount(DEFAULT_GOAL_AMOUNT);
                   setError('');
                   setSuccess('');
                 }}
@@ -100,7 +101,7 @@ export default function Goals() {
             <input
               type="number"
               step="0.01"
-              min="1"
+              min={MIN_SPEND_DOLLARS}
               className="w-full px-3 py-2 text-sm"
               value={amount}
               onChange={(e) => setAmount(sanitizeMoneyInput(e.target.value))}

@@ -10,6 +10,13 @@ import Modal from '../components/Modal';
 import client from '../api/client';
 import { sanitizeMoneyInput } from '../utils/money';
 import {
+  CART_SYNC_DEBOUNCE_MS,
+  DEFAULT_VOTE_AMOUNT,
+  DEFAULT_GOAL_AMOUNT,
+  MIN_SPEND_CENTS,
+  MIN_SPEND_DOLLARS,
+} from '../config';
+import {
   apiErrorMessage,
   type Reward,
   type Poll,
@@ -24,10 +31,6 @@ function fmt(cents: number) {
 }
 
 const STEPS = ['rewards', 'polls', 'goals', 'checkout'];
-
-// Shared debounce delay for syncing an edited amount to an already-in-cart
-// item (poll option or goal) — see PollsStep/GoalsStep for usage.
-const CART_SYNC_DEBOUNCE_MS = 400;
 
 export default function DonateFlow() {
   const [step, setStep] = useState(0);
@@ -409,7 +412,7 @@ function PollsStep({
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [writingIn, setWritingIn] = useState<Poll | null>(null);
   const [writeInLabel, setWriteInLabel] = useState('');
-  const [writeInAmount, setWriteInAmount] = useState('1.00');
+  const [writeInAmount, setWriteInAmount] = useState(DEFAULT_VOTE_AMOUNT);
   const [writeInError, setWriteInError] = useState('');
 
   // Debounce syncing an edited amount to an already-in-cart option: firing
@@ -426,7 +429,7 @@ function PollsStep({
 
   const getAmount = (pollId: string, optionId: string) => {
     const key = `${pollId}-${optionId}`;
-    return amounts[key] ?? '1.00';
+    return amounts[key] ?? DEFAULT_VOTE_AMOUNT;
   };
 
   const inCart = (pollId: string, optionId: string) =>
@@ -437,8 +440,8 @@ function PollsStep({
 
   const handleAdd = (poll: Poll, option: PollOption) => {
     const key = `${poll.id}-${option.id}`;
-    const cents = Math.round(parseFloat(amounts[key] ?? '1.00') * 100);
-    if (isNaN(cents) || cents < 100) return;
+    const cents = Math.round(parseFloat(amounts[key] ?? DEFAULT_VOTE_AMOUNT) * 100);
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) return;
     onAdd({
       kind: 'POLL_VOTE',
       target_id: option.id,
@@ -450,7 +453,7 @@ function PollsStep({
 
   const syncCartAmount = (poll: Poll, option: PollOption, value: string) => {
     const cents = Math.round(parseFloat(value) * 100);
-    if (!isNaN(cents) && cents >= 100) {
+    if (!isNaN(cents) && cents >= MIN_SPEND_CENTS) {
       onAdd({
         kind: 'POLL_VOTE',
         target_id: option.id,
@@ -490,19 +493,19 @@ function PollsStep({
       clearTimeout(cartSyncTimers.current[key]);
       delete cartSyncTimers.current[key];
       if (inCart(poll.id, option.id)) {
-        syncCartAmount(poll, option, amounts[key] ?? '1.00');
+        syncCartAmount(poll, option, amounts[key] ?? DEFAULT_VOTE_AMOUNT);
       }
     }
 
     if (!amounts[key] || !amounts[key].trim()) {
-      setAmounts((a) => ({ ...a, [key]: '1.00' }));
+      setAmounts((a) => ({ ...a, [key]: DEFAULT_VOTE_AMOUNT }));
     }
   };
 
   const openWriteIn = (poll: Poll) => {
     setWritingIn(poll);
     setWriteInLabel('');
-    setWriteInAmount('1.00');
+    setWriteInAmount(DEFAULT_VOTE_AMOUNT);
     setWriteInError('');
   };
 
@@ -513,8 +516,8 @@ function PollsStep({
       return;
     }
     const cents = Math.round(parseFloat(writeInAmount) * 100);
-    if (isNaN(cents) || cents < 100) {
-      setWriteInError('Minimum amount is $1.00');
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
+      setWriteInError(`Minimum amount is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
       return;
     }
     onAdd({
@@ -563,7 +566,7 @@ function PollsStep({
                       <input
                         type="number"
                         step="0.01"
-                        min="1"
+                        min={MIN_SPEND_DOLLARS}
                         className="w-20 px-2 py-1 text-sm"
                         value={getAmount(poll.id, opt.id)}
                         onChange={(e) => handleAmountChange(poll, opt, e.target.value)}
@@ -660,7 +663,7 @@ function PollsStep({
             <input
               type="number"
               step="0.01"
-              min="1"
+              min={MIN_SPEND_DOLLARS}
               className="w-full px-3 py-2 text-sm"
               value={writeInAmount}
               onChange={(e) => setWriteInAmount(sanitizeMoneyInput(e.target.value))}
@@ -711,13 +714,13 @@ function GoalsStep({
     };
   }, []);
 
-  const getAmount = (goalId: string) => amounts[goalId] ?? '5.00';
+  const getAmount = (goalId: string) => amounts[goalId] ?? DEFAULT_GOAL_AMOUNT;
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'GOAL' && i.target_id === id);
 
   const handleAdd = (goal: Goal) => {
-    const cents = Math.round(parseFloat(amounts[goal.id] ?? '5.00') * 100);
-    if (isNaN(cents) || cents < 100) return;
+    const cents = Math.round(parseFloat(amounts[goal.id] ?? DEFAULT_GOAL_AMOUNT) * 100);
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) return;
     onAdd({
       kind: 'GOAL',
       target_id: goal.id,
@@ -728,7 +731,7 @@ function GoalsStep({
 
   const syncCartAmount = (goal: Goal, value: string) => {
     const cents = Math.round(parseFloat(value) * 100);
-    if (!isNaN(cents) && cents >= 100) {
+    if (!isNaN(cents) && cents >= MIN_SPEND_CENTS) {
       onAdd({
         kind: 'GOAL',
         target_id: goal.id,
@@ -764,12 +767,12 @@ function GoalsStep({
       clearTimeout(cartSyncTimers.current[goal.id]);
       delete cartSyncTimers.current[goal.id];
       if (inCart(goal.id)) {
-        syncCartAmount(goal, amounts[goal.id] ?? '5.00');
+        syncCartAmount(goal, amounts[goal.id] ?? DEFAULT_GOAL_AMOUNT);
       }
     }
 
     if (!amounts[goal.id] || !amounts[goal.id]!.trim()) {
-      setAmounts((a) => ({ ...a, [goal.id]: '5.00' }));
+      setAmounts((a) => ({ ...a, [goal.id]: DEFAULT_GOAL_AMOUNT }));
     }
   };
 
@@ -794,7 +797,7 @@ function GoalsStep({
                 <input
                   type="number"
                   step="0.01"
-                  min="1"
+                  min={MIN_SPEND_DOLLARS}
                   className="w-20 px-2 py-1 text-sm"
                   value={getAmount(g.id)}
                   onChange={(e) => handleAmountChange(g, e.target.value)}

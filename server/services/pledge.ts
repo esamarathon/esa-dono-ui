@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
+import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
 import { checkBlockedWords } from './blockedWords.js';
-
-const PLEDGE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+import { PLEDGE_TTL_MS } from '../config.js';
 
 interface PledgeItemInput {
   kind: string;
@@ -48,8 +48,8 @@ export async function createPledge({ email, items }: CreatePledgeInput) {
       }
       totalCents += reward.cost_cents;
     } else if (kind === 'POLL_VOTE') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
-        throw Object.assign(new Error('POLL_VOTE amount_cents (min 100) required'), {
+      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
+        throw Object.assign(new Error(`POLL_VOTE amount_cents (min ${MIN_SPEND_CENTS}) required`), {
           status: 400,
         });
       }
@@ -69,8 +69,10 @@ export async function createPledge({ email, items }: CreatePledgeInput) {
       }
       totalCents += amount_cents!;
     } else if (kind === 'GOAL') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
-        throw Object.assign(new Error('GOAL amount_cents (min 100) required'), { status: 400 });
+      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
+        throw Object.assign(new Error(`GOAL amount_cents (min ${MIN_SPEND_CENTS}) required`), {
+          status: 400,
+        });
       }
       const goal = await prisma.fundGoal.findUnique({ where: { id: target_id } });
       if (!goal || !goal.is_active || goal.is_complete) {
@@ -80,10 +82,13 @@ export async function createPledge({ email, items }: CreatePledgeInput) {
       }
       totalCents += amount_cents!;
     } else if (kind === 'POLL_CUSTOM') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
-        throw Object.assign(new Error('POLL_CUSTOM amount_cents (min 100) required'), {
-          status: 400,
-        });
+      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
+        throw Object.assign(
+          new Error(`POLL_CUSTOM amount_cents (min ${MIN_SPEND_CENTS}) required`),
+          {
+            status: 400,
+          },
+        );
       }
       if (!poll_id) {
         throw Object.assign(new Error('POLL_CUSTOM requires poll_id'), { status: 400 });

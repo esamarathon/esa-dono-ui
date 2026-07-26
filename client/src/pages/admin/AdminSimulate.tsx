@@ -3,6 +3,7 @@ import adminClient from '../../api/admin';
 import Card from '../../components/Card';
 import { apiErrorMessage } from '../../types';
 import { sanitizeMoneyInput } from '../../utils/money';
+import { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '../../config';
 
 interface SimulateResult {
   token: string;
@@ -19,8 +20,8 @@ export default function AdminSimulate() {
     setError('');
     setResult(null);
     const cents = Math.round(parseFloat(form.amount) * 100);
-    if (isNaN(cents) || cents < 100) {
-      setError('Minimum amount is $1.00');
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
+      setError(`Minimum amount is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
       return;
     }
     setLoading(true);
@@ -79,7 +80,7 @@ export default function AdminSimulate() {
             <input
               type="number"
               step="0.01"
-              min="1"
+              min={MIN_SPEND_DOLLARS}
               className="w-full px-3 py-2 text-sm"
               value={form.amount}
               onChange={(e) =>

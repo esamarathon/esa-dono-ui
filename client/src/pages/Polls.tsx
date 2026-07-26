@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import ProgressBar from '../components/ProgressBar';
 import { apiErrorMessage, type Poll, type PollOption } from '../types';
 import { sanitizeMoneyInput } from '../utils/money';
+import { DEFAULT_VOTE_AMOUNT, MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '../config';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -15,12 +16,12 @@ export default function Polls() {
   const [polls, setPolls] = useState<Poll[]>([]);
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState<{ poll: Poll; option: PollOption } | null>(null);
-  const [amount, setAmount] = useState('1.00');
+  const [amount, setAmount] = useState(DEFAULT_VOTE_AMOUNT);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [writingIn, setWritingIn] = useState<Poll | null>(null);
   const [writeInLabel, setWriteInLabel] = useState('');
-  const [writeInAmount, setWriteInAmount] = useState('1.00');
+  const [writeInAmount, setWriteInAmount] = useState(DEFAULT_VOTE_AMOUNT);
   const [writeInError, setWriteInError] = useState('');
   const [writeInSuccess, setWriteInSuccess] = useState('');
 
@@ -31,7 +32,7 @@ export default function Polls() {
 
   const openVote = (poll: Poll, option: PollOption) => {
     setVoting({ poll, option });
-    setAmount('1.00');
+    setAmount(DEFAULT_VOTE_AMOUNT);
     setError('');
     setSuccess('');
   };
@@ -39,8 +40,8 @@ export default function Polls() {
   const handleVote = async () => {
     setError('');
     const cents = Math.round(parseFloat(amount) * 100);
-    if (isNaN(cents) || cents < 100) {
-      setError('Minimum vote is $1.00');
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
+      setError(`Minimum vote is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
       return;
     }
     try {
@@ -59,7 +60,7 @@ export default function Polls() {
   const openWriteIn = (poll: Poll) => {
     setWritingIn(poll);
     setWriteInLabel('');
-    setWriteInAmount('1.00');
+    setWriteInAmount(DEFAULT_VOTE_AMOUNT);
     setWriteInError('');
     setWriteInSuccess('');
   };
@@ -71,8 +72,8 @@ export default function Polls() {
       return;
     }
     const cents = Math.round(parseFloat(writeInAmount) * 100);
-    if (isNaN(cents) || cents < 100) {
-      setWriteInError('Minimum amount is $1.00');
+    if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
+      setWriteInError(`Minimum amount is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
       return;
     }
     try {
@@ -158,7 +159,7 @@ export default function Polls() {
             <input
               type="number"
               step="0.01"
-              min="1"
+              min={MIN_SPEND_DOLLARS}
               className="w-full px-3 py-2 text-sm"
               value={amount}
               onChange={(e) => setAmount(sanitizeMoneyInput(e.target.value))}
@@ -219,7 +220,7 @@ export default function Polls() {
             <input
               type="number"
               step="0.01"
-              min="1"
+              min={MIN_SPEND_DOLLARS}
               className="w-full px-3 py-2 text-sm"
               value={writeInAmount}
               onChange={(e) => setWriteInAmount(sanitizeMoneyInput(e.target.value))}

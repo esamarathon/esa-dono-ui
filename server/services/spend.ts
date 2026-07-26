@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import type { ClaimData } from '@dono/shared';
+import { MIN_SPEND_CENTS, type ClaimData } from '@dono/shared';
 
 type Tx = Prisma.TransactionClient;
 
@@ -58,8 +58,10 @@ export async function votePollTx(
   pollOptionId: string,
   cents: number,
 ) {
-  if (!Number.isInteger(cents) || cents < 100) {
-    throw Object.assign(new Error('amount_cents (min 100) required'), { status: 400 });
+  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
+    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
+      status: 400,
+    });
   }
 
   const poll = await tx.poll.findUnique({ where: { id: pollId } });
@@ -138,8 +140,10 @@ export async function proposeCustomEntryTx(
   label: string,
   cents: number,
 ) {
-  if (!Number.isInteger(cents) || cents < 100) {
-    throw Object.assign(new Error('amount_cents (min 100) required'), { status: 400 });
+  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
+    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
+      status: 400,
+    });
   }
 
   const trimmed = (label || '').trim();
@@ -218,8 +222,10 @@ export async function proposeCustomEntryTx(
 }
 
 export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, cents: number) {
-  if (!Number.isInteger(cents) || cents < 100) {
-    throw Object.assign(new Error('amount_cents (min 100) required'), { status: 400 });
+  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
+    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
+      status: 400,
+    });
   }
 
   const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
