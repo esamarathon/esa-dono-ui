@@ -20,7 +20,10 @@ export default function Modal({
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="btrl-panel max-w-lg w-full max-h-[90vh] overflow-y-auto">
+      <div
+        className="btrl-panel max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        style={{ background: 'var(--dark-gray)' }}
+      >
         <div
           className="flex items-center justify-between p-4"
           style={{ borderBottom: '1px solid rgba(239,238,236,.08)' }}

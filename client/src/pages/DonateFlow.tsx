@@ -409,7 +409,7 @@ function PollsStep({
 
   const getAmount = (pollId: string, optionId: string) => {
     const key = `${pollId}-${optionId}`;
-    return amounts[key] || '1.00';
+    return amounts[key] ?? '1.00';
   };
 
   const inCart = (pollId: string, optionId: string) =>
@@ -420,7 +420,7 @@ function PollsStep({
 
   const handleAdd = (poll: Poll, option: PollOption) => {
     const key = `${poll.id}-${option.id}`;
-    const cents = Math.round(parseFloat(amounts[key] || '1.00') * 100);
+    const cents = Math.round(parseFloat(amounts[key] ?? '1.00') * 100);
     if (isNaN(cents) || cents < 100) return;
     onAdd({
       kind: 'POLL_VOTE',
@@ -429,6 +429,32 @@ function PollsStep({
       amount_cents: cents,
       label: option.label,
     });
+  };
+
+  const handleAmountChange = (poll: Poll, option: PollOption, value: string) => {
+    const key = `${poll.id}-${option.id}`;
+    setAmounts((a) => ({ ...a, [key]: value }));
+    // If this option is already in the cart, keep the cart amount in sync
+    // as the donor types, instead of requiring another "add" click.
+    if (inCart(poll.id, option.id)) {
+      const cents = Math.round(parseFloat(value) * 100);
+      if (!isNaN(cents) && cents >= 100) {
+        onAdd({
+          kind: 'POLL_VOTE',
+          target_id: option.id,
+          poll_id: poll.id,
+          amount_cents: cents,
+          label: option.label,
+        });
+      }
+    }
+  };
+
+  const handleAmountBlur = (poll: Poll, option: PollOption) => {
+    const key = `${poll.id}-${option.id}`;
+    if (!amounts[key] || !amounts[key].trim()) {
+      setAmounts((a) => ({ ...a, [key]: '1.00' }));
+    }
   };
 
   const openWriteIn = (poll: Poll) => {
@@ -498,12 +524,8 @@ function PollsStep({
                         min="1"
                         className="w-20 px-2 py-1 text-sm"
                         value={getAmount(poll.id, opt.id)}
-                        onChange={(e) =>
-                          setAmounts((a) => ({
-                            ...a,
-                            [`${poll.id}-${opt.id}`]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => handleAmountChange(poll, opt, e.target.value)}
+                        onBlur={() => handleAmountBlur(poll, opt)}
                       />
                       {added ? (
                         <button
