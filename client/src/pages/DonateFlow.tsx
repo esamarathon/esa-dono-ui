@@ -697,10 +697,24 @@ function GoalsStep({
 }) {
   const [amounts, setAmounts] = useState<Record<string, string>>({});
 
+  // Debounce syncing an edited amount to an already-in-cart goal — see the
+  // matching pattern in PollsStep for why.
+  const GOAL_CART_SYNC_DEBOUNCE_MS = 400;
+  const cartSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    const timers = cartSyncTimers.current;
+    return () => {
+      Object.values(timers).forEach(clearTimeout);
+    };
+  }, []);
+
+  const getAmount = (goalId: string) => amounts[goalId] ?? '5.00';
+
   const inCart = (id: string) => cart.some((i) => i.kind === 'GOAL' && i.target_id === id);
 
   const handleAdd = (goal: Goal) => {
-    const cents = Math.round(parseFloat(amounts[goal.id] || '5.00') * 100);
+    const cents = Math.round(parseFloat(amounts[goal.id] ?? '5.00') * 100);
     if (isNaN(cents) || cents < 100) return;
     onAdd({
       kind: 'GOAL',
@@ -708,6 +722,53 @@ function GoalsStep({
       amount_cents: cents,
       label: goal.title,
     });
+  };
+
+  const syncCartAmount = (goal: Goal, value: string) => {
+    const cents = Math.round(parseFloat(value) * 100);
+    if (!isNaN(cents) && cents >= 100) {
+      onAdd({
+        kind: 'GOAL',
+        target_id: goal.id,
+        amount_cents: cents,
+        label: goal.title,
+      });
+    }
+  };
+
+  const handleAmountChange = (goal: Goal, value: string) => {
+    const sanitized = sanitizeMoneyInput(value);
+    setAmounts((a) => ({ ...a, [goal.id]: sanitized }));
+
+    // If this goal is already in the cart, keep the cart amount in sync,
+    // debounced so it only fires once typing pauses rather than on every
+    // keystroke.
+    if (!inCart(goal.id)) return;
+
+    if (cartSyncTimers.current[goal.id]) {
+      clearTimeout(cartSyncTimers.current[goal.id]);
+    }
+    cartSyncTimers.current[goal.id] = setTimeout(() => {
+      delete cartSyncTimers.current[goal.id];
+      syncCartAmount(goal, sanitized);
+    }, GOAL_CART_SYNC_DEBOUNCE_MS);
+  };
+
+  const handleAmountBlur = (goal: Goal) => {
+    // Leaving the field commits immediately rather than waiting out the
+    // debounce, so the cart never shows a stale amount after the donor has
+    // moved on.
+    if (cartSyncTimers.current[goal.id]) {
+      clearTimeout(cartSyncTimers.current[goal.id]);
+      delete cartSyncTimers.current[goal.id];
+      if (inCart(goal.id)) {
+        syncCartAmount(goal, amounts[goal.id] ?? '5.00');
+      }
+    }
+
+    if (!amounts[goal.id] || !amounts[goal.id]!.trim()) {
+      setAmounts((a) => ({ ...a, [goal.id]: '5.00' }));
+    }
   };
 
   return (
@@ -733,10 +794,9 @@ function GoalsStep({
                   step="0.01"
                   min="1"
                   className="w-20 px-2 py-1 text-sm"
-                  value={amounts[g.id] || '5.00'}
-                  onChange={(e) =>
-                    setAmounts((a) => ({ ...a, [g.id]: sanitizeMoneyInput(e.target.value) }))
-                  }
+                  value={getAmount(g.id)}
+                  onChange={(e) => handleAmountChange(g, e.target.value)}
+                  onBlur={() => handleAmountBlur(g)}
                 />
                 {inCart(g.id) ? (
                   <button
