@@ -76,6 +76,7 @@ model Poll {
   total_votes_cents    Int          @default(0)
   allow_custom_entries Boolean      @default(false)
   max_entry_chars      Int?
+  auto_approve         Boolean      @default(true)
   created_at           DateTime     @default(now())
   updated_at           DateTime     @updatedAt
   options              PollOption[]
@@ -88,6 +89,7 @@ model PollOption {
   poll_id         String
   label           String
   votes_cents     Int             @default(0)
+  status          String          @default("ACTIVE") // ACTIVE | PENDING_APPROVAL | REJECTED
   custom_entry_id String?         @unique
   poll            Poll            @relation(fields: [poll_id], references: [id], onDelete: Cascade)
   votes           PollVote[]
@@ -182,9 +184,9 @@ model PendingPledge {
 model PledgeItem {
   id          String       @id @default(cuid())
   pledge_id   String
-  kind        String       // REWARD | POLL_VOTE | GOAL
-  target_id   String       // reward_id | poll_option_id | goal_id
-  poll_id     String?      // required for POLL_VOTE
+  kind        String       // REWARD | POLL_VOTE | GOAL | POLL_CUSTOM
+  target_id   String       // reward_id | poll_option_id | goal_id | poll_id (POLL_CUSTOM)
+  poll_id     String?      // required for POLL_VOTE and POLL_CUSTOM
   amount_cents Int
   data        String?      // JSON string for claim_data (physical reward shipping, etc.)
   created_at  DateTime     @default(now())

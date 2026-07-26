@@ -45,9 +45,38 @@ export interface RewardClaim {
   donor?: { email?: string } | null;
 }
 
+export interface WalletPollVote {
+  id: string;
+  amount_cents: number;
+  reversed_at?: string | null;
+  created_at: string;
+  poll: { title: string };
+  poll_option: { label: string; status?: string };
+}
+
+export interface WalletContribution {
+  id: string;
+  amount_cents: number;
+  reversed_at?: string | null;
+  created_at: string;
+  goal: { title: string };
+}
+
+export interface WalletCustomEntry {
+  id: string;
+  label: string;
+  status: string;
+  created_at: string;
+  poll: { title: string };
+  option?: { votes_cents: number; status: string } | null;
+}
+
 export interface DonorWallet extends Donor {
   donations: DonationRecord[];
   reward_claims: RewardClaim[];
+  poll_votes: WalletPollVote[];
+  fund_contributions: WalletContribution[];
+  custom_entries: WalletCustomEntry[];
 }
 
 export interface Reward {
@@ -66,6 +95,7 @@ export interface PollOption {
   id: string;
   label: string;
   votes_cents: number;
+  status?: string;
   custom_entry_id?: string | null;
 }
 
@@ -79,6 +109,7 @@ export interface Poll {
   is_active?: boolean;
   allow_custom_entries?: boolean;
   max_entry_chars?: number | null;
+  auto_approve?: boolean;
   custom_entries?: CustomEntry[];
 }
 
@@ -87,6 +118,7 @@ export interface CustomEntry {
   label: string;
   status: string;
   donor?: { email?: string } | null;
+  option?: { status: string; votes: { amount_cents: number }[] } | null;
 }
 
 export interface Goal {
@@ -113,12 +145,12 @@ export interface Campaign {
 
 /** An item in the donation cart (client-side only). */
 export interface CartItem {
-  kind: 'REWARD' | 'POLL_VOTE' | 'GOAL';
+  kind: 'REWARD' | 'POLL_VOTE' | 'GOAL' | 'POLL_CUSTOM';
   target_id: string;
   amount_cents: number;
   poll_id?: string;
   label?: string;
-  data?: Record<string, string>;
+  data?: Record<string, string> | { label: string };
 }
 
 export interface PledgeItem {

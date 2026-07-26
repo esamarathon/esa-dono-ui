@@ -17,6 +17,7 @@ interface PollForm {
   ends_at: string;
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
+  auto_approve: boolean;
 }
 
 const EMPTY: PollForm = {
@@ -26,6 +27,7 @@ const EMPTY: PollForm = {
   ends_at: '',
   allow_custom_entries: false,
   max_entry_chars: '',
+  auto_approve: true,
 };
 
 type PollModal = 'create' | Poll | null;
@@ -228,6 +230,19 @@ export default function AdminPolls() {
               allow custom entries
             </label>
           </div>
+          {form.allow_custom_entries && (
+            <div className="mb-3 flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="poll_auto_approve"
+                checked={form.auto_approve ?? true}
+                onChange={(e) => setForm((d) => ({ ...d, auto_approve: e.target.checked }))}
+              />
+              <label htmlFor="poll_auto_approve" className="font-data text-sm text-off-white">
+                auto-approve write-ins (off = review before funds count)
+              </label>
+            </div>
+          )}
           {form.allow_custom_entries && (
             <div className="mb-3">
               <label className="block font-data font-bold text-sm mb-1 text-off-white">

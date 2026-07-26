@@ -8,7 +8,7 @@ interface CreatePledgeInput {
     target_id: string;
     amount_cents: number;
     poll_id?: string;
-    data?: Record<string, string>;
+    data?: Record<string, string> | { label: string };
   }>;
 }
 

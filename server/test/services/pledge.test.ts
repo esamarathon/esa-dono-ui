@@ -80,6 +80,67 @@ describe('Pledge Service', () => {
     }, 10000);
   });
 
+  describe('createPledge — POLL_CUSTOM', () => {
+    it('validates a funded write-in and includes it in the total', async () => {
+      const poll = await prisma.poll.create({
+        data: { title: 'Write-in poll', is_active: true, allow_custom_entries: true },
+      });
+
+      const result = await createPledge({
+        email: 'writein@example.com',
+        items: [
+          {
+            kind: 'POLL_CUSTOM',
+            target_id: poll.id,
+            poll_id: poll.id,
+            amount_cents: 300,
+            data: { label: 'my option' },
+          },
+        ],
+      });
+      expect(result.total_cents).toBe(300);
+
+      await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
+      await prisma.poll.delete({ where: { id: poll.id } });
+    }, 10000);
+
+    it('rejects when poll does not allow custom entries', async () => {
+      const poll = await prisma.poll.create({
+        data: { title: 'No write-ins', is_active: true, allow_custom_entries: false },
+      });
+
+      await expect(
+        createPledge({
+          items: [
+            {
+              kind: 'POLL_CUSTOM',
+              target_id: poll.id,
+              poll_id: poll.id,
+              amount_cents: 300,
+              data: { label: 'my option' },
+            },
+          ],
+        }),
+      ).rejects.toThrow('does not allow custom entries');
+
+      await prisma.poll.delete({ where: { id: poll.id } });
+    }, 10000);
+
+    it('rejects a missing label', async () => {
+      const poll = await prisma.poll.create({
+        data: { title: 'Write-in poll 2', is_active: true, allow_custom_entries: true },
+      });
+
+      await expect(
+        createPledge({
+          items: [{ kind: 'POLL_CUSTOM', target_id: poll.id, poll_id: poll.id, amount_cents: 300 }],
+        }),
+      ).rejects.toThrow('requires a label');
+
+      await prisma.poll.delete({ where: { id: poll.id } });
+    }, 10000);
+  });
+
   describe('resolvePledge', () => {
     it('resolves by pledge token', async () => {
       const reward = await prisma.reward.create({
@@ -162,6 +223,105 @@ describe('Pledge Service', () => {
       await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
+    }, 10000);
+
+    it('fulfills a POLL_CUSTOM write-in pledge (auto_approve) and updates the tally', async () => {
+      const poll = await prisma.poll.create({
+        data: { title: 'Fulfill write-in poll', is_active: true, allow_custom_entries: true },
+      });
+      const { pledge_token } = await createPledge({
+        email: 'writein-fulfill@example.com',
+        items: [
+          {
+            kind: 'POLL_CUSTOM',
+            target_id: poll.id,
+            poll_id: poll.id,
+            amount_cents: 300,
+            data: { label: 'my write-in' },
+          },
+        ],
+      });
+
+      const result = await processDonation({
+        tiltifyId: `test-${crypto.randomUUID()}`,
+        email: 'writein-fulfill@example.com',
+        donorName: 'Test',
+        amountCents: 300,
+        pledgeToken: pledge_token,
+      });
+
+      expect((result as any).pledge.totalSpent).toBe(300);
+      expect((result as any).pledge.skipped).toBe(0);
+
+      const updatedPoll = await prisma.poll.findUnique({ where: { id: poll.id } });
+      expect(updatedPoll!.total_votes_cents).toBe(300);
+
+      const option = await prisma.pollOption.findFirst({ where: { poll_id: poll.id } });
+      expect(option!.status).toBe('ACTIVE');
+      expect(option!.votes_cents).toBe(300);
+
+      const donor = await prisma.donor.findUnique({
+        where: { email: 'writein-fulfill@example.com' },
+      });
+      expect(donor!.balance_remaining).toBe(0);
+
+      await prisma.pollVote.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.pollCustomEntry.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
+      await prisma.poll.delete({ where: { id: poll.id } });
+    }, 10000);
+
+    it('fulfills a POLL_CUSTOM write-in pledge but excludes it from the tally when auto_approve is false', async () => {
+      const poll = await prisma.poll.create({
+        data: {
+          title: 'Reviewed write-in poll',
+          is_active: true,
+          allow_custom_entries: true,
+          auto_approve: false,
+        },
+      });
+      const { pledge_token } = await createPledge({
+        email: 'writein-review@example.com',
+        items: [
+          {
+            kind: 'POLL_CUSTOM',
+            target_id: poll.id,
+            poll_id: poll.id,
+            amount_cents: 300,
+            data: { label: 'needs review' },
+          },
+        ],
+      });
+
+      const result = await processDonation({
+        tiltifyId: `test-${crypto.randomUUID()}`,
+        email: 'writein-review@example.com',
+        donorName: 'Test',
+        amountCents: 300,
+        pledgeToken: pledge_token,
+      });
+
+      expect((result as any).pledge.totalSpent).toBe(300);
+
+      const updatedPoll = await prisma.poll.findUnique({ where: { id: poll.id } });
+      expect(updatedPoll!.total_votes_cents).toBe(0);
+
+      const option = await prisma.pollOption.findFirst({ where: { poll_id: poll.id } });
+      expect(option!.status).toBe('PENDING_APPROVAL');
+      expect(option!.votes_cents).toBe(0);
+
+      // Funds are still committed (spent-immediately, Model B)
+      const donor = await prisma.donor.findUnique({
+        where: { email: 'writein-review@example.com' },
+      });
+      expect(donor!.balance_remaining).toBe(0);
+
+      await prisma.pollVote.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.pollCustomEntry.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
+      await prisma.poll.delete({ where: { id: poll.id } });
     }, 10000);
 
     it('gracefully degrades when no pledge matches', async () => {

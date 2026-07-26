@@ -315,6 +315,13 @@ router.post('/donors/:id/reverse-spend', async (req, res) => {
       return res.status(404).json({ error: 'Vote not found' });
     if (vote.reversed_at) return res.status(400).json({ error: 'Vote already reversed' });
 
+    const option = await prisma.pollOption.findUnique({ where: { id: vote.poll_option_id } });
+    // Only decrement the public tally if the option was actually credited
+    // (ACTIVE). A vote funding a still-PENDING_APPROVAL custom entry has
+    // votes_cents === 0 on the option, so skip the decrement to avoid going
+    // negative; mark the option REJECTED instead so it stays excluded.
+    const wasActive = option?.status === 'ACTIVE';
+
     await prisma.$transaction([
       prisma.donor.update({
         where: { id: donor.id },
@@ -324,14 +331,27 @@ router.post('/donors/:id/reverse-spend', async (req, res) => {
         where: { id: vote.id },
         data: { reversed_at: new Date(), reversed_by: 'admin' },
       }),
-      prisma.pollOption.update({
-        where: { id: vote.poll_option_id },
-        data: { votes_cents: { decrement: vote.amount_cents } },
-      }),
-      prisma.poll.update({
-        where: { id: vote.poll_id },
-        data: { total_votes_cents: { decrement: vote.amount_cents } },
-      }),
+      ...(option
+        ? [
+            wasActive
+              ? prisma.pollOption.update({
+                  where: { id: option.id },
+                  data: { votes_cents: { decrement: vote.amount_cents } },
+                })
+              : prisma.pollOption.update({
+                  where: { id: option.id },
+                  data: { status: 'REJECTED' },
+                }),
+          ]
+        : []),
+      ...(wasActive
+        ? [
+            prisma.poll.update({
+              where: { id: vote.poll_id },
+              data: { total_votes_cents: { decrement: vote.amount_cents } },
+            }),
+          ]
+        : []),
       prisma.balanceAdjustment.create({
         data: {
           donor_id: donor.id,
@@ -406,8 +426,16 @@ router.get('/polls', async (req, res) => {
 });
 
 router.post('/polls', async (req, res) => {
-  const { title, description, is_active, ends_at, options, allow_custom_entries, max_entry_chars } =
-    req.body;
+  const {
+    title,
+    description,
+    is_active,
+    ends_at,
+    options,
+    allow_custom_entries,
+    max_entry_chars,
+    auto_approve,
+  } = req.body;
   const poll = await prisma.poll.create({
     data: {
       title,
@@ -416,6 +444,7 @@ router.post('/polls', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
+      auto_approve: auto_approve ?? true,
       options: options?.length
         ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
         : undefined,
@@ -426,8 +455,15 @@ router.post('/polls', async (req, res) => {
 });
 
 router.put('/polls/:id', async (req, res) => {
-  const { title, description, is_active, ends_at, allow_custom_entries, max_entry_chars } =
-    req.body;
+  const {
+    title,
+    description,
+    is_active,
+    ends_at,
+    allow_custom_entries,
+    max_entry_chars,
+    auto_approve,
+  } = req.body;
   const poll = await prisma.poll.update({
     where: { id: req.params.id },
     data: {
@@ -437,6 +473,7 @@ router.put('/polls/:id', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
+      auto_approve: auto_approve ?? true,
     },
     include: { options: true },
   });

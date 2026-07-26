@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getRewards } from '../api/rewards';
-import { getPolls, submitCustomEntry } from '../api/polls';
+import { getPolls } from '../api/polls';
 import { getGoals } from '../api/goals';
 import { createPledge } from '../api/pledge';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -267,7 +267,9 @@ export default function DonateFlow() {
                           ? 'reward'
                           : item.kind === 'POLL_VOTE'
                             ? 'poll vote'
-                            : 'goal'}
+                            : item.kind === 'POLL_CUSTOM'
+                              ? 'your own option'
+                              : 'goal'}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 ml-2">
@@ -400,10 +402,10 @@ function PollsStep({
   onRemove: (kind: CartItem['kind'], targetId: string) => void;
 }) {
   const [amounts, setAmounts] = useState<Record<string, string>>({});
-  const [suggesting, setSuggesting] = useState<Poll | null>(null);
-  const [suggestLabel, setSuggestLabel] = useState('');
-  const [suggestError, setSuggestError] = useState('');
-  const [suggestSuccess, setSuggestSuccess] = useState('');
+  const [writingIn, setWritingIn] = useState<Poll | null>(null);
+  const [writeInLabel, setWriteInLabel] = useState('');
+  const [writeInAmount, setWriteInAmount] = useState('1.00');
+  const [writeInError, setWriteInError] = useState('');
 
   const getAmount = (pollId: string, optionId: string) => {
     const key = `${pollId}-${optionId}`;
@@ -412,6 +414,9 @@ function PollsStep({
 
   const inCart = (pollId: string, optionId: string) =>
     cart.some((i) => i.kind === 'POLL_VOTE' && i.target_id === optionId && i.poll_id === pollId);
+
+  const writeInInCart = (pollId: string) =>
+    cart.find((i) => i.kind === 'POLL_CUSTOM' && i.poll_id === pollId);
 
   const handleAdd = (poll: Poll, option: PollOption) => {
     const key = `${poll.id}-${option.id}`;
@@ -426,22 +431,33 @@ function PollsStep({
     });
   };
 
-  const handleSuggest = async () => {
-    setSuggestError('');
-    if (!suggestLabel.trim()) {
-      setSuggestError('Please enter a suggestion');
+  const openWriteIn = (poll: Poll) => {
+    setWritingIn(poll);
+    setWriteInLabel('');
+    setWriteInAmount('1.00');
+    setWriteInError('');
+  };
+
+  const handleWriteIn = () => {
+    setWriteInError('');
+    if (!writeInLabel.trim()) {
+      setWriteInError('Please enter your option');
       return;
     }
-    try {
-      await submitCustomEntry(suggesting!.id, suggestLabel.trim());
-      setSuggestSuccess('Submitted for approval!');
-      setTimeout(() => {
-        setSuggesting(null);
-        setSuggestSuccess('');
-      }, 2000);
-    } catch (e) {
-      setSuggestError(apiErrorMessage(e, 'Failed to submit'));
+    const cents = Math.round(parseFloat(writeInAmount) * 100);
+    if (isNaN(cents) || cents < 100) {
+      setWriteInError('Minimum amount is $1.00');
+      return;
     }
+    onAdd({
+      kind: 'POLL_CUSTOM',
+      target_id: writingIn!.id,
+      poll_id: writingIn!.id,
+      amount_cents: cents,
+      label: writeInLabel.trim(),
+      data: { label: writeInLabel.trim() },
+    });
+    setWritingIn(null);
   };
 
   return (
@@ -451,117 +467,153 @@ function PollsStep({
         Cast votes in active polls. $1 = 1 vote. Your donation will be split between your vote and
         your other selections.
       </p>
-      {polls.map((poll) => (
-        <Card key={poll.id} className="mb-4">
-          <h3 className="font-data font-bold text-lg text-off-white mb-1">{poll.title}</h3>
-          {poll.description && (
-            <p className="font-body text-sm text-off-white/55 mb-3">{poll.description}</p>
-          )}
-          <div className="space-y-3">
-            {poll.options.map((opt) => {
-              const added = inCart(poll.id, opt.id);
-              return (
-                <div key={opt.id} className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-data font-bold text-sm text-off-white">
-                        {opt.label}
+      {polls.map((poll) => {
+        const writeIn = writeInInCart(poll.id);
+        return (
+          <Card key={poll.id} className="mb-4">
+            <h3 className="font-data font-bold text-lg text-off-white mb-1">{poll.title}</h3>
+            {poll.description && (
+              <p className="font-body text-sm text-off-white/55 mb-3">{poll.description}</p>
+            )}
+            <div className="space-y-3">
+              {poll.options.map((opt) => {
+                const added = inCart(poll.id, opt.id);
+                return (
+                  <div key={opt.id} className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-data font-bold text-sm text-off-white">
+                          {opt.label}
+                        </span>
+                        <span className="font-data text-sm text-off-white/55">
+                          {fmt(opt.votes_cents)}
+                        </span>
+                      </div>
+                      <ProgressBar value={opt.votes_cents} max={poll.total_votes_cents || 1} />
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        className="w-20 px-2 py-1 text-sm"
+                        value={getAmount(poll.id, opt.id)}
+                        onChange={(e) =>
+                          setAmounts((a) => ({
+                            ...a,
+                            [`${poll.id}-${opt.id}`]: e.target.value,
+                          }))
+                        }
+                      />
+                      {added ? (
+                        <button
+                          onClick={() => onRemove('POLL_VOTE', opt.id)}
+                          className="btrl-button btrl-button-outline text-sm"
+                        >
+                          remove
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleAdd(poll, opt)}
+                          className="btrl-button text-sm"
+                        >
+                          add
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {poll.allow_custom_entries && (
+              <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
+                {writeIn ? (
+                  <div className="flex justify-between items-center text-sm">
+                    <div>
+                      <span className="font-data font-bold text-off-white">
+                        your option: "{writeIn.label}"
                       </span>
-                      <span className="font-data text-sm text-off-white/55">
-                        {fmt(opt.votes_cents)}
+                      <span className="font-data text-off-white/55 ml-2">
+                        {fmt(writeIn.amount_cents)}
                       </span>
                     </div>
-                    <ProgressBar value={opt.votes_cents} max={poll.total_votes_cents || 1} />
+                    <button
+                      onClick={() => onRemove('POLL_CUSTOM', writeIn.target_id)}
+                      className="btrl-button btrl-button-outline text-sm"
+                    >
+                      remove
+                    </button>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="1"
-                      className="w-20 px-2 py-1 text-sm"
-                      value={getAmount(poll.id, opt.id)}
-                      onChange={(e) =>
-                        setAmounts((a) => ({
-                          ...a,
-                          [`${poll.id}-${opt.id}`]: e.target.value,
-                        }))
-                      }
-                    />
-                    {added ? (
-                      <button
-                        onClick={() => onRemove('POLL_VOTE', opt.id)}
-                        className="btrl-button btrl-button-outline text-sm"
-                      >
-                        remove
-                      </button>
-                    ) : (
-                      <button onClick={() => handleAdd(poll, opt)} className="btrl-button text-sm">
-                        add
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {poll.allow_custom_entries && (
-            <button
-              onClick={() => {
-                setSuggesting(poll);
-                setSuggestLabel('');
-                setSuggestError('');
-                setSuggestSuccess('');
-              }}
-              className="btrl-button btrl-button-ghost mt-3 text-sm"
-            >
-              + suggest an option
-            </button>
-          )}
-        </Card>
-      ))}
+                ) : (
+                  <button
+                    onClick={() => openWriteIn(poll)}
+                    className="btrl-button btrl-button-ghost text-sm"
+                  >
+                    + add your own option
+                  </button>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })}
       {polls.length === 0 && (
         <p className="font-body text-sm text-off-white/55">No active polls.</p>
       )}
 
-      {suggesting && (
-        <Modal title="suggest an option" onClose={() => setSuggesting(null)}>
+      {writingIn && (
+        <Modal title="add your own option" onClose={() => setWritingIn(null)}>
           <p className="font-body text-sm text-off-white/55 mb-3">
-            Poll: <strong className="text-off-white">{suggesting.title}</strong>
+            Poll: <strong className="text-off-white">{writingIn.title}</strong>
+          </p>
+          <p className="font-body text-xs text-off-white/55 mb-3">
+            {writingIn.auto_approve === false
+              ? 'Your funds are committed now. A moderator reviews new options before they go live; if rejected, the amount is refunded to your wallet.'
+              : 'Your funds are committed now and your option goes live immediately (subject to moderator review afterward).'}
           </p>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">
-              your suggestion
+              your option
             </label>
             <input
               className="w-full px-3 py-2 text-sm"
               placeholder="Type your option..."
-              value={suggestLabel}
-              onChange={(e) => setSuggestLabel(e.target.value)}
-              maxLength={suggesting.max_entry_chars || undefined}
-              onKeyDown={(e) => e.key === 'Enter' && handleSuggest()}
+              value={writeInLabel}
+              onChange={(e) => setWriteInLabel(e.target.value)}
+              maxLength={writingIn.max_entry_chars || undefined}
             />
-            {suggesting.max_entry_chars && (
+            {writingIn.max_entry_chars && (
               <p className="font-mono text-xs text-off-white/55 mt-1">
-                {suggestLabel.length}/{suggesting.max_entry_chars} characters
+                {writeInLabel.length}/{writingIn.max_entry_chars} characters
               </p>
             )}
           </div>
-          {suggestError && (
+          <div className="mb-3">
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">
+              amount ($1 minimum)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min="1"
+              className="w-full px-3 py-2 text-sm"
+              value={writeInAmount}
+              onChange={(e) => setWriteInAmount(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleWriteIn()}
+            />
+          </div>
+          {writeInError && (
             <p className="text-sm mb-2" style={{ color: 'var(--red)' }}>
-              {suggestError}
-            </p>
-          )}
-          {suggestSuccess && (
-            <p className="text-sm mb-2" style={{ color: 'var(--green)' }}>
-              {suggestSuccess}
+              {writeInError}
             </p>
           )}
           <div className="flex justify-end gap-2">
-            <button onClick={() => setSuggesting(null)} className="btrl-button btrl-button-outline">
+            <button onClick={() => setWritingIn(null)} className="btrl-button btrl-button-outline">
               cancel
             </button>
-            <button onClick={handleSuggest} className="btrl-button">
-              submit for approval
+            <button onClick={handleWriteIn} className="btrl-button">
+              add to cart — funds it now
             </button>
           </div>
         </Modal>

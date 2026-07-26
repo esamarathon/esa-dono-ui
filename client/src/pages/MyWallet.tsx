@@ -183,7 +183,7 @@ export default function MyWallet() {
       {donor.reward_claims.length === 0 ? (
         <p className="font-body text-sm text-off-white/55">No reward claims yet.</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2 mb-6">
           {donor.reward_claims.map((c) => (
             <Card key={c.id} className="flex justify-between items-center">
               <div>
@@ -203,6 +203,83 @@ export default function MyWallet() {
           ))}
         </div>
       )}
+
+      <h2 className="font-display text-3xl lowercase mb-3">my write-ins</h2>
+      {donor.custom_entries.length === 0 ? (
+        <p className="font-body text-sm text-off-white/55">No write-in options submitted yet.</p>
+      ) : (
+        <div className="space-y-2 mb-6">
+          {donor.custom_entries.map((e) => (
+            <Card key={e.id} className="flex justify-between items-center">
+              <div>
+                <p className="font-data font-bold text-off-white">"{e.label}"</p>
+                <p className="font-data text-sm text-off-white/55">{e.poll.title}</p>
+              </div>
+              <StatusBadge status={e.status} />
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <h2 className="font-display text-3xl lowercase mb-3">my poll votes</h2>
+      {donor.poll_votes.length === 0 ? (
+        <p className="font-body text-sm text-off-white/55">No poll votes yet.</p>
+      ) : (
+        <div className="space-y-2 mb-6">
+          {donor.poll_votes.map((v) => (
+            <Card key={v.id} className="flex justify-between items-center">
+              <div>
+                <p className="font-data font-bold text-off-white">{v.poll_option.label}</p>
+                <p className="font-data text-sm text-off-white/55">
+                  {v.poll.title} · {fmt(v.amount_cents)}
+                </p>
+              </div>
+              <StatusBadge status={v.reversed_at ? 'REVERSED' : 'ACTIVE'} />
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <h2 className="font-display text-3xl lowercase mb-3">my goal contributions</h2>
+      {donor.fund_contributions.length === 0 ? (
+        <p className="font-body text-sm text-off-white/55">No goal contributions yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {donor.fund_contributions.map((c) => (
+            <Card key={c.id} className="flex justify-between items-center">
+              <div>
+                <p className="font-data font-bold text-off-white">{c.goal.title}</p>
+                <p className="font-data text-sm text-off-white/55">{fmt(c.amount_cents)}</p>
+              </div>
+              <StatusBadge status={c.reversed_at ? 'REVERSED' : 'ACTIVE'} />
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, { color: string; background: string }> = {
+    FULFILLED: { color: 'var(--green)', background: 'rgba(92,189,125,.16)' },
+    ACTIVE: { color: 'var(--green)', background: 'rgba(92,189,125,.16)' },
+    APPROVED: { color: 'var(--green)', background: 'rgba(92,189,125,.16)' },
+    PENDING: { color: 'var(--d-yellow)', background: 'rgba(208,152,70,.16)' },
+    PENDING_APPROVAL: { color: 'var(--d-yellow)', background: 'rgba(208,152,70,.16)' },
+    REJECTED: { color: 'var(--red)', background: 'rgba(252,28,103,.18)' },
+    REVERSED: { color: 'var(--red)', background: 'rgba(252,28,103,.18)' },
+  };
+  const style = styles[status] || {
+    color: 'var(--off-white)',
+    background: 'rgba(239,238,236,.08)',
+  };
+  return (
+    <span
+      className="font-data text-xs font-bold px-2 py-1 rounded-sm"
+      style={{ color: style.color, background: style.background }}
+    >
+      {status.replace('_', ' ')}
+    </span>
   );
 }

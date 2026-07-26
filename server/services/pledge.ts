@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
-import { claimRewardTx, votePollTx, contributeGoalTx } from './spend.js';
+import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
+import { checkBlockedWords } from './blockedWords.js';
 
 const PLEDGE_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -33,7 +34,7 @@ export async function createPledge({ email, items }: CreatePledgeInput) {
   for (const item of items) {
     const { kind, target_id, amount_cents, poll_id } = item;
 
-    if (!['REWARD', 'POLL_VOTE', 'GOAL'].includes(kind)) {
+    if (!['REWARD', 'POLL_VOTE', 'GOAL', 'POLL_CUSTOM'].includes(kind)) {
       throw Object.assign(new Error(`Invalid item kind: ${kind}`), { status: 400 });
     }
 
@@ -76,6 +77,46 @@ export async function createPledge({ email, items }: CreatePledgeInput) {
         throw Object.assign(new Error(`Goal not found, inactive, or complete: ${target_id}`), {
           status: 404,
         });
+      }
+      totalCents += amount_cents!;
+    } else if (kind === 'POLL_CUSTOM') {
+      if (!Number.isInteger(amount_cents) || amount_cents! < 100) {
+        throw Object.assign(new Error('POLL_CUSTOM amount_cents (min 100) required'), {
+          status: 400,
+        });
+      }
+      if (!poll_id) {
+        throw Object.assign(new Error('POLL_CUSTOM requires poll_id'), { status: 400 });
+      }
+      const label =
+        typeof item.data === 'object' && item.data
+          ? (item.data as { label?: unknown }).label
+          : null;
+      const trimmed = typeof label === 'string' ? label.trim() : '';
+      if (!trimmed) {
+        throw Object.assign(new Error('POLL_CUSTOM requires a label'), { status: 400 });
+      }
+      const poll = await prisma.poll.findUnique({ where: { id: poll_id } });
+      if (!poll || !poll.is_active) {
+        throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
+      }
+      if (!poll.allow_custom_entries) {
+        throw Object.assign(new Error(`Poll does not allow custom entries: ${poll.title}`), {
+          status: 400,
+        });
+      }
+      if (poll.ends_at && new Date() > poll.ends_at) {
+        throw Object.assign(new Error(`Poll has ended: ${poll.title}`), { status: 400 });
+      }
+      if (poll.max_entry_chars && trimmed.length > poll.max_entry_chars) {
+        throw Object.assign(
+          new Error(`Entry exceeds maximum of ${poll.max_entry_chars} characters`),
+          { status: 400 },
+        );
+      }
+      const blockedError = await checkBlockedWords(trimmed);
+      if (blockedError) {
+        throw Object.assign(new Error(blockedError), { status: 400 });
       }
       totalCents += amount_cents!;
     }
@@ -136,6 +177,15 @@ export async function fulfillPledge(
         result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
       } else if (item.kind === 'GOAL') {
         result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents);
+      } else if (item.kind === 'POLL_CUSTOM') {
+        const data = item.data ? JSON.parse(item.data) : {};
+        result = await proposeCustomEntryTx(
+          tx,
+          donorId,
+          item.poll_id!,
+          data.label,
+          item.amount_cents,
+        );
       }
       totalSpent += result!.cost;
       results.push({ item_id: item.id, kind: item.kind, status: 'fulfilled', cost: result!.cost });

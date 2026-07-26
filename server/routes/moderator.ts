@@ -32,8 +32,16 @@ router.get('/polls', async (req, res) => {
 });
 
 router.post('/polls', async (req, res) => {
-  const { title, description, is_active, ends_at, options, allow_custom_entries, max_entry_chars } =
-    req.body;
+  const {
+    title,
+    description,
+    is_active,
+    ends_at,
+    options,
+    allow_custom_entries,
+    max_entry_chars,
+    auto_approve,
+  } = req.body;
   const poll = await prisma.poll.create({
     data: {
       title,
@@ -42,6 +50,7 @@ router.post('/polls', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
+      auto_approve: auto_approve ?? true,
       options: options?.length
         ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
         : undefined,
@@ -52,8 +61,15 @@ router.post('/polls', async (req, res) => {
 });
 
 router.put('/polls/:id', async (req, res) => {
-  const { title, description, is_active, ends_at, allow_custom_entries, max_entry_chars } =
-    req.body;
+  const {
+    title,
+    description,
+    is_active,
+    ends_at,
+    allow_custom_entries,
+    max_entry_chars,
+    auto_approve,
+  } = req.body;
   const poll = await prisma.poll.update({
     where: { id: req.params.id },
     data: {
@@ -63,6 +79,7 @@ router.put('/polls/:id', async (req, res) => {
       ends_at: ends_at ? new Date(ends_at) : null,
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
+      auto_approve: auto_approve ?? true,
     },
     include: { options: true },
   });
@@ -90,7 +107,10 @@ router.delete('/polls/options/:id', async (req, res) => {
 router.get('/polls/:id/custom-entries', async (req, res) => {
   const entries = await prisma.pollCustomEntry.findMany({
     where: { poll_id: req.params.id },
-    include: { donor: { select: { email: true } } },
+    include: {
+      donor: { select: { email: true } },
+      option: { include: { votes: { orderBy: { created_at: 'desc' }, take: 1 } } },
+    },
     orderBy: { created_at: 'desc' },
   });
   res.json(entries);
@@ -108,15 +128,26 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
     return res.status(400).json({ error: 'Only pending entries can be moderated' });
   }
 
+  const option = await prisma.pollOption.findUnique({ where: { custom_entry_id: entry.id } });
+  if (!option) return res.status(404).json({ error: 'Associated poll option not found' });
+
+  const vote = await prisma.pollVote.findFirst({
+    where: { poll_option_id: option.id, reversed_at: null },
+    orderBy: { created_at: 'desc' },
+  });
+  if (!vote) return res.status(404).json({ error: 'Associated funding vote not found' });
+
+  const moderatorEmail = req.donor?.email || 'moderator';
+
   if (status === 'APPROVED') {
-    // Create a PollOption from the approved entry
     await prisma.$transaction([
-      prisma.pollOption.create({
-        data: {
-          poll_id: entry.poll_id,
-          label: entry.label,
-          custom_entry_id: entry.id,
-        },
+      prisma.pollOption.update({
+        where: { id: option.id },
+        data: { status: 'ACTIVE', votes_cents: { increment: vote.amount_cents } },
+      }),
+      prisma.poll.update({
+        where: { id: entry.poll_id },
+        data: { total_votes_cents: { increment: vote.amount_cents } },
       }),
       prisma.pollCustomEntry.update({
         where: { id: entry.id },
@@ -124,10 +155,38 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
       }),
     ]);
   } else {
-    await prisma.pollCustomEntry.update({
-      where: { id: entry.id },
-      data: { status: 'REJECTED' },
-    });
+    const donor = await prisma.donor.findUnique({ where: { id: vote.donor_id } });
+    if (!donor) return res.status(404).json({ error: 'Donor not found' });
+
+    await prisma.$transaction([
+      prisma.donor.update({
+        where: { id: donor.id },
+        data: { balance_remaining: { increment: vote.amount_cents } },
+      }),
+      prisma.pollVote.update({
+        where: { id: vote.id },
+        data: { reversed_at: new Date(), reversed_by: moderatorEmail },
+      }),
+      prisma.pollOption.update({
+        where: { id: option.id },
+        data: { status: 'REJECTED' },
+      }),
+      prisma.pollCustomEntry.update({
+        where: { id: entry.id },
+        data: { status: 'REJECTED' },
+      }),
+      prisma.balanceAdjustment.create({
+        data: {
+          donor_id: donor.id,
+          amount_cents: vote.amount_cents,
+          balance_after_cents: donor.balance_remaining + vote.amount_cents,
+          type: 'REFUND',
+          reason: 'Rejected custom poll entry',
+          reference_id: vote.id,
+          created_by: moderatorEmail,
+        },
+      }),
+    ]);
   }
 
   const updated = await prisma.pollCustomEntry.findUnique({

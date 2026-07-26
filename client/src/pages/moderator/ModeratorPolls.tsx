@@ -17,6 +17,7 @@ interface PollForm {
   ends_at: string;
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
+  auto_approve: boolean;
 }
 
 const EMPTY: PollForm = {
@@ -26,6 +27,7 @@ const EMPTY: PollForm = {
   ends_at: '',
   allow_custom_entries: false,
   max_entry_chars: '',
+  auto_approve: true,
 };
 
 type PollModal = 'create' | Poll | null;
@@ -139,7 +141,8 @@ export default function ModeratorPolls() {
                 )}
                 <p className="font-data text-xs text-off-white/55">
                   total votes: {fmt(poll.total_votes_cents)}
-                  {poll.allow_custom_entries && ' · custom entries allowed'}
+                  {poll.allow_custom_entries &&
+                    ` · custom entries ${poll.auto_approve === false ? '(needs approval)' : '(auto-approved)'}`}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -235,6 +238,11 @@ export default function ModeratorPolls() {
                           <span className="font-data text-xs text-off-white/55 ml-2">
                             {e.donor?.email}
                           </span>
+                          {e.option?.votes?.[0] && (
+                            <span className="font-data text-xs text-d-yellow ml-2">
+                              {fmt(e.option.votes[0].amount_cents)}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <span
@@ -331,6 +339,19 @@ export default function ModeratorPolls() {
               allow custom entries
             </label>
           </div>
+          {form.allow_custom_entries && (
+            <div className="mb-3 flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="modpoll_auto_approve"
+                checked={form.auto_approve ?? true}
+                onChange={(e) => setForm((d) => ({ ...d, auto_approve: e.target.checked }))}
+              />
+              <label htmlFor="modpoll_auto_approve" className="font-data text-sm text-off-white">
+                auto-approve write-ins (off = review before funds count)
+              </label>
+            </div>
+          )}
           {form.allow_custom_entries && (
             <div className="mb-3">
               <label className="block font-data font-bold text-sm mb-1 text-off-white">
