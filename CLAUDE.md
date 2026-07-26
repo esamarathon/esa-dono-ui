@@ -48,9 +48,11 @@ The codebase is **TypeScript (strict)** across both workspaces (see
   sides: branded `Cents` money helpers, Tiltify webhook payload types, and `claim_data` helpers.
   It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
 - `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
-- Tests are TypeScript (`.test.ts`/`.test.tsx`). Only `*.config.js` files (Vite, Vitest,
-  ESLint, Tailwind, PostCSS) remain JavaScript; `allowJs` is **off** and those config
-  files are excluded from the tsconfig `include`. No `.js`/`.jsx` source or test files remain.
+- Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too
+  (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, `eslint.config.ts` — the
+  last loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is
+  `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts`
+  PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
 
 ## Docker Deployment
 

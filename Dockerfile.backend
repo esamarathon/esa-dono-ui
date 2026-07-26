@@ -2,7 +2,7 @@
 # Backend image for esa-dono-ui (Express + Prisma API server).
 #
 # Targets:
-#   test    - full dev deps + source, entrypoint runs scripts/run-tests.mjs (CI/distributed testing)
+#   test    - full dev deps + source, entrypoint runs scripts/run-tests.ts (CI/distributed testing)
 #   runtime - production API server, prod-only deps, non-root, migrates on start
 #
 # Build:
@@ -58,7 +58,7 @@ RUN DATABASE_URL="file:/app/dev.db" npx prisma generate --schema=./server/prisma
   && chown -R dono:dono /app
 
 USER dono
-ENTRYPOINT ["node", "scripts/run-tests.mjs"]
+ENTRYPOINT ["node_modules/.bin/tsx", "scripts/run-tests.ts"]
 
 # ---------- Runtime (production API) ----------
 FROM deps AS runtime

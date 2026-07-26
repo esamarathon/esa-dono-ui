@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 // Container entrypoint for distributed testing.
 //
 // Honors two env vars:
@@ -17,7 +17,12 @@ const ROOT = join(__dirname, '..');
 const TARGET = process.env.TEST_TARGET || 'both';
 const MODE = process.env.MODE || 'test';
 
-function run(cmd, args, opts = {}) {
+interface RunOpts {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd: opts.cwd || ROOT,
@@ -31,7 +36,7 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-async function runTarget(target) {
+async function runTarget(target: string): Promise<void> {
   if (MODE === 'test') return run('npm', ['run', 'test', '--workspace', target]);
   if (MODE === 'lint') return run('npm', ['run', 'lint', '--workspace', target]);
   if (MODE === 'build') {
@@ -41,7 +46,7 @@ async function runTarget(target) {
   throw new Error(`Unsupported MODE=${MODE} for TARGET=${target}`);
 }
 
-async function main() {
+async function main(): Promise<void> {
   console.log(`[container] TEST_TARGET=${TARGET} MODE=${MODE}`);
 
   if (MODE === 'ci') {
@@ -63,7 +68,7 @@ async function main() {
   console.log(`[container] ${MODE} ${TARGET} complete`);
 }
 
-main().catch((err) => {
-  console.error('[container] FAILED:', err.message);
+main().catch((err: unknown) => {
+  console.error('[container] FAILED:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
