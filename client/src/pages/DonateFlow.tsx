@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { getRewards } from '../api/rewards';
 import { getPolls } from '../api/polls';
 import { getGoals } from '../api/goals';
@@ -408,6 +408,19 @@ function PollsStep({
   const [writeInAmount, setWriteInAmount] = useState('1.00');
   const [writeInError, setWriteInError] = useState('');
 
+  // Debounce syncing an edited amount to an already-in-cart option: firing
+  // onAdd on every keystroke caused the cart sidebar to re-render on every
+  // digit typed. Wait for a short pause in typing instead.
+  const CART_SYNC_DEBOUNCE_MS = 400;
+  const cartSyncTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    const timers = cartSyncTimers.current;
+    return () => {
+      Object.values(timers).forEach(clearTimeout);
+    };
+  }, []);
+
   const getAmount = (pollId: string, optionId: string) => {
     const key = `${pollId}-${optionId}`;
     return amounts[key] ?? '1.00';
@@ -432,28 +445,52 @@ function PollsStep({
     });
   };
 
+  const syncCartAmount = (poll: Poll, option: PollOption, value: string) => {
+    const cents = Math.round(parseFloat(value) * 100);
+    if (!isNaN(cents) && cents >= 100) {
+      onAdd({
+        kind: 'POLL_VOTE',
+        target_id: option.id,
+        poll_id: poll.id,
+        amount_cents: cents,
+        label: option.label,
+      });
+    }
+  };
+
   const handleAmountChange = (poll: Poll, option: PollOption, value: string) => {
     const key = `${poll.id}-${option.id}`;
     const sanitized = sanitizeMoneyInput(value);
     setAmounts((a) => ({ ...a, [key]: sanitized }));
-    // If this option is already in the cart, keep the cart amount in sync
-    // as the donor types, instead of requiring another "add" click.
-    if (inCart(poll.id, option.id)) {
-      const cents = Math.round(parseFloat(sanitized) * 100);
-      if (!isNaN(cents) && cents >= 100) {
-        onAdd({
-          kind: 'POLL_VOTE',
-          target_id: option.id,
-          poll_id: poll.id,
-          amount_cents: cents,
-          label: option.label,
-        });
-      }
+
+    // If this option is already in the cart, keep the cart amount in sync,
+    // but debounced so it only fires once typing pauses rather than on
+    // every keystroke.
+    if (!inCart(poll.id, option.id)) return;
+
+    if (cartSyncTimers.current[key]) {
+      clearTimeout(cartSyncTimers.current[key]);
     }
+    cartSyncTimers.current[key] = setTimeout(() => {
+      delete cartSyncTimers.current[key];
+      syncCartAmount(poll, option, sanitized);
+    }, CART_SYNC_DEBOUNCE_MS);
   };
 
   const handleAmountBlur = (poll: Poll, option: PollOption) => {
     const key = `${poll.id}-${option.id}`;
+
+    // Leaving the field commits immediately rather than waiting out the
+    // debounce, so the cart never shows a stale amount after the donor
+    // has moved on.
+    if (cartSyncTimers.current[key]) {
+      clearTimeout(cartSyncTimers.current[key]);
+      delete cartSyncTimers.current[key];
+      if (inCart(poll.id, option.id)) {
+        syncCartAmount(poll, option, amounts[key] ?? '1.00');
+      }
+    }
+
     if (!amounts[key] || !amounts[key].trim()) {
       setAmounts((a) => ({ ...a, [key]: '1.00' }));
     }
