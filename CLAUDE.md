@@ -105,18 +105,24 @@ npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React
 - `server/services/email.ts` — Nodemailer magic link sender; called fire-and-forget from the webhook handler.
 - `server/middleware/adminAuth.ts` — Checks `X-Admin-Key` header against `ADMIN_API_KEY` env var.
 - `server/middleware/donorAuth.ts` — Resolves `?token=` query param to a `Donor` record; sets `req.donor`.
-- `server/middleware/moderatorAuth.ts` — Chains `donorAuth` then checks `req.donor.is_moderator`. Moderator access via magic link, no separate API key.
+- `server/lib/roles.ts` — Role constants (`USER`/`MODERATOR`/`ADMIN`), `hasModeratorAccess()`/`hasAdminAccess()`, and `resolveEffectiveRole()` which re-checks the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists on every authenticated request (never downgrading below the donor's persisted `role`).
+- `server/middleware/moderatorAuth.ts` — Grants moderator access via an `X-Admin-Key`/`X-Moderator-Key` header match, or a donor (via `donorAuth`) whose effective `role` is `MODERATOR`/`ADMIN`.
 - `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, and custom entry approval.
 
 ### Moderator Setup
 
-Set `MODERATOR_EMAILS` env var to a comma-separated list of emails. When a donation webhook fires for a matching email, the donor gets `is_moderator: true`. Moderators access their dashboard via their magic link — the Navbar shows a "Moderate" link when `is_moderator` is true. Moderators can CRUD polls/rewards/goals, view/fulfill claims, and approve custom poll entries. They cannot access `/api/admin/*` routes (require `X-Admin-Key`).
+Donors have a `role` field (`USER` | `MODERATOR` | `ADMIN`, `ADMIN` implies moderator access). Roles are **never** granted as a side effect of donating — that would let anyone "buy" access with a self-supplied, unverified checkout email. Instead:
+
+- Set `ADMIN_EMAILS`/`MODERATOR_EMAILS` env vars (comma-separated) to allowlist emails. `resolveEffectiveRole()` re-checks these allowlists on every authenticated request (in `donorAuth`), granting the role without ever persisting it as a result of a donation. Donors not on an allowlist keep their persisted `role` (default `USER`), which an `ADMIN_API_KEY` holder can change explicitly via `PATCH /api/admin/donors/:id/role`.
+- `MODERATOR_API_KEY`/`ADMIN_API_KEY` also grant moderator access directly via `X-Moderator-Key`/`X-Admin-Key` headers — an operational fallback independent of the donor/role system, useful for bootstrapping or scripting.
+- Moderators/admins access their dashboard at `/moderate` via their magic link (Navbar shows a "Moderate" link when `hasModeratorAccess(donor.role)`), or by entering a moderator key directly in the `/moderate` login gate. They can CRUD polls/rewards/goals, view/fulfill claims, and approve custom poll entries. They cannot access `/api/admin/*` routes (require `X-Admin-Key`).
+- **Known limitation**: the donor email used for allowlist matching originates from Stripe checkout `customer_details` and is not independently verified. Discord OAuth (planned) is intended to eventually replace email-based role resolution with verified Discord role membership.
 
 ### Webhook flow (`server/routes/webhook.ts`)
 
 1. Signature verify via `stripe.webhooks.constructEvent(rawBody, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET)`. Skipped if `STRIPE_WEBHOOK_SECRET` is unset (useful for local testing). Mounted at `/api/webhooks/stripe` with `express.raw` before `express.json()` so the raw body buffer is available.
 2. Only `checkout.session.completed` is processed. Extracts `externalId` (session id), `pledge_token` (from `metadata.pledge_token` or `client_reference_id`), email (from `customer_details`), and `amount_total` (integer cents).
-3. Delegates to `processDonation()` in `server/services/donation.ts` — upserts donor (credits balance, extends token TTL without rotating, sets `is_moderator` only when matching), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink. Donation comment is sourced from the fulfilled pledge (donor captured it in the cart).
+3. Delegates to `processDonation()` in `server/services/donation.ts` — upserts donor (credits balance, extends token TTL without rotating; never grants or changes `role`), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink. Donation comment is sourced from the fulfilled pledge (donor captured it in the cart).
 
 ### Pledge / Cart Flow
 
@@ -147,18 +153,20 @@ SQLite via Prisma. All monetary values are **integer cents**. `RewardClaim.claim
 
 ## Environment Variables
 
-| Variable                | Purpose                                                        |
-| ----------------------- | -------------------------------------------------------------- |
-| `STRIPE_SECRET_KEY`     | Stripe secret API key; unset to run without Stripe (graceful)  |
-| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret; omit to skip signature checking |
-| `STRIPE_CURRENCY`       | Checkout currency, default `usd`                               |
-| `CAMPAIGN_GOAL_CENTS`   | Campaign goal in integer cents for home-page totals            |
-| `ADMIN_API_KEY`         | Sent as `X-Admin-Key` from admin UI                            |
-| `MODERATOR_EMAILS`      | Comma-separated emails auto-promoted to moderator on donation  |
-| `SMTP_*` / `EMAIL_FROM` | Nodemailer config                                              |
-| `APP_BASE_URL`          | Base URL for magic links and Stripe success/cancel URLs        |
-| `PORT`                  | Server port, default `3001`                                    |
-| `DATABASE_URL`          | Prisma DB URL, e.g. `file:./dev.db`                            |
+| Variable                | Purpose                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`     | Stripe secret API key; unset to run without Stripe (graceful)                   |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret; omit to skip signature checking                  |
+| `STRIPE_CURRENCY`       | Checkout currency, default `usd`                                                |
+| `CAMPAIGN_GOAL_CENTS`   | Campaign goal in integer cents for home-page totals                             |
+| `ADMIN_API_KEY`         | Sent as `X-Admin-Key` from admin UI; also a moderator-route fallback            |
+| `MODERATOR_API_KEY`     | Sent as `X-Moderator-Key`; operational fallback for moderator routes            |
+| `ADMIN_EMAILS`          | Comma-separated emails granted ADMIN role at request time (not on donation)     |
+| `MODERATOR_EMAILS`      | Comma-separated emails granted MODERATOR role at request time (not on donation) |
+| `SMTP_*` / `EMAIL_FROM` | Nodemailer config                                                               |
+| `APP_BASE_URL`          | Base URL for magic links and Stripe success/cancel URLs                         |
+| `PORT`                  | Server port, default `3001`                                                     |
+| `DATABASE_URL`          | Prisma DB URL, e.g. `file:./dev.db`                                             |
 
 ## Local Webhook Testing
 

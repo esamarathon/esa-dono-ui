@@ -10,8 +10,9 @@ info:
     | Method | Mechanism | Used By |
     |--------|-----------|---------|
     | Donor token | `?token=<magic_token>` query param on every request | Donor wallet, spend endpoints, moderator |
-    | Admin key | `X-Admin-Key: <ADMIN_API_KEY>` header | Admin routes |
-    | Moderator | Donor token + `is_moderator: true` on donor record | Moderator routes |
+    | Admin key | `X-Admin-Key: <ADMIN_API_KEY>` header | Admin routes; also a fallback for moderator routes |
+    | Moderator key | `X-Moderator-Key: <MODERATOR_API_KEY>` header | Fallback access to moderator routes, independent of donor roles |
+    | Moderator/Admin role | Donor token + `role: MODERATOR` or `role: ADMIN` on donor record | Moderator routes (ADMIN implies MODERATOR access) |
     | Stripe webhook | HMAC signature via `stripe-signature` header | Stripe webhook (skipped when `STRIPE_WEBHOOK_SECRET` unset) |
 
     ## Rate Limiting
@@ -613,6 +614,39 @@ paths:
           description: Full donor with nested donations, claims, votes, contributions, adjustments
         '404':
           description: Donor not found
+
+  /admin/donors/{id}/role:
+    patch:
+      tags: [Admin]
+      summary: Set a donor's role (USER, MODERATOR, or ADMIN)
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { const: true }
+                  email: { type: string }
+                  role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+        '400':
+          description: Invalid role
 
   /admin/donors/{id}/revoke-token:
     post:

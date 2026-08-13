@@ -5,6 +5,7 @@ import { extractToken, setDonorToken, clearDonorToken } from '../utils/authToken
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
 import type { DonorWallet } from '../types';
+import { hasModeratorAccess } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -141,7 +142,7 @@ export default function MyWallet() {
           <div>
             <p className="font-data text-sm text-off-white/55">logged in as</p>
             <p className="font-body font-medium break-all text-off-white">{donor.email}</p>
-            {donor.is_moderator && (
+            {hasModeratorAccess(donor.role) && (
               <p className="font-data text-xs text-d-yellow mt-1">moderator access enabled</p>
             )}
           </div>

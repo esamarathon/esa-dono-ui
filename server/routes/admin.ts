@@ -177,7 +177,7 @@ router.get('/donors/:id', async (req, res) => {
       email: true,
       total_donated: true,
       balance_remaining: true,
-      is_moderator: true,
+      role: true,
       is_frozen: true,
       created_at: true,
       updated_at: true,
@@ -190,6 +190,18 @@ router.get('/donors/:id', async (req, res) => {
   });
   if (!donor) return res.status(404).json({ error: 'Donor not found' });
   res.json(donor);
+});
+
+router.patch('/donors/:id/role', async (req, res) => {
+  const { role } = req.body;
+  if (!['USER', 'MODERATOR', 'ADMIN'].includes(role)) {
+    return res.status(400).json({ error: 'role must be USER, MODERATOR, or ADMIN' });
+  }
+  const donor = await prisma.donor.update({
+    where: { id: req.params.id },
+    data: { role },
+  });
+  res.json({ success: true, email: donor.email, role: donor.role });
 });
 
 router.post('/donors/:id/revoke-token', async (req, res) => {

@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import { getDonor } from '../api/donor';
 import { clearDonorToken } from '../utils/authToken';
 import type { DonorWallet } from '../types';
+import { hasModeratorAccess } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -108,7 +109,7 @@ export default function Navbar() {
             </span>
           </div>
         )}
-        {donor?.is_moderator && (
+        {hasModeratorAccess(donor?.role) && (
           <NavLink
             to="/moderate"
             className="font-data font-bold text-sm tracking-wider lowercase text-d-yellow hover:text-off-white"

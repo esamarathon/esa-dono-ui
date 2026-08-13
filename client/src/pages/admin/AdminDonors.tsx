@@ -7,6 +7,7 @@ import {
   toggleDonorFreeze,
   adjustDonorBalance,
   reverseDonorSpend,
+  setDonorRole,
 } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
@@ -95,6 +96,11 @@ export default function AdminDonors() {
   const handleReverse = async (spend_type: string, spend_id: string) => {
     if (!window.confirm(`Reverse this ${spend_type}? This restores the balance.`)) return;
     await reverseDonorSpend(selected!.id, spend_type, spend_id);
+    openWallet({ id: selected!.id });
+  };
+
+  const handleRoleChange = async (role: 'USER' | 'MODERATOR' | 'ADMIN') => {
+    await setDonorRole(selected!.id, role);
     openWallet({ id: selected!.id });
   };
 
@@ -196,10 +202,18 @@ export default function AdminDonors() {
                       </p>
                     </Card>
                     <Card className="text-center">
-                      <p className="font-data text-xs text-off-white/55">moderator</p>
-                      <p className="font-display text-2xl text-d-yellow">
-                        {wallet.is_moderator ? 'yes' : 'no'}
-                      </p>
+                      <p className="font-data text-xs text-off-white/55">role</p>
+                      <select
+                        className="mt-1 px-2 py-1 text-sm w-full text-center"
+                        value={wallet.role ?? 'USER'}
+                        onChange={(e) =>
+                          handleRoleChange(e.target.value as 'USER' | 'MODERATOR' | 'ADMIN')
+                        }
+                      >
+                        <option value="USER">user</option>
+                        <option value="MODERATOR">moderator</option>
+                        <option value="ADMIN">admin</option>
+                      </select>
                     </Card>
                   </div>
 

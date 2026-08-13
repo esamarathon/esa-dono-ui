@@ -85,7 +85,7 @@ describe('Admin donor management', () => {
       email: 'a@b.com',
       total_donated: 1000,
       balance_remaining: 500,
-      is_moderator: false,
+      role: 'USER',
       is_frozen: false,
       donations: [],
       reward_claims: [],
@@ -122,6 +122,32 @@ describe('Admin donor management', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.is_frozen).toBe(true);
+  });
+
+  it('PATCH /donors/:id/role sets a valid role', async () => {
+    px.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', role: 'MODERATOR' });
+
+    const res = await request(createApp())
+      .patch('/api/admin/donors/d1/role')
+      .send({ role: 'MODERATOR' })
+      .set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe('MODERATOR');
+    expect(prisma.donor.update).toHaveBeenCalledWith({
+      where: { id: 'd1' },
+      data: { role: 'MODERATOR' },
+    });
+  });
+
+  it('PATCH /donors/:id/role rejects an invalid role', async () => {
+    const res = await request(createApp())
+      .patch('/api/admin/donors/d1/role')
+      .send({ role: 'SUPERUSER' })
+      .set(auth);
+
+    expect(res.status).toBe(400);
+    expect(px.donor.update).not.toHaveBeenCalled();
   });
 
   it('POST /donors/:id/adjust-balance adjusts balance', async () => {

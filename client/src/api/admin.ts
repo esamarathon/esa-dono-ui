@@ -33,6 +33,11 @@ export async function toggleDonorFreeze(id: string, frozen: boolean) {
   return data;
 }
 
+export async function setDonorRole(id: string, role: 'USER' | 'MODERATOR' | 'ADMIN') {
+  const { data } = await adminClient.patch(`/donors/${id}/role`, { role });
+  return data;
+}
+
 export async function adjustDonorBalance(
   id: string,
   amount_cents: number,

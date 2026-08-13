@@ -152,18 +152,19 @@ describe('processDonation', () => {
     expect(sendMagicLink).toHaveBeenCalledWith('bob@example.com', expect.any(String));
   });
 
-  it('only sets is_moderator: true, never false', async () => {
+  it('never grants or modifies role — donating cannot buy moderator/admin access', async () => {
     const donor = {
       id: 'donor-1',
       email: 'existing@example.com',
       magic_token: 'tok',
-      is_moderator: true,
+      role: 'USER',
     };
     mockTxDonor.upsert.mockResolvedValue(donor);
     mockTxDonation.create.mockResolvedValue({});
     vi.mocked(prisma.$transaction).mockImplementation((cb: any) => cb(mockTx));
 
-    process.env.MODERATOR_EMAILS = '';
+    process.env.MODERATOR_EMAILS = 'existing@example.com';
+    process.env.ADMIN_EMAILS = 'existing@example.com';
 
     const { processDonation } = await import('../../services/donation.js');
     await processDonation({
@@ -175,7 +176,8 @@ describe('processDonation', () => {
 
     expect(mockTxDonor.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.not.objectContaining({ is_moderator: expect.anything() }),
+        update: expect.not.objectContaining({ role: expect.anything() }),
+        create: expect.not.objectContaining({ role: expect.anything() }),
       }),
     );
   });

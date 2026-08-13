@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import prisma from '../lib/prisma.js';
+import { resolveEffectiveRole } from '../lib/roles.js';
 
 export async function donorAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.query.token;
@@ -14,6 +15,9 @@ export async function donorAuth(req: Request, res: Response, next: NextFunction)
   if (donor.is_frozen) {
     return res.status(403).json({ error: 'Account frozen' });
   }
-  req.donor = donor;
+  // Effective role is resolved per-request from ADMIN_EMAILS/MODERATOR_EMAILS
+  // allowlists (never downgrading below the persisted role). Roles are never
+  // granted as a side effect of donating — see resolveEffectiveRole() docs.
+  req.donor = { ...donor, role: resolveEffectiveRole(donor.email, donor.role) };
   next();
 }

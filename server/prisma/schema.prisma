@@ -14,7 +14,7 @@ model Donor {
   balance_remaining Int             @default(0)
   magic_token       String?         @unique
   token_expires_at  DateTime?
-  is_moderator      Boolean         @default(false)
+  role              String          @default("USER") // USER | MODERATOR | ADMIN
   is_frozen         Boolean         @default(false)
   created_at        DateTime        @default(now())
   updated_at        DateTime        @updatedAt

@@ -87,6 +87,7 @@ describe('donorAuth middleware', () => {
       email: 'test@example.com',
       token_expires_at: futureDate,
       is_frozen: false,
+      role: 'USER',
     };
     vi.mocked(prisma.donor.findUnique).mockResolvedValue(donor as any);
     const req = { query: { token: 'valid-token' } };
@@ -98,5 +99,26 @@ describe('donorAuth middleware', () => {
     expect(next).toHaveBeenCalled();
     expect((req as any).donor).toEqual(donor);
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('resolves effective role from ADMIN_EMAILS without persisting or requiring a donation', async () => {
+    const futureDate = new Date(Date.now() + 100000);
+    const donor = {
+      id: 'donor-1',
+      email: 'hardcoded-admin@example.com',
+      token_expires_at: futureDate,
+      is_frozen: false,
+      role: 'USER',
+    };
+    vi.mocked(prisma.donor.findUnique).mockResolvedValue(donor as any);
+    process.env.ADMIN_EMAILS = 'hardcoded-admin@example.com';
+    const req = { query: { token: 'valid-token' } };
+    const res = createRes();
+    const next = vi.fn();
+
+    await donorAuth(req as any, res as any, next);
+
+    expect((req as any).donor.role).toBe('ADMIN');
+    delete process.env.ADMIN_EMAILS;
   });
 });

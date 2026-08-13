@@ -48,23 +48,21 @@ export async function processDonation({
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
 
-  const moderatorEmails = (process.env.MODERATOR_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase());
-  const isModerator = moderatorEmails.includes(normalizedEmail);
-
   try {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
+      // Donating never grants or changes role. Moderator/admin access is
+      // resolved per-request from ADMIN_EMAILS/MODERATOR_EMAILS allowlists
+      // (see server/lib/roles.ts) or assigned explicitly via the admin API —
+      // never as a side effect of payment.
       const donor = await tx.donor.upsert({
         where: { email: normalizedEmail },
         update: {
           total_donated: { increment: amountCents },
           balance_remaining: { increment: amountCents },
           token_expires_at: tokenExpiresAt,
-          ...(isModerator ? { is_moderator: true } : {}),
         },
         create: {
           email: normalizedEmail,
@@ -72,7 +70,6 @@ export async function processDonation({
           balance_remaining: amountCents,
           magic_token: token,
           token_expires_at: tokenExpiresAt,
-          is_moderator: isModerator,
         },
       });
 

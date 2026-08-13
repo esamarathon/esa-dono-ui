@@ -20,7 +20,7 @@ async function makeModerator() {
   const donor = await prisma.donor.create({
     data: {
       email: `mod-${Date.now()}-${Math.random()}@example.com`,
-      is_moderator: true,
+      role: 'MODERATOR',
       magic_token: token,
       token_expires_at: new Date(Date.now() + 60_000),
     },
@@ -172,4 +172,71 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
   }, 10000);
+});
+
+describe('Moderator access control', () => {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  it('rejects a plain USER donor', async () => {
+    const token = crypto.randomBytes(16).toString('hex');
+    const donor = await prisma.donor.create({
+      data: {
+        email: `user-${Date.now()}-${Math.random()}@example.com`,
+        magic_token: token,
+        token_expires_at: new Date(Date.now() + 60_000),
+      },
+    });
+
+    const res = await request(createApp()).get('/api/moderator/stats').query({ token });
+    expect(res.status).toBe(403);
+
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('allows an ADMIN-role donor (admin implies moderator access)', async () => {
+    const token = crypto.randomBytes(16).toString('hex');
+    const donor = await prisma.donor.create({
+      data: {
+        email: `admin-donor-${Date.now()}-${Math.random()}@example.com`,
+        role: 'ADMIN',
+        magic_token: token,
+        token_expires_at: new Date(Date.now() + 60_000),
+      },
+    });
+
+    const res = await request(createApp()).get('/api/moderator/stats').query({ token });
+    expect(res.status).toBe(200);
+
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('allows access via X-Moderator-Key without a donor token', async () => {
+    process.env.MODERATOR_API_KEY = 'test-moderator-key';
+    const res = await request(createApp())
+      .get('/api/moderator/stats')
+      .set('X-Moderator-Key', 'test-moderator-key');
+    expect(res.status).toBe(200);
+    delete process.env.MODERATOR_API_KEY;
+  });
+
+  it('allows access via X-Admin-Key without a donor token', async () => {
+    const original = process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = 'test-admin-key-2';
+    const res = await request(createApp())
+      .get('/api/moderator/stats')
+      .set('X-Admin-Key', 'test-admin-key-2');
+    expect(res.status).toBe(200);
+    process.env.ADMIN_API_KEY = original;
+  });
+
+  it('rejects a wrong X-Moderator-Key', async () => {
+    process.env.MODERATOR_API_KEY = 'test-moderator-key';
+    const res = await request(createApp())
+      .get('/api/moderator/stats')
+      .set('X-Moderator-Key', 'wrong-key');
+    expect(res.status).toBe(401);
+    delete process.env.MODERATOR_API_KEY;
+  });
 });

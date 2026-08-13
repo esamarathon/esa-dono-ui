@@ -39,27 +39,29 @@ npm run test:ci             # CI mode (junit reporter)
 
 ## Environment Variables
 
-| Variable                   | Required   | Default                                    | Description                                                                 |
-| -------------------------- | ---------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| `TILTIFY_CLIENT_ID`        | Yes        | —                                          | Tiltify OAuth2 client ID                                                    |
-| `TILTIFY_CLIENT_SECRET`    | Yes        | —                                          | Tiltify OAuth2 client secret                                                |
-| `TILTIFY_CAMPAIGN_ID`      | Yes        | —                                          | Tiltify campaign ID to proxy                                                |
-| `TILTIFY_DONATE_URL`       | No         | —                                          | Static Tiltify donate page URL (fallback when relay not configured)         |
-| `TILTIFY_DONATE_ID`        | No         | —                                          | Campaign identifier in the donate URL (UUID or `@username/slug`)            |
-| `TILTIFY_WEBHOOK_RELAY_ID` | No         | —                                          | Webhook Relay ID from Tiltify Developer Dashboard                           |
-| `TILTIFY_WEBHOOK_SECRET`   | No         | —                                          | HMAC secret for webhook verification (omit to skip verification during dev) |
-| `ADMIN_API_KEY`            | Yes (prod) | —                                          | Admin API key passed as `X-Admin-Key` header                                |
-| `MODERATOR_EMAILS`         | No         | —                                          | Comma-separated emails auto-promoted to moderator on donation               |
-| `SMTP_HOST`                | No         | —                                          | SMTP server hostname (omit to log magic links to stdout instead)            |
-| `SMTP_PORT`                | No         | `587`                                      | SMTP server port                                                            |
-| `SMTP_SECURE`              | No         | `false`                                    | Use TLS (set `true` for port 465)                                           |
-| `SMTP_USER`                | No         | —                                          | SMTP authentication username                                                |
-| `SMTP_PASS`                | No         | —                                          | SMTP authentication password                                                |
-| `EMAIL_FROM`               | No         | `Donation Platform <no-reply@example.com>` | From address for magic link emails                                          |
-| `APP_BASE_URL`             | No         | `http://localhost:5173`                    | Base URL for magic links in emails                                          |
-| `PORT`                     | No         | `3001`                                     | Server listen port                                                          |
-| `DATABASE_URL`             | No         | `file:./dev.db`                            | Prisma database URL (SQLite)                                                |
-| `RATE_LIMIT_SPEND`         | No         | `20`                                       | Max spend requests per minute per donor                                     |
+| Variable                   | Required   | Default                                    | Description                                                                                           |
+| -------------------------- | ---------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `TILTIFY_CLIENT_ID`        | Yes        | —                                          | Tiltify OAuth2 client ID                                                                              |
+| `TILTIFY_CLIENT_SECRET`    | Yes        | —                                          | Tiltify OAuth2 client secret                                                                          |
+| `TILTIFY_CAMPAIGN_ID`      | Yes        | —                                          | Tiltify campaign ID to proxy                                                                          |
+| `TILTIFY_DONATE_URL`       | No         | —                                          | Static Tiltify donate page URL (fallback when relay not configured)                                   |
+| `TILTIFY_DONATE_ID`        | No         | —                                          | Campaign identifier in the donate URL (UUID or `@username/slug`)                                      |
+| `TILTIFY_WEBHOOK_RELAY_ID` | No         | —                                          | Webhook Relay ID from Tiltify Developer Dashboard                                                     |
+| `TILTIFY_WEBHOOK_SECRET`   | No         | —                                          | HMAC secret for webhook verification (omit to skip verification during dev)                           |
+| `ADMIN_API_KEY`            | Yes (prod) | —                                          | Admin API key passed as `X-Admin-Key` header                                                          |
+| `MODERATOR_API_KEY`        | No         | —                                          | Operational fallback key passed as `X-Moderator-Key` for moderator routes, independent of donor roles |
+| `ADMIN_EMAILS`             | No         | —                                          | Comma-separated emails granted the ADMIN role at request time (not on donation)                       |
+| `MODERATOR_EMAILS`         | No         | —                                          | Comma-separated emails granted the MODERATOR role at request time (not on donation)                   |
+| `SMTP_HOST`                | No         | —                                          | SMTP server hostname (omit to log magic links to stdout instead)                                      |
+| `SMTP_PORT`                | No         | `587`                                      | SMTP server port                                                                                      |
+| `SMTP_SECURE`              | No         | `false`                                    | Use TLS (set `true` for port 465)                                                                     |
+| `SMTP_USER`                | No         | —                                          | SMTP authentication username                                                                          |
+| `SMTP_PASS`                | No         | —                                          | SMTP authentication password                                                                          |
+| `EMAIL_FROM`               | No         | `Donation Platform <no-reply@example.com>` | From address for magic link emails                                                                    |
+| `APP_BASE_URL`             | No         | `http://localhost:5173`                    | Base URL for magic links in emails                                                                    |
+| `PORT`                     | No         | `3001`                                     | Server listen port                                                                                    |
+| `DATABASE_URL`             | No         | `file:./dev.db`                            | Prisma database URL (SQLite)                                                                          |
+| `RATE_LIMIT_SPEND`         | No         | `20`                                       | Max spend requests per minute per donor                                                               |
 
 ## Tiltify Webhook Registration
 
@@ -118,6 +120,8 @@ TILTIFY_DONATE_ID=your-donate-id
 TILTIFY_WEBHOOK_RELAY_ID=your_relay_id
 TILTIFY_WEBHOOK_SECRET=your_webhook_secret
 ADMIN_API_KEY=your-secure-admin-key
+MODERATOR_API_KEY=your-secure-moderator-key
+ADMIN_EMAILS=owner@example.com
 MODERATOR_EMAILS=mod1@example.com,mod2@example.com
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
@@ -276,7 +280,7 @@ packages/shared/  Cross-cutting types (@dono/shared)
 - **Tiltify integration**: OAuth2 client-credentials token with in-memory cache. Campaigns proxied from Tiltify v5 API.
 - **Webhook flow**: HMAC-SHA256 verification → `processDonation()` (upserts donor, credits balance, sends magic link, auto-fulfills pledges).
 - **Pledge/Cart system**: Donors select incentives before donating. Pledge resolves by relay key or email fallback.
-- **Moderator access**: Moderators use their donor magic link. `is_moderator` flag set by `MODERATOR_EMAILS` match during webhook processing.
+- **Moderator/admin access**: Donors have a `role` (`USER`/`MODERATOR`/`ADMIN`) resolved on every authenticated request from the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (never granted as a side effect of donating — see `server/lib/roles.ts`). `MODERATOR_API_KEY`/`ADMIN_API_KEY` provide operational fallback access to moderator routes independent of donor roles.
 
 ## Troubleshooting
 

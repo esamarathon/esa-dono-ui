@@ -12,12 +12,19 @@ export function apiErrorMessage(e: unknown, fallback: string): string {
   return fallback;
 }
 
+export type Role = 'USER' | 'MODERATOR' | 'ADMIN';
+
+/** True for MODERATOR and ADMIN (admin implies moderator access). */
+export function hasModeratorAccess(role: Role | string | null | undefined): boolean {
+  return role === 'MODERATOR' || role === 'ADMIN';
+}
+
 export interface Donor {
   id: string;
   email: string;
   balance_remaining: number;
   total_donated: number;
-  is_moderator?: boolean;
+  role?: Role;
   is_frozen?: boolean;
 }
 
@@ -238,7 +245,7 @@ export interface AdminDonorWallet {
   email?: string;
   total_donated: number;
   balance_remaining: number;
-  is_moderator?: boolean;
+  role?: Role;
   is_frozen?: boolean;
   reward_claims?: SpendRecord[];
   poll_votes?: SpendRecord[];

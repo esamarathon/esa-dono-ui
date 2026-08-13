@@ -16,6 +16,8 @@ services:
       - CAMPAIGN_GOAL_CENTS=${CAMPAIGN_GOAL_CENTS:-500000}
       # Auth
       - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      - MODERATOR_API_KEY=${MODERATOR_API_KEY:-}
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       - MODERATOR_EMAILS=${MODERATOR_EMAILS:-}
       # Email (magic links). Omit SMTP_HOST to log links to stdout instead.
       - SMTP_HOST=${SMTP_HOST:-}
