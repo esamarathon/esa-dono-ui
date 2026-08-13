@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { AxiosInstance } from 'axios';
 
 vi.mock('axios', () => {
   const interceptors = { request: { use: vi.fn() } };
@@ -15,12 +16,10 @@ interface RequestConfig {
   headers: Record<string, unknown>;
 }
 
-function getInterceptor(instance: {
-  interceptors: { request: { use: ReturnType<typeof vi.fn> } };
-}) {
-  return instance.interceptors.request.use.mock.calls[0][0] as (
-    config: RequestConfig,
-  ) => RequestConfig;
+function getInterceptor(instance: AxiosInstance) {
+  const use = vi.mocked(instance.interceptors.request.use);
+  const [onFulfilled] = use.mock.calls[0]!;
+  return onFulfilled as unknown as (config: RequestConfig) => RequestConfig;
 }
 
 describe('Moderator API client', () => {
