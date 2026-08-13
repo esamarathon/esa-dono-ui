@@ -27,7 +27,10 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
       },
     },
   });
-  res.json(donor);
+  if (!donor) return res.status(404).json({ error: 'Donor not found' });
+  // Use the effective role resolved by donorAuth (ADMIN_EMAILS/MODERATOR_EMAILS
+  // allowlists), not the raw persisted role from this fresh DB fetch.
+  res.json({ ...donor, role: req.donor!.role });
 });
 
 export default router;
