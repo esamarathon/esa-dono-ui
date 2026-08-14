@@ -1,15 +1,24 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
 import { getDonor } from '../../api/donor';
 import { hasModeratorAccess } from '../../types';
+import SidebarLayout, { type SidebarNavItem } from '../../components/SidebarLayout';
+import {
+  DashboardIcon,
+  PollIcon,
+  GiftIcon,
+  GoalIcon,
+  CheckBadgeIcon,
+  ReceiptIcon,
+  LogoutIcon,
+} from '../../components/icons';
 
-const NAV = [
-  { to: '/moderate', label: 'dashboard', end: true },
-  { to: '/moderate/polls', label: 'polls' },
-  { to: '/moderate/rewards', label: 'rewards' },
-  { to: '/moderate/goals', label: 'goals' },
-  { to: '/moderate/claims', label: 'claims' },
-  { to: '/moderate/donations', label: 'donations' },
+const NAV: SidebarNavItem[] = [
+  { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
+  { to: '/moderate/polls', label: 'polls', icon: PollIcon },
+  { to: '/moderate/rewards', label: 'rewards', icon: GiftIcon },
+  { to: '/moderate/goals', label: 'goals', icon: GoalIcon },
+  { to: '/moderate/claims', label: 'claims', icon: CheckBadgeIcon },
+  { to: '/moderate/donations', label: 'donations', icon: ReceiptIcon },
 ];
 
 type AccessState = 'checking' | 'granted' | 'denied';
@@ -86,39 +95,22 @@ export default function ModeratorLayout() {
   }
 
   return (
-    <div className="min-h-screen flex">
-      <aside
-        className="w-52 flex flex-col p-4"
-        style={{ background: 'var(--dark-gray)', borderRight: '1px solid rgba(239,238,236,.08)' }}
-      >
-        <div className="font-display text-2xl mb-6 lowercase text-d-yellow">moderator</div>
-        <nav className="flex-1 space-y-1">
-          {NAV.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                `block px-3 py-2 rounded-sm font-data font-bold text-sm tracking-wider lowercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
-              }
-              style={({ isActive }) => (isActive ? { background: 'var(--grad)' } : {})}
-            >
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        {key && (
+    <SidebarLayout
+      title="moderator"
+      nav={NAV}
+      storageKey="moderator_sidebar_collapsed"
+      footer={(collapsed) =>
+        key ? (
           <button
             onClick={logout}
-            className="font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-4 text-left"
+            title="logout (moderator key)"
+            className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-2 ${collapsed ? 'justify-center' : 'text-left'}`}
           >
-            logout (moderator key)
+            <LogoutIcon className="w-4 h-4 shrink-0" />
+            {!collapsed && <span>logout (moderator key)</span>}
           </button>
-        )}
-      </aside>
-      <main className="flex-1 p-8 overflow-auto">
-        <Outlet />
-      </main>
-    </div>
+        ) : null
+      }
+    />
   );
 }

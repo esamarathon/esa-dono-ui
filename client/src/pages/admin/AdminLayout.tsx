@@ -1,16 +1,28 @@
 import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import SidebarLayout, { type SidebarNavItem } from '../../components/SidebarLayout';
+import {
+  DashboardIcon,
+  UsersIcon,
+  GiftIcon,
+  PollIcon,
+  GoalIcon,
+  ReceiptIcon,
+  ClipboardIcon,
+  BanIcon,
+  PlayIcon,
+  LogoutIcon,
+} from '../../components/icons';
 
-const NAV = [
-  { to: '/admin', label: 'dashboard', end: true },
-  { to: '/admin/donors', label: 'donors' },
-  { to: '/admin/rewards', label: 'rewards' },
-  { to: '/admin/polls', label: 'polls' },
-  { to: '/admin/goals', label: 'goals' },
-  { to: '/admin/donations', label: 'donations & claims' },
-  { to: '/admin/pledges', label: 'pledges' },
-  { to: '/admin/blocked-words', label: 'blocked words' },
-  { to: '/admin/simulate', label: 'simulate' },
+const NAV: SidebarNavItem[] = [
+  { to: '/admin', label: 'dashboard', end: true, icon: DashboardIcon },
+  { to: '/admin/donors', label: 'donors', icon: UsersIcon },
+  { to: '/admin/rewards', label: 'rewards', icon: GiftIcon },
+  { to: '/admin/polls', label: 'polls', icon: PollIcon },
+  { to: '/admin/goals', label: 'goals', icon: GoalIcon },
+  { to: '/admin/donations', label: 'donations & claims', icon: ReceiptIcon },
+  { to: '/admin/pledges', label: 'pledges', icon: ClipboardIcon },
+  { to: '/admin/blocked-words', label: 'blocked words', icon: BanIcon },
+  { to: '/admin/simulate', label: 'simulate', icon: PlayIcon },
 ];
 
 export default function AdminLayout() {
@@ -62,37 +74,20 @@ export default function AdminLayout() {
   }
 
   return (
-    <div className="min-h-screen flex">
-      <aside
-        className="w-52 flex flex-col p-4"
-        style={{ background: 'var(--dark-gray)', borderRight: '1px solid rgba(239,238,236,.08)' }}
-      >
-        <div className="font-display text-2xl mb-6 lowercase text-d-yellow">admin</div>
-        <nav className="flex-1 space-y-1">
-          {NAV.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                `block px-3 py-2 rounded-sm font-data font-bold text-sm tracking-wider lowercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
-              }
-              style={({ isActive }) => (isActive ? { background: 'var(--grad)' } : {})}
-            >
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
+    <SidebarLayout
+      title="admin"
+      nav={NAV}
+      storageKey="admin_sidebar_collapsed"
+      footer={(collapsed) => (
         <button
           onClick={logout}
-          className="font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-4 text-left"
+          title="logout"
+          className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-4 ${collapsed ? 'justify-center' : 'text-left'}`}
         >
-          logout
+          <LogoutIcon className="w-4 h-4 shrink-0" />
+          {!collapsed && <span>logout</span>}
         </button>
-      </aside>
-      <main className="flex-1 p-8 overflow-auto">
-        <Outlet />
-      </main>
-    </div>
+      )}
+    />
   );
 }
