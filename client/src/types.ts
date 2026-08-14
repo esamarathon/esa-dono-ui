@@ -205,6 +205,9 @@ export interface AdminDonation {
   comment?: string | null;
   created_at: string;
   donor?: { email?: string } | null;
+  moderated?: boolean;
+  moderated_at?: string | null;
+  moderated_by?: string | null;
 }
 
 export interface AdminClaim {

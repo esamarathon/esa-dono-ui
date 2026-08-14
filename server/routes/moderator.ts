@@ -273,6 +273,34 @@ router.patch('/claims/:id', async (req, res) => {
   res.json(claim);
 });
 
+// Donations — read-only list + moderation flag. Downstream tools (exports,
+// leaderboards, Discord role sync, etc.) key off `moderated` to know which
+// donations a human has reviewed, so moderators need full read access here
+// regardless of who the donor is.
+router.get('/donations', async (req, res) => {
+  const donations = await prisma.donation.findMany({
+    include: { donor: { select: { email: true } } },
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(donations);
+});
+
+router.patch('/donations/:id', async (req, res) => {
+  const { moderated } = req.body;
+  if (typeof moderated !== 'boolean') {
+    return res.status(400).json({ error: 'moderated must be a boolean' });
+  }
+  const moderatorEmail = req.donor?.email || 'moderator';
+  const donation = await prisma.donation.update({
+    where: { id: req.params.id },
+    data: moderated
+      ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
+      : { moderated: false, moderated_at: null, moderated_by: null },
+    include: { donor: { select: { email: true } } },
+  });
+  res.json(donation);
+});
+
 // Goals CRUD
 router.get('/goals', async (req, res) => {
   res.json(await prisma.fundGoal.findMany({ orderBy: { created_at: 'desc' } }));

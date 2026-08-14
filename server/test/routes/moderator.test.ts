@@ -240,3 +240,117 @@ describe('Moderator access control', () => {
     delete process.env.MODERATOR_API_KEY;
   });
 });
+
+describe('Moderator donations', () => {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  async function makeDonation(donorId: string) {
+    return prisma.donation.create({
+      data: {
+        external_id: `ext-${Date.now()}-${Math.random()}`,
+        donor_id: donorId,
+        amount_cents: 500,
+        donor_name: 'Test Donor',
+      },
+    });
+  }
+
+  it('lists all donations regardless of donor', async () => {
+    const { token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+    const donation = await makeDonation(donor.id);
+
+    const res = await request(createApp())
+      .get('/api/moderator/donations')
+      .query({ token: modToken });
+
+    expect(res.status).toBe(200);
+    expect(res.body.some((d: { id: string }) => d.id === donation.id)).toBe(true);
+    expect(res.body.find((d: { id: string }) => d.id === donation.id).donor.email).toBe(
+      donor.email,
+    );
+
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('marks a donation as moderated, recording who and when', async () => {
+    const { donor: modDonor, token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+    const donation = await makeDonation(donor.id);
+
+    const res = await request(createApp())
+      .patch(`/api/moderator/donations/${donation.id}`)
+      .query({ token: modToken })
+      .send({ moderated: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.moderated).toBe(true);
+    expect(res.body.moderated_by).toBe(modDonor.email);
+    expect(res.body.moderated_at).toBeTruthy();
+
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+    await prisma.donor.delete({ where: { id: modDonor.id } });
+  });
+
+  it('unmarks a donation as moderated, clearing moderated_by/at', async () => {
+    const { token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+    const donation = await makeDonation(donor.id);
+
+    await request(createApp())
+      .patch(`/api/moderator/donations/${donation.id}`)
+      .query({ token: modToken })
+      .send({ moderated: true });
+
+    const res = await request(createApp())
+      .patch(`/api/moderator/donations/${donation.id}`)
+      .query({ token: modToken })
+      .send({ moderated: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.moderated).toBe(false);
+    expect(res.body.moderated_by).toBeNull();
+    expect(res.body.moderated_at).toBeNull();
+
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('rejects a non-boolean moderated value', async () => {
+    const { token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+    const donation = await makeDonation(donor.id);
+
+    const res = await request(createApp())
+      .patch(`/api/moderator/donations/${donation.id}`)
+      .query({ token: modToken })
+      .send({ moderated: 'yes' });
+
+    expect(res.status).toBe(400);
+
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('records moderated_by as "moderator" when accessed via API key rather than a donor token', async () => {
+    process.env.MODERATOR_API_KEY = 'test-moderator-key-donations';
+    const donor = await makeDonorWithBalance(1000);
+    const donation = await makeDonation(donor.id);
+
+    const res = await request(createApp())
+      .patch(`/api/moderator/donations/${donation.id}`)
+      .set('X-Moderator-Key', 'test-moderator-key-donations')
+      .send({ moderated: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.moderated_by).toBe('moderator');
+    delete process.env.MODERATOR_API_KEY;
+
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+});

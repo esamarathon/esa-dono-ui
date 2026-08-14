@@ -107,7 +107,7 @@ npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React
 - `server/middleware/donorAuth.ts` — Resolves `?token=` query param to a `Donor` record; sets `req.donor`.
 - `server/lib/roles.ts` — Role constants (`USER`/`MODERATOR`/`ADMIN`), `hasModeratorAccess()`/`hasAdminAccess()`, and `resolveEffectiveRole()` which re-checks the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists on every authenticated request (never downgrading below the donor's persisted `role`).
 - `server/middleware/moderatorAuth.ts` — Grants moderator access via an `X-Admin-Key`/`X-Moderator-Key` header match, or a donor (via `donorAuth`) whose effective `role` is `MODERATOR`/`ADMIN`.
-- `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, and custom entry approval.
+- `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, and custom entry approval. Also exposes read access to **all donations** plus `PATCH /donations/:id` to toggle a `moderated` flag (`moderated_at`/`moderated_by`), so downstream tools (exports, leaderboards, future Discord role sync) can rely on which donations a human has reviewed.
 
 ### Moderator Setup
 

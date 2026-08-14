@@ -9,6 +9,7 @@ const NAV = [
   { to: '/moderate/rewards', label: 'rewards' },
   { to: '/moderate/goals', label: 'goals' },
   { to: '/moderate/claims', label: 'claims' },
+  { to: '/moderate/donations', label: 'donations' },
 ];
 
 type AccessState = 'checking' | 'granted' | 'denied';

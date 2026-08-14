@@ -1329,6 +1329,51 @@ paths:
         '200':
           description: Claim updated
 
+  /moderator/donations:
+    get:
+      tags: [Moderator]
+      summary: List all donations (regardless of donor), for moderation review
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Donations with donor email and moderation status
+
+  /moderator/donations/{id}:
+    patch:
+      tags: [Moderator]
+      summary: Mark (or unmark) a donation as moderated
+      description: |
+        Sets `moderated`, `moderated_at`, and `moderated_by` so downstream
+        tools (exports, leaderboards, Discord role sync, etc.) can rely on
+        which donations a human has reviewed.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [moderated]
+              properties:
+                moderated: { type: boolean }
+      responses:
+        '200':
+          description: Donation updated
+        '400':
+          description: moderated must be a boolean
+
   /moderator/goals:
     get:
       tags: [Moderator]

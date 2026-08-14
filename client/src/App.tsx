@@ -23,6 +23,7 @@ import ModeratorPolls from './pages/moderator/ModeratorPolls';
 import ModeratorRewards from './pages/moderator/ModeratorRewards';
 import ModeratorGoals from './pages/moderator/ModeratorGoals';
 import ModeratorClaims from './pages/moderator/ModeratorClaims';
+import ModeratorDonations from './pages/moderator/ModeratorDonations';
 
 export default function App() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="rewards" element={<ModeratorRewards />} />
           <Route path="goals" element={<ModeratorGoals />} />
           <Route path="claims" element={<ModeratorClaims />} />
+          <Route path="donations" element={<ModeratorDonations />} />
         </Route>
         <Route
           path="*"

@@ -33,6 +33,9 @@ model Donation {
   amount_cents Int
   donor_name  String?
   comment     String?
+  moderated    Boolean   @default(false)
+  moderated_at DateTime?
+  moderated_by String?
   created_at  DateTime @default(now())
   donor       Donor    @relation(fields: [donor_id], references: [id])
   pledge      PendingPledge?
