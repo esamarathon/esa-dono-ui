@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { metricsAuth } from '../../middleware/metricsAuth.js';
@@ -42,7 +42,9 @@ describe('GET /api/metrics', () => {
     expect(res.headers['content-type']).toMatch(/text\/plain/);
     expect(res.text).toContain('# HELP http_requests_total');
     expect(res.text).toContain('# TYPE http_requests_total counter');
-    expect(res.text).toContain('http_requests_total{method="GET",route="/api/health",status="200"} 1');
+    expect(res.text).toContain(
+      'http_requests_total{method="GET",route="/api/health",status="200"} 1',
+    );
   });
 
   it('returns 404 when metrics are disabled (no METRICS_API_KEY)', async () => {

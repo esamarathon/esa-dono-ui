@@ -51,7 +51,7 @@ npm run test:ci             # CI mode (junit reporter)
 | `ADMIN_API_KEY`            | Yes (prod) | —                                          | Admin API key passed as `Authorization: Bearer key_admin_<key>`                                                           |
 | `MODERATOR_API_KEY`        | No         | —                                          | Operational fallback key passed as `Authorization: Bearer key_mod_<key>` for moderator routes, independent of donor roles |
 | `METRICS_API_KEY`          | No         | —                                          | Token for `GET /api/metrics`, passed as `Authorization: Bearer key_metrics_<key>`. Endpoint returns 404 if unset          |
-| `METRICS_REFRESH_MS`       | No         | `45000`                                    | How often DB-derived business metrics are refreshed into the cache served by `/api/metrics`                              |
+| `METRICS_REFRESH_MS`       | No         | `45000`                                    | How often DB-derived business metrics are refreshed into the cache served by `/api/metrics`                               |
 | `ADMIN_EMAILS`             | No         | —                                          | Comma-separated emails granted the ADMIN role at request time (not on donation)                                           |
 | `MODERATOR_EMAILS`         | No         | —                                          | Comma-separated emails granted the MODERATOR role at request time (not on donation)                                       |
 | `SMTP_HOST`                | No         | —                                          | SMTP server hostname (omit to log magic links to stdout instead)                                                          |

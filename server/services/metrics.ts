@@ -85,23 +85,31 @@ const ADJUSTMENT_TYPES = ['REFUND', 'FREEZE_ZERO', 'MANUAL', 'CHARGEBACK'] as co
  */
 export async function refreshBusinessMetrics(): Promise<void> {
   try {
-    const [donorCount, donationAgg, donationCount, pledgeCount, activeEventCount, claimCount, voteCount, adjustmentCounts] =
-      await Promise.all([
-        prisma.donor.count(),
-        prisma.donation.aggregate({ _sum: { amount_cents: true } }),
-        prisma.donation.count(),
-        prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
-        prisma.event.count({ where: { is_active: true } }),
-        prisma.rewardClaim.count(),
-        prisma.pollVote.count({ where: { reversed_at: null } }),
-        Promise.all(
-          ADJUSTMENT_TYPES.map((type) =>
-            prisma.balanceAdjustment
-              .count({ where: { type } })
-              .then((count: number) => ({ type, count })),
-          ),
+    const [
+      donorCount,
+      donationAgg,
+      donationCount,
+      pledgeCount,
+      activeEventCount,
+      claimCount,
+      voteCount,
+      adjustmentCounts,
+    ] = await Promise.all([
+      prisma.donor.count(),
+      prisma.donation.aggregate({ _sum: { amount_cents: true } }),
+      prisma.donation.count(),
+      prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
+      prisma.event.count({ where: { is_active: true } }),
+      prisma.rewardClaim.count(),
+      prisma.pollVote.count({ where: { reversed_at: null } }),
+      Promise.all(
+        ADJUSTMENT_TYPES.map((type) =>
+          prisma.balanceAdjustment
+            .count({ where: { type } })
+            .then((count: number) => ({ type, count })),
         ),
-      ]);
+      ),
+    ]);
 
     donorsTotal.set(donorCount);
     donatedCentsTotal.set(donationAgg._sum.amount_cents ?? 0);
