@@ -15,6 +15,11 @@ import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
 import prisma from './lib/prisma.js';
+import { httpMetrics } from './middleware/httpMetrics.js';
+import { metricsAuth } from './middleware/metricsAuth.js';
+import { metricsLimit } from './middleware/rateLimit.js';
+import { register } from './lib/metrics.js';
+import { startMetricsRefresh } from './services/metrics.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -29,6 +34,7 @@ app.use(cors());
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
 
 app.use(express.json());
+app.use(httpMetrics);
 
 app.get('/api/health', async (_req: Request, res: Response) => {
   try {
@@ -37,6 +43,11 @@ app.get('/api/health', async (_req: Request, res: Response) => {
   } catch (err) {
     res.status(503).json({ ok: false, db: false, error: (err as Error).message });
   }
+});
+
+app.get('/api/metrics', metricsLimit, metricsAuth, async (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', register.contentType);
+  res.send(await register.metrics());
 });
 
 app.get('/api/openapi.yaml', (_req: Request, res: Response) => {
@@ -61,3 +72,4 @@ app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+startMetricsRefresh();

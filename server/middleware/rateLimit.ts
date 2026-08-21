@@ -21,4 +21,14 @@ const authLimit = rateLimit({
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-export { spendLimit, authLimit };
+// /api/metrics is reachable through the public proxy (no network-level
+// restriction) and protected only by the metrics bearer token, so throttle
+// unauthenticated/scanning traffic by IP to bound the added load.
+const metricsLimit = rateLimit({
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_METRICS) || 30,
+  keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ''),
+  handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
+});
+
+export { spendLimit, authLimit, metricsLimit };
