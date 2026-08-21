@@ -50,6 +50,8 @@ npm run test:ci             # CI mode (junit reporter)
 | `TILTIFY_WEBHOOK_SECRET`   | No         | —                                          | HMAC secret for webhook verification (omit to skip verification during dev)                                               |
 | `ADMIN_API_KEY`            | Yes (prod) | —                                          | Admin API key passed as `Authorization: Bearer key_admin_<key>`                                                           |
 | `MODERATOR_API_KEY`        | No         | —                                          | Operational fallback key passed as `Authorization: Bearer key_mod_<key>` for moderator routes, independent of donor roles |
+| `METRICS_API_KEY`          | No         | —                                          | Token for `GET /api/metrics`, passed as `Authorization: Bearer key_metrics_<key>`. Endpoint returns 404 if unset          |
+| `METRICS_REFRESH_MS`       | No         | `45000`                                    | How often DB-derived business metrics are refreshed into the cache served by `/api/metrics`                              |
 | `ADMIN_EMAILS`             | No         | —                                          | Comma-separated emails granted the ADMIN role at request time (not on donation)                                           |
 | `MODERATOR_EMAILS`         | No         | —                                          | Comma-separated emails granted the MODERATOR role at request time (not on donation)                                       |
 | `SMTP_HOST`                | No         | —                                          | SMTP server hostname (omit to log magic links to stdout instead)                                                          |
@@ -62,6 +64,8 @@ npm run test:ci             # CI mode (junit reporter)
 | `PORT`                     | No         | `3001`                                     | Server listen port                                                                                                        |
 | `DATABASE_URL`             | No         | `file:./dev.db`                            | Prisma database URL (SQLite)                                                                                              |
 | `RATE_LIMIT_SPEND`         | No         | `20`                                       | Max spend requests per minute per donor                                                                                   |
+| `RATE_LIMIT_AUTH`          | No         | `5`                                        | Max auth/magic-link requests per minute per IP                                                                            |
+| `RATE_LIMIT_METRICS`       | No         | `30`                                       | Max `/api/metrics` requests per minute per IP (the endpoint is public, gated only by the metrics token)                   |
 
 ## Tiltify Webhook Registration
 
@@ -85,6 +89,53 @@ npm run test:ci             # CI mode (junit reporter)
 4. **Optional — Webhook Relay**: For deterministic donation→pledge linkage, create a Webhook Relay in the Tiltify Developer Dashboard and set `TILTIFY_WEBHOOK_RELAY_ID` to its ID.
 
 During local development you can leave `TILTIFY_WEBHOOK_SECRET` unset to skip HMAC signature verification.
+
+## Metrics (Prometheus)
+
+The backend exposes `GET /api/metrics` in Prometheus text format. It's reachable through the same public path as the rest of the API (no separate network restriction) and is protected entirely by its own bearer token.
+
+**Metrics exposed:**
+
+- **Runtime/process metrics** — CPU, memory, event loop lag, GC pauses (via `prom-client`'s default collectors). These are per-instance and reset on restart; that's expected and handled correctly by Prometheus's `rate()`/`increase()`.
+- **HTTP metrics** — `http_requests_total` and `http_request_duration_seconds`, labeled by method/route/status.
+- **Business metrics** (`dono_*`) — donor count, total donated, donation count, open pledges, active events, reward claims, poll votes, balance adjustments by type. These are computed from the database on a background interval (`METRICS_REFRESH_MS`, default 45s) and served from a cache, so scraping `/api/metrics` never triggers extra database queries — the DB is only queried once per interval, regardless of scrape frequency. Because the source of truth is the database rather than process memory, these values are correct across restarts and identical across load-balanced replicas.
+
+### Obtaining and configuring the token
+
+1. Generate a random secret, e.g.:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. Set it as `METRICS_API_KEY` in your `.env` (or the container's environment):
+
+   ```
+   METRICS_API_KEY=<your-generated-secret>
+   ```
+
+   If `METRICS_API_KEY` is left unset, `/api/metrics` returns `404` rather than serving unauthenticated data.
+
+3. Point Prometheus (or curl) at the endpoint using the `key_metrics_` prefix, following the same `Authorization: Bearer` scheme used by the admin/moderator keys:
+
+   ```bash
+   curl -H "Authorization: Bearer key_metrics_<your-generated-secret>" http://localhost:3001/api/metrics
+   ```
+
+   Example `scrape_configs` entry for a Prometheus server:
+
+   ```yaml
+   scrape_configs:
+     - job_name: dono-backend
+       metrics_path: /api/metrics
+       scheme: https
+       authorization:
+         credentials: key_metrics_<your-generated-secret>
+       static_configs:
+         - targets: ['donations.example.com']
+   ```
+
+Since the endpoint is public, it's also rate-limited per IP (`RATE_LIMIT_METRICS`, default 30/min) as a backstop against unauthenticated scraping/scanning traffic.
 
 ## Production Deployment
 
@@ -121,6 +172,7 @@ TILTIFY_WEBHOOK_RELAY_ID=your_relay_id
 TILTIFY_WEBHOOK_SECRET=your_webhook_secret
 ADMIN_API_KEY=your-secure-admin-key
 MODERATOR_API_KEY=your-secure-moderator-key
+METRICS_API_KEY=your-secure-metrics-key
 ADMIN_EMAILS=owner@example.com
 MODERATOR_EMAILS=mod1@example.com,mod2@example.com
 SMTP_HOST=smtp.example.com
@@ -281,6 +333,7 @@ packages/shared/  Cross-cutting types (@dono/shared)
 - **Webhook flow**: HMAC-SHA256 verification → `processDonation()` (upserts donor, credits balance, sends magic link, auto-fulfills pledges).
 - **Pledge/Cart system**: Donors select incentives before donating. Pledge resolves by relay key or email fallback.
 - **Moderator/admin access**: Donors have a `role` (`USER`/`MODERATOR`/`ADMIN`) resolved on every authenticated request from the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (never granted as a side effect of donating — see `server/lib/roles.ts`). `MODERATOR_API_KEY`/`ADMIN_API_KEY` provide operational fallback access to moderator routes independent of donor roles.
+- **Metrics**: `GET /api/metrics` (Prometheus format) is gated by `METRICS_API_KEY`. Runtime/HTTP metrics are collected in-process; business metrics are derived from the database on a background interval and cached, so scraping never adds database load — see [Metrics (Prometheus)](#metrics-prometheus).
 
 ## Troubleshooting
 
