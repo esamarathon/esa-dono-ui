@@ -21,6 +21,10 @@ services:
       - MODERATOR_API_KEY=${MODERATOR_API_KEY:-}
       - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       - MODERATOR_EMAILS=${MODERATOR_EMAILS:-}
+      # Prometheus metrics (GET /api/metrics). Leave empty to disable the
+      # endpoint entirely (it 404s rather than serving unauthenticated).
+      - METRICS_API_KEY=${METRICS_API_KEY:-}
+      - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
       # OAuth sign-in (Google / Discord / Twitch). Leave empty to disable.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}

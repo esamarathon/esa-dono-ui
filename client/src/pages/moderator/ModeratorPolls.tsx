@@ -4,7 +4,9 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage, type Poll, type CustomEntry, type Event } from '../../types';
+import EventPill from '../../components/EventPill';
+import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
+import { apiErrorMessage, type Poll, type CustomEntry } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -37,7 +39,6 @@ type PollModal = 'create' | Poll | null;
 
 export default function ModeratorPolls() {
   const [polls, setPolls] = useState<Poll[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
@@ -47,16 +48,19 @@ export default function ModeratorPolls() {
   const [error, setError] = useState('');
   const [entriesPanel, setEntriesPanel] = useState<string | null>(null);
   const [entries, setEntries] = useState<CustomEntry[]>([]);
+  const { events, selectedEventId } = useModeratorEventFilter();
 
   const reload = () => moderatorClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
-    Promise.all([reload(), moderatorClient.get('/events').then((r) => setEvents(r.data))]).finally(
-      () => setLoading(false),
-    );
+    reload().finally(() => setLoading(false));
   }, []);
 
   const eventName = (id: string | null | undefined) =>
     id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+
+  const filteredPolls = polls.filter(
+    (p) => !selectedEventId || p.event_id === selectedEventId || p.event_id == null,
+  );
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -155,11 +159,14 @@ export default function ModeratorPolls() {
       </div>
 
       <div className="space-y-4">
-        {polls.map((poll) => (
+        {filteredPolls.map((poll) => (
           <Card key={poll.id}>
             <div className="flex justify-between">
               <div>
-                <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
+                  <EventPill label={eventName(poll.event_id)} />
+                </div>
                 {poll.description && (
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
@@ -167,9 +174,6 @@ export default function ModeratorPolls() {
                   total votes: {fmt(poll.total_votes_cents)}
                   {poll.allow_custom_entries &&
                     ` · custom entries ${poll.auto_approve === false ? '(needs approval)' : '(auto-approved)'}`}
-                </p>
-                <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(poll.event_id)}
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
@@ -280,7 +284,10 @@ export default function ModeratorPolls() {
 
             {entriesPanel === poll.id && (
               <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
-                <h4 className="font-data font-bold text-sm mb-2 text-off-white">custom entries</h4>
+                <div className="flex items-center gap-2 mb-2">
+                  <h4 className="font-data font-bold text-sm text-off-white">custom entries</h4>
+                  <EventPill label={eventName(poll.event_id)} />
+                </div>
                 {entries.length === 0 ? (
                   <p className="font-body text-xs text-off-white/55">No entries yet.</p>
                 ) : (

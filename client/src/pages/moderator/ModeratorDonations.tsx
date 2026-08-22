@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import moderatorClient from '../../api/moderator';
 import Card from '../../components/Card';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import EventPill from '../../components/EventPill';
+import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
 import type { AdminDonation } from '../../types';
 
 function fmt(cents: number) {
@@ -11,6 +13,7 @@ function fmt(cents: number) {
 export default function ModeratorDonations() {
   const [donations, setDonations] = useState<AdminDonation[]>([]);
   const [loading, setLoading] = useState(true);
+  const { events, selectedEventId } = useModeratorEventFilter();
 
   const reload = () => moderatorClient.get('/donations').then((r) => setDonations(r.data));
   useEffect(() => {
@@ -22,6 +25,15 @@ export default function ModeratorDonations() {
     await reload();
   };
 
+  const eventName = (d: AdminDonation) => {
+    if (!d.event) return 'shared';
+    return events.find((e) => e.id === d.event?.id)?.name ?? 'unknown event';
+  };
+
+  const filteredDonations = donations.filter(
+    (d) => !selectedEventId || d.event?.id === selectedEventId || d.event == null,
+  );
+
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -29,13 +41,16 @@ export default function ModeratorDonations() {
       <h1 className="font-display text-4xl uppercase mb-6">donations</h1>
 
       <div className="space-y-4">
-        {donations.map((d) => (
+        {filteredDonations.map((d) => (
           <Card key={d.id}>
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
               <div className="min-w-0 flex-1">
-                <h3 className="font-data font-bold text-sm text-off-white break-words">
-                  {d.donor_name ?? '-'}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-data font-bold text-sm text-off-white break-words">
+                    {d.donor_name ?? '-'}
+                  </h3>
+                  <EventPill label={eventName(d)} />
+                </div>
                 <p className="font-data font-bold text-sm text-d-yellow mt-1">
                   {fmt(d.amount_cents)}
                 </p>
@@ -75,7 +90,7 @@ export default function ModeratorDonations() {
             </div>
           </Card>
         ))}
-        {donations.length === 0 && (
+        {filteredDonations.length === 0 && (
           <p className="font-body text-sm text-off-white/55">No donations yet.</p>
         )}
       </div>

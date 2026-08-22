@@ -15,6 +15,10 @@ import {
   HomeIcon,
   LogoutIcon,
 } from '../../components/icons';
+import {
+  ModeratorEventFilterProvider,
+  useModeratorEventFilter,
+} from '../../context/ModeratorEventFilterContext';
 
 const NAV: SidebarNavItem[] = [
   { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
@@ -100,10 +104,40 @@ export default function ModeratorLayout() {
   }
 
   return (
+    <ModeratorEventFilterProvider>
+      <ModeratorLayoutInner keyValue={key} onLogout={logout} />
+    </ModeratorEventFilterProvider>
+  );
+}
+
+function EventFilterBar() {
+  const { events, selectedEventId, setSelectedEventId } = useModeratorEventFilter();
+  return (
+    <div className="mb-6 flex items-center gap-3">
+      <label className="font-data text-sm text-off-white/55">event filter</label>
+      <select
+        className="px-3 py-1.5 text-sm bg-transparent border border-off-white/20 rounded-sm"
+        value={selectedEventId ?? ''}
+        onChange={(e) => setSelectedEventId(e.target.value || null)}
+      >
+        <option value="">all events</option>
+        {events.map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ModeratorLayoutInner({ keyValue, onLogout }: { keyValue: string; onLogout: () => void }) {
+  return (
     <SidebarLayout
       title="moderator"
       nav={NAV}
       storageKey="moderator_sidebar_collapsed"
+      header={<EventFilterBar />}
       footer={(collapsed) => (
         <div className="flex flex-col">
           <Link
@@ -114,9 +148,9 @@ export default function ModeratorLayout() {
             <HomeIcon className="w-4 h-4 shrink-0" />
             {!collapsed && <span>back to home</span>}
           </Link>
-          {key ? (
+          {keyValue ? (
             <button
-              onClick={logout}
+              onClick={onLogout}
               title="logout (moderator key)"
               className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white ${collapsed ? 'justify-center' : 'text-left'}`}
             >

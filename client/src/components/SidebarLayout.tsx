@@ -14,9 +14,16 @@ interface SidebarLayoutProps {
   nav: SidebarNavItem[];
   storageKey: string;
   footer?: (collapsed: boolean) => ReactNode;
+  header?: ReactNode;
 }
 
-export default function SidebarLayout({ title, nav, storageKey, footer }: SidebarLayoutProps) {
+export default function SidebarLayout({
+  title,
+  nav,
+  storageKey,
+  footer,
+  header,
+}: SidebarLayoutProps) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(storageKey) !== '0');
 
   const toggle = () => {
@@ -72,6 +79,7 @@ export default function SidebarLayout({ title, nav, storageKey, footer }: Sideba
         {footer?.(collapsed)}
       </aside>
       <main className="flex-1 p-8 overflow-auto">
+        {header}
         <Outlet />
       </main>
     </div>

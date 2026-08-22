@@ -4,7 +4,9 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage, type Reward, type Event } from '../../types';
+import EventPill from '../../components/EventPill';
+import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
+import { apiErrorMessage, type Reward } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -37,21 +39,23 @@ type RewardModal = 'create' | Reward | null;
 
 export default function ModeratorRewards() {
   const [rewards, setRewards] = useState<Reward[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<RewardModal>(null);
   const [form, setForm] = useState<RewardForm>(EMPTY);
   const [error, setError] = useState('');
+  const { events, selectedEventId } = useModeratorEventFilter();
 
   const reload = () => moderatorClient.get('/rewards').then((r) => setRewards(r.data));
   useEffect(() => {
-    Promise.all([reload(), moderatorClient.get('/events').then((r) => setEvents(r.data))]).finally(
-      () => setLoading(false),
-    );
+    reload().finally(() => setLoading(false));
   }, []);
 
   const eventName = (id: string | null | undefined) =>
     id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+
+  const filteredRewards = rewards.filter(
+    (r) => !selectedEventId || r.event_id === selectedEventId || r.event_id == null,
+  );
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -108,11 +112,14 @@ export default function ModeratorRewards() {
       </div>
 
       <div className="space-y-4">
-        {rewards.map((r) => (
+        {filteredRewards.map((r) => (
           <Card key={r.id}>
             <div className="flex justify-between">
               <div>
-                <h2 className="font-data font-bold text-lg text-off-white">{r.title}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-data font-bold text-lg text-off-white">{r.title}</h2>
+                  <EventPill label={eventName(r.event_id)} />
+                </div>
                 <p className="font-data text-sm text-off-white/55">
                   {r.type} &middot; {fmt(r.cost_cents)}
                 </p>
@@ -121,9 +128,6 @@ export default function ModeratorRewards() {
                     {r.quantity_claimed}/{r.quantity_total} claimed
                   </p>
                 )}
-                <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(r.event_id)}
-                </p>
                 <div className="mt-2">
                   <StatusBadge active={r.is_active} />
                 </div>

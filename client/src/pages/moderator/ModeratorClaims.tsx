@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import moderatorClient from '../../api/moderator';
 import Card from '../../components/Card';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import EventPill from '../../components/EventPill';
+import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
 import type { AdminClaim } from '../../types';
 
 function claimField(claim: AdminClaim, key: 'name' | 'message'): string | undefined {
@@ -13,17 +15,27 @@ function claimField(claim: AdminClaim, key: 'name' | 'message'): string | undefi
 export default function ModeratorClaims() {
   const [claims, setClaims] = useState<AdminClaim[]>([]);
   const [loading, setLoading] = useState(true);
+  const { events, selectedEventId } = useModeratorEventFilter();
 
   const reload = () => moderatorClient.get('/claims').then((r) => setClaims(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
+  const eventName = (c: AdminClaim) => {
+    if (!c.reward?.event_id) return 'shared';
+    return events.find((e) => e.id === c.reward?.event_id)?.name ?? 'unknown event';
+  };
+
   const toggleStatus = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === 'PENDING' ? 'FULFILLED' : 'PENDING';
     await moderatorClient.patch(`/claims/${id}`, { status: newStatus });
     await reload();
   };
+
+  const filteredClaims = claims.filter(
+    (c) => !selectedEventId || c.reward?.event_id === selectedEventId || c.reward?.event_id == null,
+  );
 
   if (loading) return <LoadingSpinner />;
 
@@ -32,14 +44,19 @@ export default function ModeratorClaims() {
       <h1 className="font-display text-4xl uppercase mb-6">claims</h1>
 
       <div className="space-y-4">
-        {claims.map((c) => {
+        {filteredClaims.map((c) => {
           const name = claimField(c, 'name');
           const message = claimField(c, 'message');
           return (
             <Card key={c.id}>
               <div className="flex justify-between items-start">
                 <div>
-                  <h3 className="font-data font-bold text-sm text-off-white">{c.reward?.title}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-data font-bold text-sm text-off-white">
+                      {c.reward?.title}
+                    </h3>
+                    <EventPill label={eventName(c)} />
+                  </div>
                   <p className="font-data text-xs text-off-white/55">type: {c.reward?.type}</p>
                   {name && <p className="font-data text-xs text-off-white/55">donor: {name}</p>}
                   {message && (
@@ -73,7 +90,7 @@ export default function ModeratorClaims() {
             </Card>
           );
         })}
-        {claims.length === 0 && (
+        {filteredClaims.length === 0 && (
           <p className="font-body text-sm text-off-white/55">No claims yet.</p>
         )}
       </div>

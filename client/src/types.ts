@@ -231,7 +231,7 @@ export interface AdminClaim {
   claim_data?: unknown;
   created_at: string;
   donor?: { email?: string } | null;
-  reward?: { title?: string; type?: string; cost_cents?: number } | null;
+  reward?: { title?: string; type?: string; cost_cents?: number; event_id?: string | null } | null;
 }
 
 export interface SpendRecord {
