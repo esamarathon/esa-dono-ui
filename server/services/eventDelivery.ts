@@ -20,7 +20,7 @@ export type WebhookPayloadDonationCreated = {
     donation_id: string;
     external_id: string;
     amount_cents: number;
-    event_id: string | null;
+    channel_id: string | null;
     donor_ref: string;
   };
 };
@@ -196,7 +196,7 @@ export function buildDonationCreatedPayload(opts: {
   donationId: string;
   externalId: string;
   amountCents: number;
-  eventId: string | null;
+  channelId: string | null;
   donorRef: string;
 }): WebhookPayloadDonationCreated {
   return {
@@ -207,7 +207,7 @@ export function buildDonationCreatedPayload(opts: {
       donation_id: opts.donationId,
       external_id: opts.externalId,
       amount_cents: opts.amountCents,
-      event_id: opts.eventId,
+      channel_id: opts.channelId,
       donor_ref: opts.donorRef,
     },
   };

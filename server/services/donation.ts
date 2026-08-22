@@ -14,7 +14,7 @@ interface ProcessDonationOptions {
   comment?: string | null;
   pledgeToken?: string | null;
   shippingCents?: number;
-  eventId?: string | null;
+  channelId?: string | null;
 }
 
 /**
@@ -49,7 +49,7 @@ export async function processDonation({
   comment,
   pledgeToken,
   shippingCents = 0,
-  eventId = null,
+  channelId = null,
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
   // Shipping is passed through to Stripe, not donated — exclude it from the
@@ -89,7 +89,7 @@ export async function processDonation({
           amount_cents: amountCents,
           donor_name: donorName,
           comment: comment ?? null,
-          event_id: eventId ?? null,
+          channel_id: channelId ?? null,
         },
       });
 
@@ -107,7 +107,7 @@ export async function processDonation({
             data: {
               pledge: { connect: { id: pledge.id } },
               ...(pledge.comment ? { comment: pledge.comment } : {}),
-              ...(pledge.event_id ? { event_id: pledge.event_id } : {}),
+              ...(pledge.channel_id ? { channel_id: pledge.channel_id } : {}),
             },
           });
         }
@@ -134,7 +134,7 @@ export async function processDonation({
       donationId: result!.donation.id,
       externalId,
       amountCents,
-      eventId: eventId ?? null,
+      channelId: channelId ?? null,
       donorRef: result!.donor.id,
     }),
   );

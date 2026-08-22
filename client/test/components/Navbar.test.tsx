@@ -9,13 +9,13 @@ vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
-vi.mock('../../src/api/events', () => ({ getEvents: vi.fn() }));
+vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 
 import { getDonor } from '../../src/api/donor';
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
-import { getEvents } from '../../src/api/events';
+import { getChannels } from '../../src/api/channels';
 
 function renderNavbar() {
   return render(
@@ -50,7 +50,7 @@ describe('Navbar', () => {
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
-    vi.mocked(getEvents).mockResolvedValue([]);
+    vi.mocked(getChannels).mockResolvedValue([]);
   });
 
   it('shows a plain login link when no donor token is present', async () => {

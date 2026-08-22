@@ -463,7 +463,7 @@ describe('Admin donor management', () => {
         target_cents: undefined,
         is_active: false,
         is_complete: undefined,
-        event_id: null,
+        channel_id: null,
       },
     });
   });
@@ -489,7 +489,7 @@ describe('Admin donor management', () => {
         allow_custom_entries: false,
         max_entry_chars: null,
         auto_approve: true,
-        event_id: null,
+        channel_id: null,
       },
       include: { options: true },
     });

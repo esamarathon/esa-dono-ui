@@ -5,7 +5,7 @@ import Modal from '../../components/Modal';
 import ProgressBar from '../../components/ProgressBar';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage, type Goal, type Event } from '../../types';
+import { apiErrorMessage, type Goal, type Channel } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -15,26 +15,26 @@ interface GoalForm {
   id?: string;
   title: string;
   description: string;
-  target_cents: number | string;
+  target_dollars: number | string;
   is_active: boolean;
   is_complete?: boolean;
   current_cents?: number;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: GoalForm = {
   title: '',
   description: '',
-  target_cents: 1000,
+  target_dollars: '10.00',
   is_active: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type GoalModal = 'create' | Goal | null;
 
 export default function AdminGoals() {
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<GoalModal>(null);
   const [form, setForm] = useState<GoalForm>(EMPTY);
@@ -42,13 +42,13 @@ export default function AdminGoals() {
 
   const reload = () => adminClient.get('/goals').then((r) => setGoals(r.data));
   useEffect(() => {
-    Promise.all([reload(), adminClient.get('/events').then((r) => setEvents(r.data))]).finally(() =>
-      setLoading(false),
+    Promise.all([reload(), adminClient.get('/events').then((r) => setChannels(r.data))]).finally(
+      () => setLoading(false),
     );
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -56,7 +56,11 @@ export default function AdminGoals() {
     setError('');
   };
   const openEdit = (g: Goal) => {
-    setForm({ ...g, event_id: g.event_id ?? null } as GoalForm);
+    setForm({
+      ...g,
+      target_dollars: (g.target_cents / 100).toFixed(2),
+      channel_id: g.channel_id ?? null,
+    } as GoalForm);
     setModal(g);
     setError('');
   };
@@ -64,7 +68,10 @@ export default function AdminGoals() {
   const handleSave = async () => {
     setError('');
     try {
-      const data = { ...form, target_cents: parseInt(String(form.target_cents)) };
+      const data = {
+        ...form,
+        target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
+      };
       if (modal === 'create') {
         await adminClient.post('/goals', data);
       } else if (modal) {
@@ -124,7 +131,7 @@ export default function AdminGoals() {
                   <p className="font-body text-sm text-off-white/55">{g.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(g.event_id)}
+                  event: {channelName(g.channel_id)}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <StatusBadge active={g.is_active} />
@@ -141,20 +148,20 @@ export default function AdminGoals() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => openEdit(g)}
-                  className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                 >
                   edit
                 </button>
                 <button
                   onClick={() => handleRefund(g.id, g.title)}
-                  className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                   style={{ color: 'var(--d-yellow)' }}
                 >
                   refund contributions
                 </button>
                 <button
                   onClick={() => handleDelete(g.id)}
-                  className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                   style={{ color: 'var(--red)' }}
                 >
                   delete
@@ -176,8 +183,8 @@ export default function AdminGoals() {
             [
               { key: 'title', label: 'Title' },
               { key: 'description', label: 'Description' },
-              { key: 'target_cents', label: 'Target (cents)', type: 'number' },
-            ] as { key: keyof GoalForm; label: string; type?: string }[]
+              { key: 'target_dollars', label: 'Target (dollars)', type: 'number', step: '0.01' },
+            ] as { key: keyof GoalForm; label: string; type?: string; step?: string }[]
           ).map((f) => (
             <div key={f.key} className="mb-3">
               <label className="block font-data font-bold text-sm mb-1 text-off-white">
@@ -185,6 +192,7 @@ export default function AdminGoals() {
               </label>
               <input
                 type={f.type ?? 'text'}
+                step={f.step}
                 className="w-full px-3 py-2 text-sm"
                 value={(form[f.key] as string | number | undefined) ?? ''}
                 onChange={(e) => setForm((d) => ({ ...d, [f.key]: e.target.value }))}
@@ -195,11 +203,11 @@ export default function AdminGoals() {
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
               <option value="">shared (any event)</option>
-              {events.map((s) => (
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

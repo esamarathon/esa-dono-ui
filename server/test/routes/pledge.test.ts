@@ -40,7 +40,7 @@ describe('POST /api/pledge', () => {
         email: 'donor@example.com',
         comment: 'hello',
         top_up_cents: 1500,
-        event_id: 'event-1',
+        channel_id: 'event-1',
         items: [{ kind: 'REWARD', target_id: 'reward-1' }],
       });
 
@@ -49,7 +49,7 @@ describe('POST /api/pledge', () => {
       email: 'donor@example.com',
       comment: 'hello',
       top_up_cents: 1500,
-      event_id: 'event-1',
+      channel_id: 'event-1',
       items: [{ kind: 'REWARD', target_id: 'reward-1' }],
     });
     expect(res.body.total_cents).toBe(2000);
@@ -73,7 +73,7 @@ describe('POST /api/pledge', () => {
       .post('/api/pledge')
       .send({
         email: 'donor@example.com',
-        event_id: 'event-1',
+        channel_id: 'event-1',
         items: [{ kind: 'REWARD', target_id: 'reward-1' }],
       });
 
@@ -81,7 +81,7 @@ describe('POST /api/pledge', () => {
     expect(createPledge).toHaveBeenCalledWith({
       email: 'donor@example.com',
       top_up_cents: undefined,
-      event_id: 'event-1',
+      channel_id: 'event-1',
       items: [{ kind: 'REWARD', target_id: 'reward-1' }],
     });
     expect(res.body.has_checkout).toBe(false);
@@ -89,7 +89,7 @@ describe('POST /api/pledge', () => {
 
   it('returns 400 when createPledge rejects with a status', async () => {
     vi.mocked(createPledge).mockRejectedValue(
-      Object.assign(new Error('event_id is required'), {
+      Object.assign(new Error('channel_id is required'), {
         status: 400,
       }),
     );
@@ -99,6 +99,6 @@ describe('POST /api/pledge', () => {
       .send({ email: 'donor@example.com', items: [] });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('event_id is required');
+    expect(res.body.error).toBe('channel_id is required');
   });
 });

@@ -5,8 +5,8 @@ import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import ProgressBar from '../../components/ProgressBar';
 import StatusBadge from '../../components/StatusBadge';
-import EventPill from '../../components/EventPill';
-import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
+import ChannelPill from '../../components/ChannelPill';
+import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Goal } from '../../types';
 
 function fmt(cents: number) {
@@ -17,18 +17,18 @@ interface GoalForm {
   id?: string;
   title: string;
   description: string;
-  target_cents: number | string;
+  target_dollars: number | string;
   is_active: boolean;
   is_complete?: boolean;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: GoalForm = {
   title: '',
   description: '',
-  target_cents: '',
+  target_dollars: '',
   is_active: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type GoalModal = 'create' | Goal | null;
@@ -39,18 +39,18 @@ export default function ModeratorGoals() {
   const [modal, setModal] = useState<GoalModal>(null);
   const [form, setForm] = useState<GoalForm>(EMPTY);
   const [error, setError] = useState('');
-  const { events, selectedEventId } = useModeratorEventFilter();
+  const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/goals').then((r) => setGoals(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
 
   const filteredGoals = goals.filter(
-    (g) => !selectedEventId || g.event_id === selectedEventId || g.event_id == null,
+    (g) => !selectedChannelId || g.channel_id === selectedChannelId || g.channel_id == null,
   );
 
   const openCreate = () => {
@@ -61,8 +61,8 @@ export default function ModeratorGoals() {
   const openEdit = (g: Goal) => {
     setForm({
       ...g,
-      target_cents: String(g.target_cents),
-      event_id: g.event_id ?? null,
+      target_dollars: (g.target_cents / 100).toFixed(2),
+      channel_id: g.channel_id ?? null,
     } as GoalForm);
     setModal(g);
     setError('');
@@ -70,7 +70,10 @@ export default function ModeratorGoals() {
 
   const handleSave = async () => {
     setError('');
-    const data = { ...form, target_cents: parseInt(String(form.target_cents)) };
+    const data = {
+      ...form,
+      target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
+    };
     try {
       if (modal === 'create') await moderatorClient.post('/goals', data);
       else if (modal) await moderatorClient.put(`/goals/${modal.id}`, data);
@@ -105,7 +108,7 @@ export default function ModeratorGoals() {
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="font-data font-bold text-lg text-off-white">{g.title}</h2>
-                  <EventPill label={eventName(g.event_id)} />
+                  <ChannelPill label={channelName(g.channel_id)} />
                 </div>
                 <p className="font-data text-sm text-off-white/55">
                   {fmt(g.current_cents)} / {fmt(g.target_cents)} {g.is_complete && '· complete'}
@@ -118,13 +121,13 @@ export default function ModeratorGoals() {
               <div className="flex gap-2 ml-4">
                 <button
                   onClick={() => openEdit(g)}
-                  className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                 >
                   edit
                 </button>
                 <button
                   onClick={() => handleDelete(g.id)}
-                  className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                   style={{ color: 'var(--red)' }}
                 >
                   delete
@@ -156,13 +159,15 @@ export default function ModeratorGoals() {
           ))}
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">
-              target (cents)
+              target (dollars)
             </label>
             <input
               type="number"
+              step="0.01"
+              min="0"
               className="w-full px-3 py-2 text-sm"
-              value={form.target_cents}
-              onChange={(e) => setForm((d) => ({ ...d, target_cents: e.target.value }))}
+              value={form.target_dollars}
+              onChange={(e) => setForm((d) => ({ ...d, target_dollars: e.target.value }))}
             />
           </div>
           {modal !== 'create' && (
@@ -182,11 +187,11 @@ export default function ModeratorGoals() {
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
               <option value="">shared (any event)</option>
-              {events.map((s) => (
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

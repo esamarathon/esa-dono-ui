@@ -1,8 +1,8 @@
-interface EventPillProps {
+interface ChannelPillProps {
   label: string;
 }
 
-export default function EventPill({ label }: EventPillProps) {
+export default function ChannelPill({ label }: ChannelPillProps) {
   return (
     <span
       className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"

@@ -40,14 +40,14 @@ model Donation {
   moderated    Boolean   @default(false)
   moderated_at DateTime?
   moderated_by String?
-  event_id    String?
+  channel_id  String?
   created_at  DateTime @default(now())
   donor       Donor    @relation(fields: [donor_id], references: [id])
-  event       Event?   @relation(fields: [event_id], references: [id])
+  channel     Channel? @relation(fields: [channel_id], references: [id])
   pledge      PendingPledge?
 }
 
-model Event {
+model Channel {
   id         String          @id @default(cuid())
   name       String          @unique
   is_active  Boolean         @default(true)
@@ -70,11 +70,12 @@ model Reward {
   quantity_claimed Int           @default(0)
   is_active        Boolean       @default(true)
   custom_type_label String?
-  event_id         String?       // null = shared across all events
+  image_url        String?       // served at /api/uploads/<uuid>.webp
+  channel_id        String?       // null = shared across all channels
   created_at       DateTime      @default(now())
   updated_at       DateTime      @updatedAt
   claims           RewardClaim[]
-  event            Event?        @relation(fields: [event_id], references: [id])
+  channel          Channel?      @relation(fields: [channel_id], references: [id])
 }
 
 model RewardClaim {
@@ -101,13 +102,13 @@ model Poll {
   allow_custom_entries Boolean      @default(false)
   max_entry_chars      Int?
   auto_approve         Boolean      @default(true)
-  event_id             String?      // null = shared across all events
+  channel_id           String?      // null = shared across all channels
   created_at           DateTime     @default(now())
   updated_at           DateTime     @updatedAt
   options              PollOption[]
   votes                PollVote[]
   custom_entries       PollCustomEntry[]
-  event                Event?       @relation(fields: [event_id], references: [id])
+  channel              Channel?     @relation(fields: [channel_id], references: [id])
 }
 
 model PollOption {
@@ -161,11 +162,11 @@ model FundGoal {
   current_cents Int                @default(0)
   is_active     Boolean            @default(true)
   is_complete   Boolean            @default(false)
-  event_id      String?            // null = shared across all events
+  channel_id    String?            // null = shared across all channels
   created_at    DateTime           @default(now())
   updated_at    DateTime           @updatedAt
   contributions FundContribution[]
-  event         Event?             @relation(fields: [event_id], references: [id])
+  channel       Channel?           @relation(fields: [channel_id], references: [id])
 }
 
 model FundContribution {
@@ -205,14 +206,14 @@ model PendingPledge {
   checkout_session_id   String?      // Stripe Checkout Session id for deterministic linkage
   checkout_url          String?      // Stripe Checkout Session URL used in the redirect
   comment               String?      // donor comment captured in the cart before checkout
-  event_id              String?      // event this donation routes to (required at creation)
+  channel_id            String?      // channel this donation routes to (required at creation)
   fulfilled_by_donation_id String? @unique
   created_at            DateTime     @default(now())
   expires_at            DateTime
   updated_at            DateTime     @updatedAt
   items                 PledgeItem[]
   fulfilled_by          Donation?    @relation(fields: [fulfilled_by_donation_id], references: [id])
-  event                 Event?       @relation(fields: [event_id], references: [id])
+  channel               Channel?     @relation(fields: [channel_id], references: [id])
 }
 
 model PledgeItem {

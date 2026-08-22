@@ -149,4 +149,17 @@ export async function testDestination(id: string) {
   return data;
 }
 
+/** Upload a reward image via the shared moderator upload endpoint.
+ *  The admin bearer key satisfies moderatorAuth, so no separate admin
+ *  upload route is needed. */
+export async function uploadRewardImage(file: File): Promise<string> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const { data } = await adminClient.post('/api/moderator/uploads', fd, {
+    baseURL: '/',
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data.url as string;
+}
+
 export default adminClient;

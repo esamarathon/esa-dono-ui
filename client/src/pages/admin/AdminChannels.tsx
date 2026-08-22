@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import moderatorClient from '../../api/moderator';
+import adminClient from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage, type Event } from '../../types';
+import { apiErrorMessage, type Channel } from '../../types';
 
 interface EventForm {
   id?: string;
@@ -14,16 +14,16 @@ interface EventForm {
 
 const EMPTY: EventForm = { name: '', is_active: true };
 
-type EventModal = 'create' | Event | null;
+type ChannelModal = 'create' | Channel | null;
 
-export default function ModeratorEvents() {
-  const [events, setEvents] = useState<Event[]>([]);
+export default function AdminChannels() {
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<EventModal>(null);
+  const [modal, setModal] = useState<ChannelModal>(null);
   const [form, setForm] = useState<EventForm>(EMPTY);
   const [error, setError] = useState('');
 
-  const reload = () => moderatorClient.get('/events').then((r) => setEvents(r.data));
+  const reload = () => adminClient.get('/events').then((r) => setChannels(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
@@ -33,7 +33,7 @@ export default function ModeratorEvents() {
     setModal('create');
     setError('');
   };
-  const openEdit = (s: Event) => {
+  const openEdit = (s: Channel) => {
     setForm({ ...s });
     setModal(s);
     setError('');
@@ -42,8 +42,8 @@ export default function ModeratorEvents() {
   const handleSave = async () => {
     setError('');
     try {
-      if (modal === 'create') await moderatorClient.post('/events', form);
-      else if (modal) await moderatorClient.put(`/events/${modal.id}`, form);
+      if (modal === 'create') await adminClient.post('/events', form);
+      else if (modal) await adminClient.put(`/events/${modal.id}`, form);
       await reload();
       setModal(null);
     } catch (e) {
@@ -54,7 +54,7 @@ export default function ModeratorEvents() {
   const handleDeactivate = async (id: string) => {
     if (!confirm('Deactivate this event? Existing incentives/donations keep referencing it.'))
       return;
-    await moderatorClient.delete(`/events/${id}`);
+    await adminClient.delete(`/events/${id}`);
     await reload();
   };
 
@@ -71,11 +71,12 @@ export default function ModeratorEvents() {
 
       <p className="font-body text-sm text-off-white/55 mb-6">
         Every donation is routed to exactly one event. Rewards, polls, and fund goals can be tied to
-        a specific event or left shared (available to any event).
+        a specific event or left shared (available to any event). Deactivating an event hides it
+        from the /donate picker without deleting its history.
       </p>
 
       <div className="space-y-3">
-        {events.map((s) => (
+        {channels.map((s) => (
           <Card key={s.id}>
             <div className="flex justify-between items-center">
               <div>
@@ -104,7 +105,7 @@ export default function ModeratorEvents() {
             </div>
           </Card>
         ))}
-        {events.length === 0 && (
+        {channels.length === 0 && (
           <p className="font-body text-sm text-off-white/55">No events yet.</p>
         )}
       </div>
@@ -125,11 +126,11 @@ export default function ModeratorEvents() {
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"
-              id="modevent_active"
+              id="event_active"
               checked={form.is_active}
               onChange={(e) => setForm((d) => ({ ...d, is_active: e.target.checked }))}
             />
-            <label htmlFor="modevent_active" className="font-data text-sm text-off-white">
+            <label htmlFor="event_active" className="font-data text-sm text-off-white">
               active
             </label>
           </div>

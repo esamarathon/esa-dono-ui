@@ -82,6 +82,14 @@ export default function RewardList() {
           const soldOut = r.quantity_total !== null && r.quantity_claimed >= r.quantity_total;
           return (
             <Card key={r.id} className={soldOut ? 'opacity-50' : ''}>
+              {r.image_url && (
+                <img
+                  src={r.image_url}
+                  alt={r.title}
+                  loading="lazy"
+                  className="w-full h-40 object-cover rounded-sm mb-3"
+                />
+              )}
               <div className="flex justify-between items-start">
                 <div className="flex-1">
                   <h3 className="font-data font-bold text-lg text-off-white">{r.title}</h3>

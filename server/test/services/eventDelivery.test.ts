@@ -67,7 +67,7 @@ describe('PII allowlist — donation.created payload', () => {
       donationId: 'dn-1',
       externalId: 'ext-1',
       amountCents: 1000,
-      eventId: null,
+      channelId: null,
       donorRef: 'donor-ref-1',
     });
     const violations = findForbiddenKeys(payload);
@@ -79,7 +79,7 @@ describe('PII allowlist — donation.created payload', () => {
       donationId: 'dn-1',
       externalId: 'ext-1',
       amountCents: 1000,
-      eventId: null,
+      channelId: null,
       donorRef: 'donor-ref-1',
     });
     const keys = JSON.stringify(payload);
@@ -191,7 +191,7 @@ describe('emitWebhookEvent', () => {
       donationId: 'dn-1',
       externalId: 'ext-1',
       amountCents: 1000,
-      eventId: null,
+      channelId: null,
       donorRef: 'donor-ref-1',
     });
     await emitWebhookEvent('donation.created', payload);
@@ -224,7 +224,7 @@ describe('emitWebhookEvent', () => {
       donationId: 'dn-1',
       externalId: 'ext-1',
       amountCents: 1000,
-      eventId: null,
+      channelId: null,
       donorRef: 'donor-ref-1',
     });
     await emitWebhookEvent('donation.created', payload);
@@ -247,7 +247,7 @@ describe('emitWebhookEvent', () => {
       donationId: 'dn-1',
       externalId: 'ext-1',
       amountCents: 1000,
-      eventId: null,
+      channelId: null,
       donorRef: 'donor-ref-1',
     });
     await emitWebhookEvent('donation.created', payload);

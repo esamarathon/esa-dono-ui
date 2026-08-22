@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import moderatorClient from '../../api/moderator';
 import Card from '../../components/Card';
 import LoadingSpinner from '../../components/LoadingSpinner';
-import EventPill from '../../components/EventPill';
-import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
+import ChannelPill from '../../components/ChannelPill';
+import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import type { AdminDonation } from '../../types';
 
 function fmt(cents: number) {
@@ -13,7 +13,7 @@ function fmt(cents: number) {
 export default function ModeratorDonations() {
   const [donations, setDonations] = useState<AdminDonation[]>([]);
   const [loading, setLoading] = useState(true);
-  const { events, selectedEventId } = useModeratorEventFilter();
+  const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/donations').then((r) => setDonations(r.data));
   useEffect(() => {
@@ -25,13 +25,13 @@ export default function ModeratorDonations() {
     await reload();
   };
 
-  const eventName = (d: AdminDonation) => {
-    if (!d.event) return 'shared';
-    return events.find((e) => e.id === d.event?.id)?.name ?? 'unknown event';
+  const channelName = (d: AdminDonation) => {
+    if (!d.channel) return 'shared';
+    return channels.find((e) => e.id === d.channel?.id)?.name ?? 'unknown channel';
   };
 
   const filteredDonations = donations.filter(
-    (d) => !selectedEventId || d.event?.id === selectedEventId || d.event == null,
+    (d) => !selectedChannelId || d.channel?.id === selectedChannelId || d.channel == null,
   );
 
   if (loading) return <LoadingSpinner />;
@@ -49,7 +49,7 @@ export default function ModeratorDonations() {
                   <h3 className="font-data font-bold text-sm text-off-white break-words">
                     {d.donor_name ?? '-'}
                   </h3>
-                  <EventPill label={eventName(d)} />
+                  <ChannelPill label={channelName(d)} />
                 </div>
                 <p className="font-data font-bold text-sm text-d-yellow mt-1">
                   {fmt(d.amount_cents)}

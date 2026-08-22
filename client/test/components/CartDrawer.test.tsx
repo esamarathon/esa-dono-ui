@@ -7,13 +7,13 @@ import type { CartItem } from '../../src/types';
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
-vi.mock('../../src/api/events', () => ({ getEvents: vi.fn() }));
+vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
 
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
-import { getEvents } from '../../src/api/events';
+import { getChannels } from '../../src/api/channels';
 
 // Opens the drawer and (optionally) seeds the cart with enough items to
 // force the body to overflow, mirroring the "checkout button pushed
@@ -61,7 +61,7 @@ describe('CartDrawer', () => {
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
-    vi.mocked(getEvents).mockResolvedValue([]);
+    vi.mocked(getChannels).mockResolvedValue([]);
   });
 
   it('does not render when the drawer is closed', () => {

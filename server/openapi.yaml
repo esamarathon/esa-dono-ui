@@ -3,7 +3,7 @@ info:
   title: ESA Dono API
   description: |
     Donation platform with Stripe checkout, wallet balance, pledge (smart cart)
-    auto-fulfillment, rewards, polls, fund goals, events, and moderator/admin tooling.
+    auto-fulfillment, rewards, polls, fund goals, channels, and moderator/admin tooling.
 
     ## Authentication
 
@@ -34,15 +34,15 @@ info:
     20 requests per minute, keyed by the donor token (session cookie or
     `Authorization: Bearer`) or IP. Configurable via `RATE_LIMIT_SPEND`.
 
-    ## Events
+    ## Channels
 
-    Every donation routes to exactly one event (`GET /api/events` lists the active
-    ones). Rewards, polls, and fund goals may be tied to a specific event
-    (`event_id` set) or shared across all events (`event_id` null). `POST
-    /api/pledge` requires `event_id` and rejects any cart item whose incentive
-    belongs to a different event — incentives cannot be mixed across events in
-    a single donation. Events are managed via `/api/admin/events` and
-    `/api/moderator/events`; per-event raised totals are admin-only
+    Every donation routes to exactly one channel (`GET /api/channels` lists the active
+    ones). Rewards, polls, and fund goals may be tied to a specific channel
+    (`channel_id` set) or shared across all channels (`channel_id` null). `POST
+    /api/pledge` requires `channel_id` and rejects any cart item whose incentive
+    belongs to a different channel — incentives cannot be mixed across channels in
+    a single donation. Channels are managed via `/api/admin/channels` and
+    `/api/moderator/channels`; per-channel raised totals are admin-only
     (`GET /api/admin/stats`).
 
     ## Wallet Discount
@@ -71,7 +71,7 @@ tags:
   - name: Rewards
   - name: Polls
   - name: Goals
-  - name: Events
+  - name: Channels
   - name: Pledge
   - name: Webhook
   - name: Admin
@@ -460,19 +460,19 @@ paths:
         '200':
           description: Contribution recorded
 
-  # ─── Events ───
-  /events:
+  # ─── Channels ───
+  /channels:
     get:
-      tags: [Events]
-      summary: List active events
+      tags: [Channels]
+      summary: List active channels
       description: |
-        Every donation is routed to exactly one event (for correct overlay
+        Every donation is routed to exactly one channel (for correct overlay
         routing). Rewards, polls, and fund goals may be tied to a specific
-        event (`event_id` set) or shared across all events (`event_id`
-        null). Used by the /donate event picker.
+        channel (`channel_id` set) or shared across all channels (`channel_id`
+        null). Used by the /donate channel picker.
       responses:
         '200':
-          description: Active events ordered by created_at ascending
+          description: Active channels ordered by created_at ascending
           content:
             application/json:
               schema:
@@ -494,11 +494,11 @@ paths:
         a Stripe Checkout Session. When a valid donor token is provided via
         `?token=`, the donor's wallet balance is applied as a discount.
 
-        **Events:** every pledge is routed to exactly one event via the
-        required `event_id` (used to route the donation to the correct
+        **Channels:** every pledge is routed to exactly one channel via the
+        required `channel_id` (used to route the donation to the correct
         overlay). Each cart item's underlying reward/poll/goal must either be
-        shared (its own `event_id` is null) or match the pledge's
-        `event_id` — incentives cannot be mixed across events in a single
+        shared (its own `channel_id` is null) or match the pledge's
+        `channel_id` — incentives cannot be mixed across channels in a single
         transaction.
 
         **Wallet discount flow:**
@@ -518,7 +518,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [items, event_id]
+              required: [items, channel_id]
               properties:
                 email:
                   type: string
@@ -527,9 +527,9 @@ paths:
                 comment:
                   type: string
                   maxLength: 500
-                event_id:
+                channel_id:
                   type: string
-                  description: Required. The event this donation is routed to.
+                  description: Required. The channel this donation is routed to.
                 top_up_cents:
                   type: integer
                   minimum: 0
@@ -656,9 +656,9 @@ paths:
                   claims: { type: integer }
                   pledges: { type: integer }
                   total_raised_cents: { type: integer }
-                  events:
+                  channels:
                     type: array
-                    description: Per-event raised totals (admin-only; not shown publicly)
+                    description: Per-channel raised totals (admin-only; not shown publicly)
                     items:
                       type: object
                       properties:
@@ -667,17 +667,17 @@ paths:
                         raised_cents: { type: integer }
                         donations: { type: integer }
 
-  /admin/events:
+  /admin/channels:
     get:
       tags: [Admin]
-      summary: List all events
+      summary: List all channels
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All events ordered by created_at ascending
+          description: All channels ordered by created_at ascending
     post:
       tags: [Admin]
-      summary: Create an event
+      summary: Create a channel
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -691,14 +691,14 @@ paths:
                 is_active: { type: boolean, default: true }
       responses:
         '200':
-          description: Event created
+          description: Channel created
         '409':
-          description: Event name already exists
+          description: Channel name already exists
 
-  /admin/events/{id}:
+  /admin/channels/{id}:
     put:
       tags: [Admin]
-      summary: Update an event
+      summary: Update a channel
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -715,10 +715,10 @@ paths:
                 is_active: { type: boolean }
       responses:
         '200':
-          description: Event updated
+          description: Channel updated
     delete:
       tags: [Admin]
-      summary: Deactivate an event
+      summary: Deactivate a channel
       description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
       security: [{ AdminKey: [] }]
       parameters:
@@ -728,7 +728,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Event deactivated
+          description: Channel deactivated
 
   /admin/donations:
     get:
@@ -737,7 +737,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: Donations with donor email and event (id, name), ordered by created_at descending
+          description: Donations with donor email and channel (id, name), ordered by created_at descending
 
   /admin/claims:
     get:
@@ -802,7 +802,7 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean, default: true }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward created
@@ -830,7 +830,7 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward updated
@@ -865,10 +865,10 @@ paths:
                 amount_cents: { type: integer, minimum: 100 }
                 comment: { type: string }
                 pledge_token: { type: string }
-                event_id:
+                channel_id:
                   type: string
                   nullable: true
-                  description: Optional event to attribute this simulated donation to (bypasses the pledge flow's required-event check).
+                  description: Optional channel to attribute this simulated donation to (bypasses the pledge flow's required-channel check).
       responses:
         '200':
           description: Donation simulated
@@ -1138,7 +1138,7 @@ paths:
                 allow_custom_entries: { type: boolean, default: false }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll created
@@ -1166,7 +1166,7 @@ paths:
                 allow_custom_entries: { type: boolean }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll updated
@@ -1535,7 +1535,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -1560,7 +1560,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
                 is_complete: { type: boolean }
       responses:
@@ -1624,10 +1624,10 @@ paths:
                   total_rewards: { type: integer }
                   total_goals: { type: integer }
 
-  /moderator/events:
+  /moderator/channels:
     get:
       tags: [Moderator]
-      summary: List all events
+      summary: List all channels
       parameters:
         - name: token
           in: query
@@ -1635,10 +1635,10 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: All events ordered by created_at ascending
+          description: All channels ordered by created_at ascending
     post:
       tags: [Moderator]
-      summary: Create an event
+      summary: Create a channel
       parameters:
         - name: token
           in: query
@@ -1656,14 +1656,14 @@ paths:
                 is_active: { type: boolean, default: true }
       responses:
         '200':
-          description: Event created
+          description: Channel created
         '409':
-          description: Event name already exists
+          description: Channel name already exists
 
-  /moderator/events/{id}:
+  /moderator/channels/{id}:
     put:
       tags: [Moderator]
-      summary: Update an event
+      summary: Update a channel
       parameters:
         - name: token
           in: query
@@ -1683,10 +1683,10 @@ paths:
                 is_active: { type: boolean }
       responses:
         '200':
-          description: Event updated
+          description: Channel updated
     delete:
       tags: [Moderator]
-      summary: Deactivate an event
+      summary: Deactivate a channel
       description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
       parameters:
         - name: token
@@ -1699,7 +1699,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Event deactivated
+          description: Channel deactivated
 
   /moderator/polls:
     get:
@@ -1742,7 +1742,7 @@ paths:
                 allow_custom_entries: { type: boolean, default: false }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll created
@@ -1773,7 +1773,7 @@ paths:
                 allow_custom_entries: { type: boolean }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll updated
@@ -1910,6 +1910,37 @@ paths:
         '200':
           description: Entry updated
 
+  /moderator/uploads:
+    post:
+      tags: [Moderator]
+      summary: Upload a reward image
+      description: >
+        Accepts jpeg/png/webp/gif up to 8 MB. Resizes to ≤800 px wide and
+        re-encodes to webp (~quality 80) before storing. Returns the URL to
+        store in reward.image_url.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Upload succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, example: /api/uploads/uuid.webp }
+        '400':
+          description: Invalid file type or size exceeded
+
   /moderator/rewards:
     get:
       tags: [Moderator]
@@ -1945,7 +1976,8 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean, default: true }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                image_url: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward created
@@ -1976,7 +2008,8 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                image_url: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward updated
@@ -2048,7 +2081,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations with donor name (no donor email), event (id, name), and moderation status
+          description: Donations with donor name (no donor email), channel (id, name), and moderation status
 
   /moderator/donations/{id}:
     patch:
@@ -2113,7 +2146,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -2141,7 +2174,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
                 is_complete: { type: boolean }
       responses:

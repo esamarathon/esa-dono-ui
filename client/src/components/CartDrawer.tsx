@@ -46,11 +46,11 @@ export default function CartDrawer() {
     setCheckoutError,
     checkout,
     revalidateCart,
-    events,
-    selectedEventId,
+    channels,
+    selectedChannelId,
   } = useCart();
 
-  const activeEvent = events.find((s) => s.id === selectedEventId);
+  const activeChannel = channels.find((s) => s.id === selectedChannelId);
 
   const [donor, setDonor] = useState<DonorWallet | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
@@ -158,7 +158,7 @@ export default function CartDrawer() {
   const disableCheckout =
     submitting ||
     phase === 'checking' ||
-    !selectedEventId ||
+    !selectedChannelId ||
     (cart.length === 0 && topUpCents <= 0);
 
   return (
@@ -200,7 +200,7 @@ export default function CartDrawer() {
               event:{' '}
             </span>
             <span className="font-data font-bold text-off-white">
-              {activeEvent?.name ?? 'none selected'}
+              {activeChannel?.name ?? 'none selected'}
             </span>
           </div>
 

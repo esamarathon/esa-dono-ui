@@ -1,6 +1,8 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
+import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
 
 // INVARIANT: no handler in this file may select/include `donor.email` (or
 // return it via any other path) in a JSON response. Moderators can see
@@ -37,56 +39,56 @@ router.get('/stats', async (req, res) => {
   });
 });
 
-// Events CRUD
-router.get('/events', async (req, res) => {
-  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
+// Channels CRUD
+router.get('/channels', async (req, res) => {
+  res.json(await prisma.channel.findMany({ orderBy: { created_at: 'asc' } }));
 });
 
-router.post('/events', async (req, res) => {
+router.post('/channels', async (req, res) => {
   const { name, is_active } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: 'name is required' });
   }
   try {
-    const event = await prisma.event.create({
+    const channel = await prisma.channel.create({
       data: { name: String(name).trim(), is_active: is_active ?? true },
     });
-    res.json(event);
+    res.json(channel);
   } catch (e) {
     if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
+      return res.status(409).json({ error: 'Channel name already exists' });
     }
     throw e;
   }
 });
 
-router.put('/events/:id', async (req, res) => {
+router.put('/channels/:id', async (req, res) => {
   const { name, is_active } = req.body;
   try {
-    const event = await prisma.event.update({
+    const channel = await prisma.channel.update({
       where: { id: req.params.id },
       data: {
         ...(name !== undefined ? { name: String(name).trim() } : {}),
         ...(is_active !== undefined ? { is_active } : {}),
       },
     });
-    res.json(event);
+    res.json(channel);
   } catch (e) {
     if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
+      return res.status(409).json({ error: 'Channel name already exists' });
     }
     throw e;
   }
 });
 
-// Soft-delete: events may be referenced by incentives/donations/pledges, so
+// Soft-delete: channels may be referenced by incentives/donations/pledges, so
 // deactivate instead of hard-deleting to preserve those references.
-router.delete('/events/:id', async (req, res) => {
-  const event = await prisma.event.update({
+router.delete('/channels/:id', async (req, res) => {
+  const channel = await prisma.channel.update({
     where: { id: req.params.id },
     data: { is_active: false },
   });
-  res.json({ success: true, event });
+  res.json({ success: true, channel });
 });
 
 // Polls CRUD
@@ -109,7 +111,7 @@ router.post('/polls', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
   const poll = await prisma.poll.create({
     data: {
@@ -120,7 +122,7 @@ router.post('/polls', async (req, res) => {
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
       auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
       options: options?.length
         ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
         : undefined,
@@ -139,7 +141,7 @@ router.put('/polls/:id', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
   const poll = await prisma.poll.update({
     where: { id: req.params.id },
@@ -151,7 +153,7 @@ router.put('/polls/:id', async (req, res) => {
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
       auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
     include: { options: true },
   });
@@ -279,6 +281,28 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
 });
 
 // Rewards CRUD
+
+// Image upload — returns { url } for storing in reward.image_url.
+// Accepts jpeg/png/webp/gif up to 8 MB; resizes to ≤800 px wide and
+// re-encodes to webp (~80 quality) before writing to disk.
+router.post('/uploads', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+  try {
+    const filename = await processAndStore(req.file.buffer);
+    res.json({ url: publicUrlFor(filename) });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Multer error handler (file-type rejection, size exceeded, etc.)
+router.use('/uploads', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof multer.MulterError || err instanceof Error) {
+    return res.status(400).json({ error: err.message });
+  }
+  _next(err);
+});
+
 router.get('/rewards', async (req, res) => {
   res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
 });
@@ -292,7 +316,8 @@ router.post('/rewards', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
   const reward = await prisma.reward.create({
     data: {
@@ -303,7 +328,8 @@ router.post('/rewards', async (req, res) => {
       quantity_total: quantity_total ?? null,
       is_active: is_active ?? true,
       custom_type_label,
-      event_id: event_id || null,
+      image_url: image_url || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(reward);
@@ -318,8 +344,17 @@ router.put('/rewards/:id', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
+  // Best-effort cleanup of old upload if the image is being replaced/removed
+  const existing = await prisma.reward.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true },
+  });
+  if (existing && existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
   const reward = await prisma.reward.update({
     where: { id: req.params.id },
     data: {
@@ -330,7 +365,8 @@ router.put('/rewards/:id', async (req, res) => {
       quantity_total: quantity_total ?? null,
       is_active,
       custom_type_label,
-      event_id: event_id || null,
+      image_url: image_url || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(reward);
@@ -344,7 +380,12 @@ router.delete('/rewards/:id', async (req, res) => {
         error: 'Cannot delete a reward with existing claims; deactivate it instead',
       });
     }
+    const existing = await prisma.reward.findUnique({
+      where: { id: req.params.id },
+      select: { image_url: true },
+    });
     await prisma.reward.delete({ where: { id: req.params.id } });
+    await deleteUploadByUrl(existing?.image_url);
     res.json({ success: true });
   } catch (err) {
     const code = (err as { code?: string }).code;
@@ -398,7 +439,7 @@ router.patch('/claims/:id', async (req, res) => {
 // (see file-level invariant above; caught by moderator-donor-email.test.ts).
 router.get('/donations', async (req, res) => {
   const donations = await prisma.donation.findMany({
-    include: { event: { select: { id: true, name: true } } },
+    include: { channel: { select: { id: true, name: true } } },
     orderBy: { created_at: 'desc' },
   });
   res.json(donations);
@@ -416,7 +457,7 @@ router.patch('/donations/:id', async (req, res) => {
     data: moderated
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
       : { moderated: false, moderated_at: null, moderated_by: null },
-    include: { donor: { select: { id: true } }, event: { select: { id: true } } },
+    include: { donor: { select: { id: true } } },
   });
 
   const { emitWebhookEvent, buildDonationModeratedPayload } =
@@ -441,21 +482,21 @@ router.get('/goals', async (req, res) => {
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, event_id } = req.body;
+  const { title, description, target_cents, is_active, channel_id } = req.body;
   const goal = await prisma.fundGoal.create({
     data: {
       title,
       description,
       target_cents,
       is_active: is_active ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
-  const { title, description, target_cents, is_active, is_complete, event_id } = req.body;
+  const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
   const goal = await prisma.fundGoal.update({
     where: { id: req.params.id },
     data: {
@@ -464,7 +505,7 @@ router.put('/goals/:id', async (req, res) => {
       target_cents,
       is_active,
       is_complete,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(goal);

@@ -4,7 +4,7 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage, type Poll, type Event } from '../../types';
+import { apiErrorMessage, type Poll, type Channel } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -19,7 +19,7 @@ interface PollForm {
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
   auto_approve: boolean;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -30,14 +30,14 @@ const EMPTY: PollForm = {
   allow_custom_entries: false,
   max_entry_chars: '',
   auto_approve: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
 
 export default function AdminPolls() {
   const [polls, setPolls] = useState<Poll[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
@@ -48,13 +48,13 @@ export default function AdminPolls() {
 
   const reload = () => adminClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
-    Promise.all([reload(), adminClient.get('/events').then((r) => setEvents(r.data))]).finally(() =>
-      setLoading(false),
+    Promise.all([reload(), adminClient.get('/events').then((r) => setChannels(r.data))]).finally(
+      () => setLoading(false),
     );
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -66,7 +66,7 @@ export default function AdminPolls() {
       ...p,
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
-      event_id: p.event_id ?? null,
+      channel_id: p.channel_id ?? null,
     } as PollForm);
     setModal(p);
     setError('');
@@ -163,7 +163,7 @@ export default function AdminPolls() {
                   total votes: {fmt(poll.total_votes_cents)}
                 </p>
                 <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(poll.event_id)}
+                  event: {channelName(poll.channel_id)}
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
@@ -309,11 +309,11 @@ export default function AdminPolls() {
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
               <option value="">shared (any event)</option>
-              {events.map((s) => (
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

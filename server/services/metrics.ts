@@ -99,7 +99,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       prisma.donation.aggregate({ _sum: { amount_cents: true } }),
       prisma.donation.count(),
       prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
-      prisma.event.count({ where: { is_active: true } }),
+      prisma.channel.count({ where: { is_active: true } }),
       prisma.rewardClaim.count(),
       prisma.pollVote.count({ where: { reversed_at: null } }),
       Promise.all(

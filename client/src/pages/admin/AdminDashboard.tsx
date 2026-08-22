@@ -42,7 +42,7 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {stats.events && stats.events.length > 0 && (
+      {stats.channels && stats.channels.length > 0 && (
         <div className="mt-8">
           <h2 className="font-display text-2xl uppercase mb-4">per-event totals</h2>
           <div className="overflow-x-auto">
@@ -60,7 +60,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {stats.events.map((s) => (
+                {stats.channels.map((s) => (
                   <tr key={s.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                     <td className="px-4 py-2 font-data font-bold text-off-white">{s.name}</td>
                     <td className="px-4 py-2 font-data text-d-yellow">{fmt(s.raised_cents)}</td>

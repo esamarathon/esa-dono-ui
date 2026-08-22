@@ -6,3 +6,4 @@ server/prisma/dev.db-journal
 coverage
 .claude
 .server-context
+\n# Local dev reward image uploads (persisted to /data/uploads in prod)\nserver/uploads/

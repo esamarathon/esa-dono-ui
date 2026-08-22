@@ -16,9 +16,9 @@ import {
   LogoutIcon,
 } from '../../components/icons';
 import {
-  ModeratorEventFilterProvider,
-  useModeratorEventFilter,
-} from '../../context/ModeratorEventFilterContext';
+  ModeratorChannelFilterProvider,
+  useModeratorChannelFilter,
+} from '../../context/ModeratorChannelFilterContext';
 
 const NAV: SidebarNavItem[] = [
   { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
@@ -104,24 +104,24 @@ export default function ModeratorLayout() {
   }
 
   return (
-    <ModeratorEventFilterProvider>
+    <ModeratorChannelFilterProvider>
       <ModeratorLayoutInner keyValue={key} onLogout={logout} />
-    </ModeratorEventFilterProvider>
+    </ModeratorChannelFilterProvider>
   );
 }
 
 function EventFilterBar() {
-  const { events, selectedEventId, setSelectedEventId } = useModeratorEventFilter();
+  const { channels, selectedChannelId, setSelectedChannelId } = useModeratorChannelFilter();
   return (
     <div className="mb-6 flex items-center gap-3">
       <label className="font-data text-sm text-off-white/55">event filter</label>
       <select
         className="px-3 py-1.5 text-sm bg-transparent border border-off-white/20 rounded-sm"
-        value={selectedEventId ?? ''}
-        onChange={(e) => setSelectedEventId(e.target.value || null)}
+        value={selectedChannelId ?? ''}
+        onChange={(e) => setSelectedChannelId(e.target.value || null)}
       >
         <option value="">all events</option>
-        {events.map((e) => (
+        {channels.map((e) => (
           <option key={e.id} value={e.id}>
             {e.name}
           </option>

@@ -4,8 +4,8 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import EventPill from '../../components/EventPill';
-import { useModeratorEventFilter } from '../../context/ModeratorEventFilterContext';
+import ChannelPill from '../../components/ChannelPill';
+import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Poll, type CustomEntry } from '../../types';
 
 function fmt(cents: number) {
@@ -21,7 +21,7 @@ interface PollForm {
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
   auto_approve: boolean;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -32,7 +32,7 @@ const EMPTY: PollForm = {
   allow_custom_entries: false,
   max_entry_chars: '',
   auto_approve: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
@@ -48,18 +48,18 @@ export default function ModeratorPolls() {
   const [error, setError] = useState('');
   const [entriesPanel, setEntriesPanel] = useState<string | null>(null);
   const [entries, setEntries] = useState<CustomEntry[]>([]);
-  const { events, selectedEventId } = useModeratorEventFilter();
+  const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
 
   const filteredPolls = polls.filter(
-    (p) => !selectedEventId || p.event_id === selectedEventId || p.event_id == null,
+    (p) => !selectedChannelId || p.channel_id === selectedChannelId || p.channel_id == null,
   );
 
   const openCreate = () => {
@@ -72,7 +72,7 @@ export default function ModeratorPolls() {
       ...p,
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
-      event_id: p.event_id ?? null,
+      channel_id: p.channel_id ?? null,
     } as PollForm);
     setModal(p);
     setError('');
@@ -165,7 +165,7 @@ export default function ModeratorPolls() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
-                  <EventPill label={eventName(poll.event_id)} />
+                  <ChannelPill label={channelName(poll.channel_id)} />
                 </div>
                 {poll.description && (
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
@@ -286,7 +286,7 @@ export default function ModeratorPolls() {
               <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                 <div className="flex items-center gap-2 mb-2">
                   <h4 className="font-data font-bold text-sm text-off-white">custom entries</h4>
-                  <EventPill label={eventName(poll.event_id)} />
+                  <ChannelPill label={channelName(poll.channel_id)} />
                 </div>
                 {entries.length === 0 ? (
                   <p className="font-body text-xs text-off-white/55">No entries yet.</p>
@@ -399,11 +399,11 @@ export default function ModeratorPolls() {
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
               <option value="">shared (any event)</option>
-              {events.map((s) => (
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

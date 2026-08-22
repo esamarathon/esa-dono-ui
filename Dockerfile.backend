@@ -100,7 +100,7 @@ COPY --chown=dono:dono docker-entrypoint.backend.sh /usr/local/bin/docker-entryp
 # `prisma migrate deploy`), so no dev toolchain is shipped.
 RUN DATABASE_URL="file:./dev.db" npx prisma generate --schema=./server/prisma/schema.prisma \
  && chmod +x /usr/local/bin/docker-entrypoint.sh \
- && mkdir -p /data && chown dono:dono /data
+ && mkdir -p /data/uploads && chown dono:dono /data /data/uploads
 
 # Strip the npm CLI + corepack bundled into the Node base image. Nothing at
 # runtime invokes npm/npx (entrypoint uses node_modules/.bin/*), and their

@@ -23,7 +23,7 @@ interface CreatePledgeInput {
   comment?: string | null;
   items: PledgeItemInput[];
   top_up_cents?: number;
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
 const COMMENT_MAX_LENGTH = 500;
@@ -33,19 +33,19 @@ const COMMENT_MAX_LENGTH = 500;
  * Validates each item against live state, computes total, persists.
  * Returns { pledge_token, total_cents, donate_url }.
  *
- * Every pledge is routed to exactly one event: `event_id` is required and
- * must reference an active Event. Each cart item's underlying incentive
- * must either be shared (its own `event_id` is null) or belong to the same
- * event as the pledge — incentives cannot be mixed across events in a
+ * Every pledge is routed to exactly one channel: `channel_id` is required and
+ * must reference an active Channel. Each cart item's underlying incentive
+ * must either be shared (its own `channel_id` is null) or belong to the same
+ * channel as the pledge — incentives cannot be mixed across channels in a
  * single transaction. This is what lets the amount be routed to the correct
- * event overlay.
+ * channel overlay.
  */
 export async function createPledge({
   email,
   comment,
   items,
   top_up_cents,
-  event_id,
+  channel_id,
 }: CreatePledgeInput) {
   if (!items || !Array.isArray(items)) {
     throw Object.assign(new Error('At least one item required'), { status: 400 });
@@ -62,12 +62,12 @@ export async function createPledge({
     });
   }
 
-  if (!event_id || typeof event_id !== 'string') {
-    throw Object.assign(new Error('event_id is required'), { status: 400 });
+  if (!channel_id || typeof channel_id !== 'string') {
+    throw Object.assign(new Error('channel_id is required'), { status: 400 });
   }
-  const event = await prisma.event.findUnique({ where: { id: event_id } });
-  if (!event || !event.is_active) {
-    throw Object.assign(new Error('Event not found or inactive'), { status: 404 });
+  const channel = await prisma.channel.findUnique({ where: { id: channel_id } });
+  if (!channel || !channel.is_active) {
+    throw Object.assign(new Error('Channel not found or inactive'), { status: 404 });
   }
 
   let commentValue: string | null = null;
@@ -89,14 +89,14 @@ export async function createPledge({
   let totalCents = 0;
   let requiresShipping = false;
 
-  // An incentive with a null event_id is "shared" and may be added to any
-  // event's cart. An incentive tied to a specific event may only be added
-  // when it matches the pledge's event — incentives cannot be mixed across
-  // events in a single transaction.
-  const assertEventMatch = (incentiveEventId: string | null, label: string) => {
-    if (incentiveEventId && incentiveEventId !== event_id) {
+  // An incentive with a null channel_id is "shared" and may be added to any
+  // channel's cart. An incentive tied to a specific channel may only be added
+  // when it matches the pledge's channel — incentives cannot be mixed across
+  // channels in a single transaction.
+  const assertChannelMatch = (incentiveChannelId: string | null, label: string) => {
+    if (incentiveChannelId && incentiveChannelId !== channel_id) {
       throw Object.assign(
-        new Error(`${label} belongs to a different event and cannot be added to this cart`),
+        new Error(`${label} belongs to a different channel and cannot be added to this cart`),
         { status: 400 },
       );
     }
@@ -114,7 +114,7 @@ export async function createPledge({
       if (!reward || !reward.is_active) {
         throw Object.assign(new Error(`Reward not found: ${target_id}`), { status: 404 });
       }
-      assertEventMatch(reward.event_id, `Reward "${reward.title}"`);
+      assertChannelMatch(reward.channel_id, `Reward "${reward.title}"`);
       if (reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total) {
         throw Object.assign(new Error(`Reward sold out: ${reward.title}`), { status: 400 });
       }
@@ -135,7 +135,7 @@ export async function createPledge({
       if (!poll || !poll.is_active) {
         throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
       }
-      assertEventMatch(poll.event_id, `Poll "${poll.title}"`);
+      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
       if (poll.ends_at && new Date() > poll.ends_at) {
         throw Object.assign(new Error(`Poll has ended: ${poll.title}`), { status: 400 });
       }
@@ -156,7 +156,7 @@ export async function createPledge({
           status: 404,
         });
       }
-      assertEventMatch(goal.event_id, `Goal "${goal.title}"`);
+      assertChannelMatch(goal.channel_id, `Goal "${goal.title}"`);
       totalCents += amount_cents!;
     } else if (kind === 'POLL_CUSTOM') {
       if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
@@ -182,7 +182,7 @@ export async function createPledge({
       if (!poll || !poll.is_active) {
         throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
       }
-      assertEventMatch(poll.event_id, `Poll "${poll.title}"`);
+      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
       if (!poll.allow_custom_entries) {
         throw Object.assign(new Error(`Poll does not allow custom entries: ${poll.title}`), {
           status: 400,
@@ -218,7 +218,7 @@ export async function createPledge({
       requires_shipping: requiresShipping,
       status: 'OPEN',
       expires_at: expiresAt,
-      event_id,
+      channel_id,
       items: {
         create: items.map((item) => ({
           kind: item.kind,

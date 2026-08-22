@@ -13,14 +13,14 @@ vi.mock('../../src/api/polls', () => ({
 vi.mock('../../src/api/goals', () => ({
   getGoals: vi.fn(),
 }));
-vi.mock('../../src/api/events', () => ({
-  getEvents: vi.fn(),
+vi.mock('../../src/api/channels', () => ({
+  getChannels: vi.fn(),
 }));
 
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
-import { getEvents } from '../../src/api/events';
+import { getChannels } from '../../src/api/channels';
 
 // Exposes the drawer's open/closed state as text so tests can assert
 // whether clicking "review & checkout" actually opened it, without needing
@@ -50,9 +50,11 @@ describe('DonateFlow (tabbed browse page)', () => {
     // same sessionStorage key the CartContext reads its initial state from.
     sessionStorage.setItem(
       'donation_cart_v1',
-      JSON.stringify({ cart: [], topUp: '', comment: '', eventId: 'event-1' }),
+      JSON.stringify({ cart: [], topUp: '', comment: '', channelId: 'event-1' }),
     );
-    vi.mocked(getEvents).mockResolvedValue([{ id: 'event-1', name: 'Event One', is_active: true }]);
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'event-1', name: 'Event One', is_active: true },
+    ]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
   });

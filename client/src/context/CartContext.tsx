@@ -11,7 +11,7 @@ import {
 import { getRewards } from '../api/rewards';
 import { getPolls } from '../api/polls';
 import { getGoals } from '../api/goals';
-import { getEvents } from '../api/events';
+import { getChannels } from '../api/channels';
 import { createPledge } from '../api/pledge';
 import {
   apiErrorMessage,
@@ -19,7 +19,7 @@ import {
   type Reward,
   type Poll,
   type Goal,
-  type Event,
+  type Channel,
   type PledgeResult,
 } from '../types';
 
@@ -37,22 +37,22 @@ interface StoredCartState {
   cart: CartItem[];
   topUp: string;
   comment: string;
-  eventId: string | null;
+  channelId: string | null;
 }
 
 function loadStoredCart(): StoredCartState {
   try {
     const raw = sessionStorage.getItem(CART_STORAGE_KEY);
-    if (!raw) return { cart: [], topUp: '', comment: '', eventId: null };
+    if (!raw) return { cart: [], topUp: '', comment: '', channelId: null };
     const parsed = JSON.parse(raw) as Partial<StoredCartState>;
     return {
       cart: Array.isArray(parsed.cart) ? parsed.cart : [],
       topUp: typeof parsed.topUp === 'string' ? parsed.topUp : '',
       comment: typeof parsed.comment === 'string' ? parsed.comment : '',
-      eventId: typeof parsed.eventId === 'string' ? parsed.eventId : null,
+      channelId: typeof parsed.channelId === 'string' ? parsed.channelId : null,
     };
   } catch {
-    return { cart: [], topUp: '', comment: '', eventId: null };
+    return { cart: [], topUp: '', comment: '', channelId: null };
   }
 }
 
@@ -67,20 +67,20 @@ interface CartContextValue {
   loading: boolean;
 
   // Events — every donation is routed to exactly one event (required, for
-  // overlay routing). Incentives with a null event_id are shared and appear
+  // overlay routing). Incentives with a null channel_id are shared and appear
   // regardless of which event is selected; incentives tied to a specific
   // event only appear (and can only be added to the cart) when that event
   // is selected. A cart therefore can never mix incentives from two
-  // different events.
-  events: Event[];
-  selectedEventId: string | null;
+  // different channels.
+  channels: Channel[];
+  selectedChannelId: string | null;
   // Attempts to select an event. If the current cart holds items tied to a
   // *different* specific event, the switch is held pending confirmation
-  // (see pendingEventId) instead of applied immediately.
-  selectEvent: (eventId: string) => void;
-  pendingEventId: string | null;
-  confirmEventSwitch: () => void;
-  cancelEventSwitch: () => void;
+  // (see pendingChannelId) instead of applied immediately.
+  selectChannel: (channelId: string) => void;
+  pendingChannelId: string | null;
+  confirmChannelSwitch: () => void;
+  cancelChannelSwitch: () => void;
 
   // Cart contents
   cart: CartItem[];
@@ -140,17 +140,17 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [allRewards, setAllRewards] = useState<Reward[]>([]);
   const [allPolls, setAllPolls] = useState<Poll[]>([]);
   const [allGoals, setAllGoals] = useState<Goal[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
 
   const initialStored = useRef(loadStoredCart());
   const [cart, setCart] = useState<CartItem[]>(initialStored.current.cart);
   const [topUp, setTopUp] = useState(initialStored.current.topUp);
   const [comment, setComment] = useState(initialStored.current.comment);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(
-    initialStored.current.eventId,
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
+    initialStored.current.channelId,
   );
-  const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
   const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_STORAGE_KEY) || '');
 
   const [visited, setVisited] = useState<Set<IncentiveCategory>>(new Set());
@@ -159,11 +159,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [checkoutError, setCheckoutError] = useState('');
 
   const fetchAll = useCallback(async () => {
-    const [r, p, g, s] = await Promise.all([getRewards(), getPolls(), getGoals(), getEvents()]);
+    const [r, p, g, s] = await Promise.all([getRewards(), getPolls(), getGoals(), getChannels()]);
     setAllRewards(r);
     setAllPolls(p);
     setAllGoals(g);
-    setEvents(s);
+    setChannels(s);
     return { r, p, g, s };
   }, []);
 
@@ -178,40 +178,40 @@ export function CartProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sessionStorage.setItem(
       CART_STORAGE_KEY,
-      JSON.stringify({ cart, topUp, comment, eventId: selectedEventId }),
+      JSON.stringify({ cart, topUp, comment, channelId: selectedChannelId }),
     );
-  }, [cart, topUp, comment, selectedEventId]);
+  }, [cart, topUp, comment, selectedChannelId]);
 
-  // Visible incentive lists — shared (event_id null) + whichever event is
+  // Visible incentive lists — shared (channel_id null) + whichever event is
   // currently selected. Until an event is selected, only shared incentives
   // are shown; the /donate event picker requires a selection before the
   // donor can browse event-specific incentives at all.
   const rewards = useMemo(
-    () => allRewards.filter((r) => !r.event_id || r.event_id === selectedEventId),
-    [allRewards, selectedEventId],
+    () => allRewards.filter((r) => !r.channel_id || r.channel_id === selectedChannelId),
+    [allRewards, selectedChannelId],
   );
   const polls = useMemo(
-    () => allPolls.filter((p) => !p.event_id || p.event_id === selectedEventId),
-    [allPolls, selectedEventId],
+    () => allPolls.filter((p) => !p.channel_id || p.channel_id === selectedChannelId),
+    [allPolls, selectedChannelId],
   );
   const goals = useMemo(
-    () => allGoals.filter((g) => !g.event_id || g.event_id === selectedEventId),
-    [allGoals, selectedEventId],
+    () => allGoals.filter((g) => !g.channel_id || g.channel_id === selectedChannelId),
+    [allGoals, selectedChannelId],
   );
 
-  // Resolves the event_id of the incentive backing a cart item (null for
+  // Resolves the channel_id of the incentive backing a cart item (null for
   // shared incentives or items we can no longer find — the latter get
   // surfaced separately via revalidateCart).
-  const itemEventId = useCallback(
+  const itemChannelId = useCallback(
     (item: CartItem): string | null => {
       if (item.kind === 'REWARD') {
-        return allRewards.find((r) => r.id === item.target_id)?.event_id ?? null;
+        return allRewards.find((r) => r.id === item.target_id)?.channel_id ?? null;
       }
       if (item.kind === 'POLL_VOTE' || item.kind === 'POLL_CUSTOM') {
-        return allPolls.find((p) => p.id === item.poll_id)?.event_id ?? null;
+        return allPolls.find((p) => p.id === item.poll_id)?.channel_id ?? null;
       }
       if (item.kind === 'GOAL') {
-        return allGoals.find((g) => g.id === item.target_id)?.event_id ?? null;
+        return allGoals.find((g) => g.id === item.target_id)?.channel_id ?? null;
       }
       return null;
     },
@@ -248,38 +248,39 @@ export function CartProvider({ children }: { children: ReactNode }) {
   // event while the cart holds items tied to a *different* specific event
   // is held pending confirmation rather than applied immediately; shared
   // items are always kept regardless of which event ends up selected.
-  const selectEvent = useCallback(
-    (eventId: string) => {
-      if (eventId === selectedEventId) return;
+  const selectChannel = useCallback(
+    (channelId: string) => {
+      if (channelId === selectedChannelId) return;
       const hasConflict = cart.some((item) => {
-        const itemEventValue = itemEventId(item);
-        return itemEventValue && itemEventValue !== eventId;
+        const itemChannelValue = itemChannelId(item);
+        return itemChannelValue && itemChannelValue !== channelId;
       });
       if (hasConflict) {
-        setPendingEventId(eventId);
+        setPendingChannelId(channelId);
       } else {
-        setSelectedEventId(eventId);
+        setSelectedChannelId(channelId);
       }
     },
-    [cart, itemEventId, selectedEventId],
+    [cart, itemChannelId, selectedChannelId],
   );
 
-  const confirmEventSwitch = useCallback(() => {
-    if (!pendingEventId) return;
-    const nextEventId = pendingEventId;
-    setCart((prev) =>
-      prev.filter((item) => {
-        const itemEventValue = itemEventId(item);
-        return !itemEventValue || itemEventValue === nextEventId;
-      }),
-    );
-    setSelectedEventId(nextEventId);
-    setPendingEventId(null);
-  }, [pendingEventId, itemEventId]);
+  const confirmChannelSwitch = useCallback(() => {
+    if (!pendingChannelId) return;
+    const nextChannelId = pendingChannelId;
+    setCart((prev) => {
+      const keep = prev.filter((item) => {
+        const itemChannelValue = itemChannelId(item);
+        return !itemChannelValue || itemChannelValue === nextChannelId;
+      });
+      return keep;
+    });
+    setSelectedChannelId(nextChannelId);
+    setPendingChannelId(null);
+  }, [pendingChannelId, itemChannelId]);
 
-  const cancelEventSwitch = useCallback(() => {
-    setPendingEventId(null);
-  }, []);
+  const cancelChannelSwitch = useCallback(() => {
+    setPendingChannelId(null);
+  }, [pendingChannelId, itemChannelId]);
 
   const cartTotal = cart.reduce((sum, item) => sum + item.amount_cents, 0);
   const topUpCentsRaw = Math.round(parseFloat(topUp || '0') * 100);
@@ -349,7 +350,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setCheckoutError('Please enter your email address');
       return null;
     }
-    if (!selectedEventId) {
+    if (!selectedChannelId) {
       setCheckoutError('Select an event before checking out');
       return null;
     }
@@ -363,7 +364,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         email: email.trim(),
         comment: comment.trim() || undefined,
         top_up_cents: topUpCents > 0 ? topUpCents : undefined,
-        event_id: selectedEventId,
+        channel_id: selectedChannelId,
         items: cart.map((item) => ({
           kind: item.kind,
           target_id: item.target_id,
@@ -389,19 +390,19 @@ export function CartProvider({ children }: { children: ReactNode }) {
     } finally {
       setSubmitting(false);
     }
-  }, [email, comment, cart, topUpCents, selectedEventId, clearCart]);
+  }, [email, comment, cart, topUpCents, selectedChannelId, clearCart]);
 
   const value: CartContextValue = {
     rewards,
     polls,
     goals,
     loading,
-    events,
-    selectedEventId,
-    selectEvent,
-    pendingEventId,
-    confirmEventSwitch,
-    cancelEventSwitch,
+    channels,
+    selectedChannelId,
+    selectChannel,
+    pendingChannelId,
+    confirmChannelSwitch,
+    cancelChannelSwitch,
     cart,
     addToCart,
     removeFromCart,

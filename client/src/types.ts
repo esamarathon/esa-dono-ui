@@ -101,7 +101,8 @@ export interface Reward {
   quantity_claimed: number;
   is_active?: boolean;
   custom_type_label?: string | null;
-  event_id?: string | null;
+  image_url?: string | null;
+  channel_id?: string | null;
 }
 
 export interface PollOption {
@@ -124,7 +125,7 @@ export interface Poll {
   max_entry_chars?: number | null;
   auto_approve?: boolean;
   custom_entries?: CustomEntry[];
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
 export interface CustomEntry {
@@ -142,10 +143,10 @@ export interface Goal {
   target_cents: number;
   is_complete?: boolean;
   is_active?: boolean;
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
-export interface Event {
+export interface Channel {
   id: string;
   name: string;
   is_active: boolean;
@@ -204,7 +205,7 @@ export interface AdminStats {
   donations: number;
   claims: number;
   pledges: number;
-  events?: { id: string; name: string; raised_cents: number; donations: number }[];
+  channels?: { id: string; name: string; raised_cents: number; donations: number }[];
 }
 
 export interface BlockedWord {
@@ -222,7 +223,7 @@ export interface AdminDonation {
   moderated?: boolean;
   moderated_at?: string | null;
   moderated_by?: string | null;
-  event?: { id: string; name: string } | null;
+  channel?: { id: string; name: string } | null;
 }
 
 export interface AdminClaim {
@@ -231,7 +232,12 @@ export interface AdminClaim {
   claim_data?: unknown;
   created_at: string;
   donor?: { email?: string } | null;
-  reward?: { title?: string; type?: string; cost_cents?: number; event_id?: string | null } | null;
+  reward?: {
+    title?: string;
+    type?: string;
+    cost_cents?: number;
+    channel_id?: string | null;
+  } | null;
 }
 
 export interface SpendRecord {

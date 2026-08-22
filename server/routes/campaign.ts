@@ -6,7 +6,7 @@ const router = Router();
 const STUB_CAMPAIGN = {
   name: 'ESA Charity Marathon',
   description:
-    'A charity speedrunning event raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!',
+    'A charity speedrunning channel raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!',
   goal: { value: '5000.00' },
 };
 

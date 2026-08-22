@@ -31,12 +31,12 @@ export default function DonateFlow() {
     loading,
     openDrawer,
     hasVisited,
-    events,
-    selectedEventId,
-    selectEvent,
-    pendingEventId,
-    confirmEventSwitch,
-    cancelEventSwitch,
+    channels,
+    selectedChannelId,
+    selectChannel,
+    pendingChannelId,
+    confirmChannelSwitch,
+    cancelChannelSwitch,
   } = useCart();
   const location = useLocation();
 
@@ -111,20 +111,22 @@ export default function DonateFlow() {
           the picker filters what's shown below. */}
       <div className="btrl-panel p-4 mb-6">
         <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">event</p>
-        {events.length === 0 ? (
+        {channels.length === 0 ? (
           <p className="font-body text-sm text-off-white/55">No events are open right now.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {events.map((s) => (
+            {channels.map((s) => (
               <button
                 key={s.id}
-                onClick={() => selectEvent(s.id)}
+                onClick={() => selectChannel(s.id)}
                 className={`font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
-                  selectedEventId === s.id ? 'text-black' : 'text-off-white/55 hover:text-off-white'
+                  selectedChannelId === s.id
+                    ? 'text-black'
+                    : 'text-off-white/55 hover:text-off-white'
                 }`}
                 style={{
                   background:
-                    selectedEventId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
+                    selectedChannelId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
                 }}
               >
                 {s.name}
@@ -132,31 +134,31 @@ export default function DonateFlow() {
             ))}
           </div>
         )}
-        {!selectedEventId && events.length > 0 && (
+        {!selectedChannelId && channels.length > 0 && (
           <p className="font-body text-xs text-off-white/55 mt-2">
             Select an event to see its rewards, polls, and fund goals.
           </p>
         )}
       </div>
 
-      {pendingEventId && (
-        <Modal title="switch event?" onClose={cancelEventSwitch}>
+      {pendingChannelId && (
+        <Modal title="switch event?" onClose={cancelChannelSwitch}>
           <p className="font-body text-sm text-off-white/55 mb-4">
             Your cart has items tied to your current event. Incentives can't be mixed across events
             in one donation — switching will remove those items from your cart (shared items stay).
           </p>
           <div className="flex justify-end gap-2">
-            <button onClick={cancelEventSwitch} className="btrl-button btrl-button-outline">
+            <button onClick={cancelChannelSwitch} className="btrl-button btrl-button-outline">
               cancel
             </button>
-            <button onClick={confirmEventSwitch} className="btrl-button">
+            <button onClick={confirmChannelSwitch} className="btrl-button">
               switch &amp; clear those items
             </button>
           </div>
         </Modal>
       )}
 
-      {!selectedEventId ? null : (
+      {!selectedChannelId ? null : (
         <>
           {/* Tab bar — still clickable for jumping directly to a category. A
           checkmark marks any category the donor has already opened. */}

@@ -5,7 +5,7 @@ vi.mock('../../lib/prisma.js', () => ({
     donor: { count: vi.fn() },
     donation: { aggregate: vi.fn(), count: vi.fn() },
     pendingPledge: { count: vi.fn() },
-    event: { count: vi.fn() },
+    channel: { count: vi.fn() },
     rewardClaim: { count: vi.fn() },
     pollVote: { count: vi.fn() },
     balanceAdjustment: { count: vi.fn() },
@@ -27,7 +27,7 @@ describe('refreshBusinessMetrics', () => {
     } as any);
     vi.mocked(prisma.donation.count).mockResolvedValue(7);
     vi.mocked(prisma.pendingPledge.count).mockResolvedValue(2);
-    vi.mocked(prisma.event.count).mockResolvedValue(1);
+    vi.mocked(prisma.channel.count).mockResolvedValue(1);
     vi.mocked(prisma.rewardClaim.count).mockResolvedValue(4);
     vi.mocked(prisma.pollVote.count).mockResolvedValue(9);
     vi.mocked(prisma.balanceAdjustment.count).mockResolvedValue(0);

@@ -64,7 +64,7 @@ With Postgres, `EventDelivery` becomes a clean outbox table, and the worker can 
 
 | Event                     | Emit site                                  | Payload contract                                                            |
 | ------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| `donation.created`        | `donation.ts` (post-commit, non-duplicate) | `{ donation_id, external_id, amount_cents, event_id, donor_ref }`           |
+| `donation.created`        | `donation.ts` (post-commit, non-duplicate) | `{ donation_id, external_id, amount_cents, channel_id, donor_ref }`         |
 | `donation.moderated`      | `moderator.ts`                             | `{ donation_id, external_id, donor_ref, moderated, moderated_at }`          |
 | `incentive.created`       | admin.ts POST rewards/polls/goals          | `{ incentive_kind, incentive_id, title, is_active, <value fields> }`        |
 | `incentive.enabled`       | admin.ts PUT (is_active false→true)        | `{ incentive_kind, incentive_id, title }`                                   |
