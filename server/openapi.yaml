@@ -1315,6 +1315,203 @@ paths:
         '200':
           description: Deleted
 
+  /admin/destinations:
+    get:
+      tags: [Admin]
+      summary: List event destinations
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All endpoints ordered by created_at descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookEndpoint'
+    post:
+      tags: [Admin]
+      summary: Create an event destination
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination_type:
+                  type: string
+                  enum: [HTTP, RABBITMQ]
+                  default: HTTP
+                url: { type: string, format: uri, description: 'Required for HTTP endpoints' }
+                secret: { type: string, description: 'Optional. Auto-generated if omitted.' }
+                event_types:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      [
+                        donation.created,
+                        donation.moderated,
+                        incentive.created,
+                        incentive.enabled,
+                        incentive.disabled,
+                        incentive.value_changed,
+                      ]
+                verify_ssl: { type: boolean, default: true }
+                description: { type: string }
+                amqp_url:
+                  {
+                    type: string,
+                    description: 'Required for RabbitMQ endpoints. Must be amqp:// or amqps://',
+                  }
+                amqp_exchange: { type: string, default: '' }
+                amqp_routing_key: { type: string, description: 'Required for RabbitMQ endpoints' }
+      responses:
+        '201':
+          description: Endpoint created (secret included on creation only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpoint'
+        '400':
+          description: Validation error
+
+  /admin/destinations/{id}:
+    delete:
+      tags: [Admin]
+      summary: Delete an event destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '404':
+          description: Endpoint not found
+
+    put:
+      tags: [Admin]
+      summary: Update an event destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination_type: { type: string, enum: [HTTP, RABBITMQ] }
+                url: { type: string, format: uri }
+                event_types:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      [
+                        donation.created,
+                        donation.moderated,
+                        incentive.created,
+                        incentive.enabled,
+                        incentive.disabled,
+                        incentive.value_changed,
+                      ]
+                verify_ssl: { type: boolean }
+                is_active: { type: boolean }
+                description: { type: string }
+                amqp_url: { type: string }
+                amqp_exchange: { type: string }
+                amqp_routing_key: { type: string }
+      responses:
+        '200':
+          description: Endpoint updated
+        '400':
+          description: Validation error
+        '404':
+          description: Endpoint not found
+
+  /admin/destinations/{id}/rotate-secret:
+    post:
+      tags: [Admin]
+      summary: Rotate destination secret
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: New secret returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpoint'
+        '404':
+          description: Endpoint not found
+
+  /admin/destinations/{id}/deliveries:
+    get:
+      tags: [Admin]
+      summary: Get delivery log for an endpoint
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Paginated delivery log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookDelivery'
+                  total: { type: integer }
+
+  /admin/destinations/{id}/test:
+    post:
+      tags: [Admin]
+      summary: Send a test ping to an endpoint
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Test delivery queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  seq: { type: integer }
+        '404':
+          description: Endpoint not found
+
   /admin/goals:
     get:
       tags: [Admin]
@@ -1973,3 +2170,63 @@ components:
       in: header
       name: X-Admin-Key
       description: Admin API key matching `ADMIN_API_KEY` env var
+  schemas:
+    EventDestination:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        secret:
+          {
+            type: string,
+            description: 'Included on creation only; use rotate-secret to obtain a new value',
+          }
+        is_active: { type: boolean }
+        event_types:
+          type: array
+          items:
+            type: string
+            enum:
+              [
+                donation.created,
+                donation.moderated,
+                incentive.created,
+                incentive.enabled,
+                incentive.disabled,
+                incentive.value_changed,
+              ]
+        verify_ssl: { type: boolean }
+        description: { type: string, nullable: true }
+        destination_type:
+          type: string
+          enum: [HTTP, RABBITMQ]
+          default: HTTP
+        amqp_url:
+          {
+            type: string,
+            nullable: true,
+            description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
+          }
+        amqp_exchange: { type: string, default: '' }
+        amqp_routing_key:
+          { type: string, nullable: true, description: 'Required for RabbitMQ endpoints' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EventDelivery:
+      type: object
+      properties:
+        id: { type: string }
+        seq: { type: integer }
+        endpoint_id: { type: string }
+        event_type: { type: string }
+        payload: { type: string }
+        status:
+          type: string
+          enum: [PENDING, SUCCESS, FAILED]
+        attempts: { type: integer }
+        max_attempts: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        last_status_code: { type: integer, nullable: true }
+        last_error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

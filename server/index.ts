@@ -14,6 +14,7 @@ import pledgeRouter from './routes/pledge.js';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
+import { startEventDispatcher } from './services/eventDispatcher.js';
 import prisma from './lib/prisma.js';
 
 const app = express();
@@ -60,4 +61,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  startEventDispatcher();
+});

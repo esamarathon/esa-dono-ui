@@ -6,6 +6,13 @@ import { adminAuth } from '../middleware/adminAuth.js';
 import { processDonation } from '../services/donation.js';
 import { refundGoalContributions, refundPollOptionVotes } from '../services/refund.js';
 import { TOKEN_TTL_MS } from '../config.js';
+import {
+  emitWebhookEvent,
+  buildIncentiveCreatedPayload,
+  buildIncentiveEnabledPayload,
+  buildIncentiveDisabledPayload,
+  buildIncentiveValueChangedPayload,
+} from '../services/eventDelivery.js';
 
 const router = Router();
 router.use(adminAuth);
@@ -171,6 +178,16 @@ router.post('/rewards', async (req, res) => {
       event_id: event_id || null,
     },
   });
+  emitWebhookEvent(
+    'incentive.created',
+    buildIncentiveCreatedPayload({
+      incentiveKind: 'REWARD',
+      incentiveId: reward.id,
+      title: reward.title,
+      isActive: reward.is_active,
+      costCents: reward.cost_cents,
+    }),
+  );
   res.json(reward);
 });
 
@@ -185,6 +202,10 @@ router.put('/rewards/:id', async (req, res) => {
     custom_type_label,
     event_id,
   } = req.body;
+
+  const prior = await prisma.reward.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Reward not found' });
+
   const reward = await prisma.reward.update({
     where: { id: req.params.id },
     data: {
@@ -198,6 +219,42 @@ router.put('/rewards/:id', async (req, res) => {
       event_id: event_id || null,
     },
   });
+
+  if (!prior.is_active && reward.is_active) {
+    emitWebhookEvent(
+      'incentive.enabled',
+      buildIncentiveEnabledPayload({
+        incentiveKind: 'REWARD',
+        incentiveId: reward.id,
+        title: reward.title,
+      }),
+    );
+  } else if (prior.is_active && !reward.is_active) {
+    emitWebhookEvent(
+      'incentive.disabled',
+      buildIncentiveDisabledPayload({
+        incentiveKind: 'REWARD',
+        incentiveId: reward.id,
+        title: reward.title,
+      }),
+    );
+  }
+
+  if (prior.cost_cents !== reward.cost_cents) {
+    const changedFields = ['cost_cents'];
+    emitWebhookEvent(
+      'incentive.value_changed',
+      buildIncentiveValueChangedPayload({
+        incentiveKind: 'REWARD',
+        incentiveId: reward.id,
+        title: reward.title,
+        changedFields,
+        oldCostCents: prior.cost_cents,
+        newCostCents: reward.cost_cents,
+      }),
+    );
+  }
+
   res.json(reward);
 });
 
@@ -601,6 +658,16 @@ router.post('/polls', async (req, res) => {
     },
     include: { options: true },
   });
+  emitWebhookEvent(
+    'incentive.created',
+    buildIncentiveCreatedPayload({
+      incentiveKind: 'POLL',
+      incentiveId: poll.id,
+      title: poll.title,
+      isActive: poll.is_active,
+      endsAt: poll.ends_at,
+    }),
+  );
   res.json(poll);
 });
 
@@ -615,6 +682,10 @@ router.put('/polls/:id', async (req, res) => {
     auto_approve,
     event_id,
   } = req.body;
+
+  const prior = await prisma.poll.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Poll not found' });
+
   const poll = await prisma.poll.update({
     where: { id: req.params.id },
     data: {
@@ -629,6 +700,46 @@ router.put('/polls/:id', async (req, res) => {
     },
     include: { options: true },
   });
+
+  if (!prior.is_active && poll.is_active) {
+    emitWebhookEvent(
+      'incentive.enabled',
+      buildIncentiveEnabledPayload({
+        incentiveKind: 'POLL',
+        incentiveId: poll.id,
+        title: poll.title,
+      }),
+    );
+  } else if (prior.is_active && !poll.is_active) {
+    emitWebhookEvent(
+      'incentive.disabled',
+      buildIncentiveDisabledPayload({
+        incentiveKind: 'POLL',
+        incentiveId: poll.id,
+        title: poll.title,
+      }),
+    );
+  }
+
+  const oldEndsAt = prior.ends_at ? new Date(prior.ends_at) : null;
+  const newEndsAt = poll.ends_at ? new Date(poll.ends_at) : null;
+  const oldEndsMs = oldEndsAt ? oldEndsAt.getTime() : null;
+  const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
+  if (oldEndsMs !== newEndsMs) {
+    const changedFields = ['ends_at'];
+    emitWebhookEvent(
+      'incentive.value_changed',
+      buildIncentiveValueChangedPayload({
+        incentiveKind: 'POLL',
+        incentiveId: poll.id,
+        title: poll.title,
+        changedFields,
+        oldEndsAt,
+        newEndsAt,
+      }),
+    );
+  }
+
   res.json(poll);
 });
 
@@ -736,11 +847,25 @@ router.post('/goals', async (req, res) => {
       event_id: event_id || null,
     },
   });
+  emitWebhookEvent(
+    'incentive.created',
+    buildIncentiveCreatedPayload({
+      incentiveKind: 'GOAL',
+      incentiveId: goal.id,
+      title: goal.title,
+      isActive: goal.is_active,
+      targetCents: goal.target_cents,
+    }),
+  );
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
   const { title, description, target_cents, is_active, is_complete, event_id } = req.body;
+
+  const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Goal not found' });
+
   const goal = await prisma.fundGoal.update({
     where: { id: req.params.id },
     data: {
@@ -752,11 +877,50 @@ router.put('/goals/:id', async (req, res) => {
       event_id: event_id || null,
     },
   });
+
+  if (!prior.is_active && goal.is_active) {
+    emitWebhookEvent(
+      'incentive.enabled',
+      buildIncentiveEnabledPayload({
+        incentiveKind: 'GOAL',
+        incentiveId: goal.id,
+        title: goal.title,
+      }),
+    );
+  } else if (prior.is_active && !goal.is_active) {
+    emitWebhookEvent(
+      'incentive.disabled',
+      buildIncentiveDisabledPayload({
+        incentiveKind: 'GOAL',
+        incentiveId: goal.id,
+        title: goal.title,
+      }),
+    );
+  }
+
+  if (prior.target_cents !== goal.target_cents) {
+    const changedFields = ['target_cents'];
+    emitWebhookEvent(
+      'incentive.value_changed',
+      buildIncentiveValueChangedPayload({
+        incentiveKind: 'GOAL',
+        incentiveId: goal.id,
+        title: goal.title,
+        changedFields,
+        oldTargetCents: prior.target_cents,
+        newTargetCents: goal.target_cents,
+      }),
+    );
+  }
+
   res.json(goal);
 });
 
 router.delete('/goals/:id', async (req, res) => {
   try {
+    const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
+    if (!prior) return res.status(404).json({ error: 'Goal not found' });
+
     const result = await prisma.$transaction(async (tx) => {
       const refund = await refundGoalContributions(tx, req.params.id);
       await tx.fundGoal.update({
@@ -765,6 +929,18 @@ router.delete('/goals/:id', async (req, res) => {
       });
       return refund;
     });
+
+    if (prior.is_active) {
+      emitWebhookEvent(
+        'incentive.disabled',
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: prior.id,
+          title: prior.title,
+        }),
+      );
+    }
+
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -780,6 +956,238 @@ router.post('/goals/:id/refund', async (req, res) => {
     const status = (err as { status?: number }).status || 500;
     res.status(status).json({ error: (err as Error).message });
   }
+});
+
+// Webhook endpoints
+const WEBHOOK_EVENT_TYPE_KEYS: string[] = [
+  'donation.created',
+  'donation.moderated',
+  'incentive.created',
+  'incentive.enabled',
+  'incentive.disabled',
+  'incentive.value_changed',
+];
+
+router.get('/destinations', async (req, res) => {
+  const endpoints = await prisma.eventDestination.findMany({
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(
+    endpoints.map((ep) => ({
+      ...ep,
+      event_types: JSON.parse(ep.event_types),
+    })),
+  );
+});
+
+router.post('/destinations', async (req, res) => {
+  const {
+    url,
+    secret,
+    event_types,
+    verify_ssl,
+    description,
+    destination_type,
+    amqp_url,
+    amqp_exchange,
+    amqp_routing_key,
+  } = req.body;
+
+  const destType = destination_type ?? 'HTTP';
+
+  if (destType === 'HTTP') {
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'url is required for HTTP endpoints' });
+    }
+    try {
+      new URL(url);
+    } catch {
+      return res.status(400).json({ error: 'url must be a valid URL' });
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return res.status(400).json({ error: 'url must use http or https' });
+    }
+  } else if (destType === 'RABBITMQ') {
+    if (!amqp_url || typeof amqp_url !== 'string') {
+      return res.status(400).json({ error: 'amqp_url is required for RabbitMQ endpoints' });
+    }
+    if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+      return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
+    }
+    if (!amqp_routing_key || typeof amqp_routing_key !== 'string') {
+      return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
+    }
+  } else {
+    return res.status(400).json({ error: 'destination_type must be HTTP or RABBITMQ' });
+  }
+
+  if (event_types && !Array.isArray(event_types)) {
+    return res.status(400).json({ error: 'event_types must be an array' });
+  }
+  if (
+    event_types &&
+    !event_types.every((t: unknown) => WEBHOOK_EVENT_TYPE_KEYS.includes(t as string))
+  ) {
+    return res.status(400).json({ error: 'event_types contains invalid event type' });
+  }
+
+  const generatedSecret = secret || crypto.randomBytes(32).toString('hex');
+  const destination = await prisma.eventDestination.create({
+    data: {
+      url: url ?? '',
+      secret: generatedSecret,
+      event_types: JSON.stringify(event_types ?? []),
+      verify_ssl: verify_ssl ?? true,
+      description: description ?? null,
+      destination_type: destType,
+      amqp_url: amqp_url ?? null,
+      amqp_exchange: amqp_exchange ?? '',
+      amqp_routing_key: amqp_routing_key ?? null,
+    },
+  });
+  res.status(201).json({
+    ...destination,
+    event_types: JSON.parse(destination.event_types),
+  });
+});
+
+router.put('/destinations/:id', async (req, res) => {
+  const {
+    url,
+    event_types,
+    verify_ssl,
+    is_active,
+    description,
+    destination_type,
+    amqp_url,
+    amqp_exchange,
+    amqp_routing_key,
+  } = req.body;
+
+  const destType = destination_type ?? 'HTTP';
+
+  if (destType === 'HTTP') {
+    if (url !== undefined) {
+      try {
+        new URL(url);
+      } catch {
+        return res.status(400).json({ error: 'url must be a valid URL' });
+      }
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return res.status(400).json({ error: 'url must use http or https' });
+      }
+    }
+  } else if (destType === 'RABBITMQ') {
+    if (amqp_url !== undefined) {
+      if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+        return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
+      }
+    }
+    if (amqp_routing_key !== undefined && typeof amqp_routing_key !== 'string') {
+      return res.status(400).json({ error: 'amqp_routing_key must be a string' });
+    }
+  } else {
+    return res.status(400).json({ error: 'destination_type must be HTTP or RABBITMQ' });
+  }
+
+  if (event_types !== undefined) {
+    if (!Array.isArray(event_types)) {
+      return res.status(400).json({ error: 'event_types must be an array' });
+    }
+    if (!event_types.every((t: unknown) => WEBHOOK_EVENT_TYPE_KEYS.includes(t as string))) {
+      return res.status(400).json({ error: 'event_types contains invalid event type' });
+    }
+  }
+
+  const endpoint = await prisma.eventDestination.update({
+    where: { id: req.params.id },
+    data: {
+      ...(url !== undefined ? { url } : {}),
+      ...(event_types !== undefined ? { event_types: JSON.stringify(event_types) } : {}),
+      ...(verify_ssl !== undefined ? { verify_ssl } : {}),
+      ...(is_active !== undefined ? { is_active } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(destination_type !== undefined ? { destination_type: destType } : {}),
+      ...(amqp_url !== undefined ? { amqp_url } : {}),
+      ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
+      ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
+    },
+  });
+  res.json({
+    ...endpoint,
+    event_types: JSON.parse(endpoint.event_types),
+  });
+});
+
+router.post('/destinations/:id/rotate-secret', async (req, res) => {
+  const newSecret = crypto.randomBytes(32).toString('hex');
+  const destination = await prisma.eventDestination.update({
+    where: { id: req.params.id },
+    data: { secret: newSecret },
+  });
+  res.json({
+    ...destination,
+    event_types: JSON.parse(destination.event_types),
+  });
+});
+
+router.delete('/destinations/:id', async (req, res) => {
+  try {
+    await prisma.eventDestination.delete({ where: { id: req.params.id } });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'P2025') {
+      return res.status(404).json({ error: 'Webhook endpoint not found' });
+    }
+    throw err;
+  }
+  res.json({ success: true });
+});
+
+router.get('/destinations/:id/deliveries', async (req, res) => {
+  const { limit = 50, offset = 0 } = req.query;
+  const [deliveries, total] = await Promise.all([
+    prisma.eventDelivery.findMany({
+      where: { destination_id: req.params.id },
+      orderBy: { seq: 'desc' },
+      take: Number(limit),
+      skip: Number(offset),
+    }),
+    prisma.eventDelivery.count({ where: { destination_id: req.params.id } }),
+  ]);
+  res.json({ deliveries, total });
+});
+
+router.post('/destinations/:id/test', async (req, res) => {
+  const endpoint = await prisma.eventDestination.findUnique({ where: { id: req.params.id } });
+  if (!endpoint) return res.status(404).json({ error: 'Webhook endpoint not found' });
+
+  const payload = {
+    id: crypto.randomUUID(),
+    type: 'ping',
+    created_at: new Date().toISOString(),
+    data: { message: 'test ping from donation platform' },
+  };
+
+  const seq = await prisma.$transaction(async (tx) => {
+    const row = await tx.eventDestinationSeq.upsert({
+      where: { destination_id: req.params.id },
+      create: { destination_id: req.params.id, seq: 1 },
+      update: { seq: { increment: 1 } },
+    });
+    await tx.eventDelivery.create({
+      data: {
+        destination_id: req.params.id,
+        seq: row.seq,
+        event_type: 'ping',
+        payload: JSON.stringify(payload),
+        status: 'PENDING',
+        next_attempt_at: new Date(),
+      },
+    });
+    return row.seq;
+  });
+
+  res.json({ success: true, seq });
 });
 
 export default router;

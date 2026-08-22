@@ -410,12 +410,28 @@ router.patch('/donations/:id', async (req, res) => {
     return res.status(400).json({ error: 'moderated must be a boolean' });
   }
   const moderatorEmail = req.donor?.email || 'moderator';
+
   const donation = await prisma.donation.update({
     where: { id: req.params.id },
     data: moderated
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
       : { moderated: false, moderated_at: null, moderated_by: null },
+    include: { donor: { select: { id: true } }, event: { select: { id: true } } },
   });
+
+  const { emitWebhookEvent, buildDonationModeratedPayload } =
+    await import('../services/eventDelivery.js');
+  emitWebhookEvent(
+    'donation.moderated',
+    buildDonationModeratedPayload({
+      donationId: donation.id,
+      externalId: donation.external_id,
+      donorRef: donation.donor.id,
+      moderated,
+      moderatedAt: donation.moderated_at,
+    }),
+  );
+
   res.json(donation);
 });
 

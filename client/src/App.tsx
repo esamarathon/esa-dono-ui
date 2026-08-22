@@ -18,6 +18,7 @@ import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
 import AdminPledges from './pages/admin/AdminPledges';
+import AdminDestinations from './pages/admin/AdminDestinations';
 import ModeratorLayout from './pages/moderator/ModeratorLayout';
 import ModeratorDashboard from './pages/moderator/ModeratorDashboard';
 import ModeratorEvents from './pages/moderator/ModeratorEvents';
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="simulate" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
+          <Route path="destinations" element={<AdminDestinations />} />
         </Route>
         <Route path="/moderate" element={<ModeratorLayout />}>
           <Route index element={<ModeratorDashboard />} />
