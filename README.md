@@ -137,6 +137,27 @@ The backend exposes `GET /api/metrics` in Prometheus text format. It's reachable
 
 Since the endpoint is public, it's also rate-limited per IP (`RATE_LIMIT_METRICS`, default 30/min) as a backstop against unauthenticated scraping/scanning traffic.
 
+## Outbound Event Delivery (Webhooks & RabbitMQ)
+
+Admins can configure destinations at `/admin/destinations` to receive notifications when platform events occur — new donations, moderation changes, and incentive lifecycle changes (create/enable/disable/value-change) across rewards, polls, and goals.
+
+**Event types:** `donation.created`, `donation.moderated`, `incentive.created`, `incentive.enabled`, `incentive.disabled`, `incentive.value_changed`
+
+Each destination picks a transport:
+
+- **HTTP** — signed POST with `X-Webhook-Signature: t=<ts>,v1=<hmac>` (Stripe-style HMAC-SHA256), configurable SSL verification for self-signed certs
+- **RabbitMQ** — published via `amqplib` to a configured exchange/routing key, using publisher confirms
+
+**Delivery guarantees:**
+
+- At-least-once, per-destination FIFO ordering — one destination stalling on a bad response never blocks or reorders another destination's queue
+- Persistent SQLite-backed outbox (`EventDelivery` table) — survives process restarts; a destination outage is tolerated for roughly an hour (5 retry attempts, exponential backoff capped at 60 min) before the delivery is marked permanently `FAILED`
+- Payloads are PII-safe: explicit allowlist serializers, never a raw Prisma object spread. Donor identity is a pseudonymous `donor_ref` (the donor's opaque `id`) — never email, name, or comment
+
+No environment variables are required for this feature — destinations, secrets, and RabbitMQ connection URLs are all configured at runtime through the admin UI, not `.env`.
+
+For the full design rationale (outbox model, retry/backoff schedule, FIFO semantics, PII allowlist details, and RabbitMQ publisher-confirm mechanics), see [ADR-0005](docs/adr/0005-outbound-webhooks.md).
+
 ## Production Deployment
 
 The project uses a **two-container** architecture: a Node.js Express API (`Dockerfile.backend`) and an nginx SPA server (`Dockerfile.frontend`).
@@ -377,6 +398,7 @@ packages/shared/  Cross-cutting types (@dono/shared)
 - **Pledge/Cart system**: Donors select incentives before donating. Pledge resolves by relay key or email fallback.
 - **Moderator/admin access**: Donors have a `role` (`USER`/`MODERATOR`/`ADMIN`) resolved on every authenticated request from the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (never granted as a side effect of donating — see `server/lib/roles.ts`). `MODERATOR_API_KEY`/`ADMIN_API_KEY` provide operational fallback access to moderator routes independent of donor roles.
 - **Metrics**: `GET /api/metrics` (Prometheus format) is gated by `METRICS_API_KEY`. Runtime/HTTP metrics are collected in-process; business metrics are derived from the database on a background interval and cached, so scraping never adds database load — see [Metrics (Prometheus)](#metrics-prometheus).
+- **Outbound event delivery**: admin-configured destinations (HTTP or RabbitMQ) receive donation/incentive events via a persistent, per-destination FIFO outbox with retry/backoff — see [Outbound Event Delivery](#outbound-event-delivery-webhooks--rabbitmq).
 
 ## Troubleshooting
 
@@ -405,3 +427,10 @@ packages/shared/  Cross-cutting types (@dono/shared)
 - SQLite handles concurrent reads but serializes writes. Under high write load, you may see `SQLITE_BUSY` errors.
 - The app uses Prisma transactions for all balance mutations to keep writes atomic.
 - For production at scale, consider migrating to PostgreSQL (change `datasource.provider` and `DATABASE_URL`).
+
+### Event destination not receiving deliveries
+
+- Check the destination's delivery log in `/admin/destinations` (expand the row) — `PENDING` rows are still retrying; `FAILED` rows have exhausted 5 attempts (~1 hour of backoff) and will **not** retry automatically.
+- For HTTP destinations, verify `verify_ssl` matches your certificate (a self-signed cert with `verify_ssl: true` will fail every attempt).
+- For RabbitMQ destinations, confirm the exchange/queue already exists — the app does not declare topology, it only publishes to `amqp_exchange`/`amqp_routing_key` as configured.
+- Use the "test" action on a destination to send a synthetic ping and confirm wiring end-to-end before debugging a specific event type.
