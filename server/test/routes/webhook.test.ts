@@ -7,7 +7,17 @@ vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
 }));
 
+vi.mock('../../services/auction.js', () => ({
+  advanceCascadeTx: vi.fn(),
+  settleWinTx: vi.fn(),
+}));
+
+vi.mock('../../lib/prisma.js', () => ({
+  default: { $transaction: vi.fn((fn: (tx: unknown) => unknown) => fn({})) },
+}));
+
 import { processDonation } from '../../services/donation.js';
+import { advanceCascadeTx, settleWinTx } from '../../services/auction.js';
 import webhookRouter from '../../routes/webhook.js';
 
 function createApp() {
@@ -170,5 +180,67 @@ describe('POST /api/webhooks/stripe', () => {
       pledgeToken: 'pledge-abc',
       shippingCents: 700,
     });
+  });
+});
+
+describe('auction session events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.STRIPE_WEBHOOK_SECRET = '';
+    process.env.STRIPE_SECRET_KEY = '';
+  });
+
+  it('settles a paid auction session without touching processDonation', async () => {
+    vi.mocked(settleWinTx).mockResolvedValue({ settled: true });
+
+    const payload = JSON.stringify(
+      checkoutEvent({ id: 'cs_auction_1', metadata: { auction_id: 'auc_1' } }),
+    );
+
+    const res = await request(createApp())
+      .post('/api/webhooks/stripe')
+      .set('Content-Type', 'application/json')
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(settleWinTx).toHaveBeenCalledWith({}, 'auc_1', 'cs_auction_1');
+    expect(processDonation).not.toHaveBeenCalled();
+  });
+
+  it('advances the cascade on an expired auction session', async () => {
+    vi.mocked(advanceCascadeTx).mockResolvedValue({ advanced: true, status: 'AWAITING_PAYMENT' });
+
+    const payload = JSON.stringify({
+      id: 'evt_test_2',
+      type: 'checkout.session.expired',
+      data: {
+        object: { id: 'cs_auction_2', metadata: { auction_id: 'auc_2' } },
+      },
+    });
+
+    const res = await request(createApp())
+      .post('/api/webhooks/stripe')
+      .set('Content-Type', 'application/json')
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(advanceCascadeTx).toHaveBeenCalledWith({}, 'auc_2', 'cs_auction_2');
+  });
+
+  it('ignores an expired session with no auction metadata (pledge sessions)', async () => {
+    const payload = JSON.stringify({
+      id: 'evt_test_3',
+      type: 'checkout.session.expired',
+      data: { object: { id: 'cs_pledge_1', metadata: {} } },
+    });
+
+    const res = await request(createApp())
+      .post('/api/webhooks/stripe')
+      .set('Content-Type', 'application/json')
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(advanceCascadeTx).not.toHaveBeenCalled();
+    expect(processDonation).not.toHaveBeenCalled();
   });
 });

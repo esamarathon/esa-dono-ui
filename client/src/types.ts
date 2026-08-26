@@ -83,12 +83,39 @@ export interface WalletCustomEntry {
   option?: { votes_cents: number; status: string } | null;
 }
 
+export interface WalletBid {
+  id: string;
+  amount_cents: number;
+  status: string;
+  created_at: string;
+  auction: { title: string; status: string };
+}
+
+export interface WalletAuctionOffer {
+  id: string;
+  amount_cents: number;
+  checkout_url?: string | null;
+  expires_at: string;
+  auction: { title: string };
+}
+
+export interface WalletAuctionWin {
+  id: string;
+  winning_bid_cents: number;
+  status: string;
+  created_at: string;
+  auction: { title: string };
+}
+
 export interface DonorWallet extends Donor {
   donations: DonationRecord[];
   reward_claims: RewardClaim[];
   poll_votes: WalletPollVote[];
   fund_contributions: WalletContribution[];
   custom_entries: WalletCustomEntry[];
+  bids?: WalletBid[];
+  auction_offers?: WalletAuctionOffer[];
+  auction_wins?: WalletAuctionWin[];
 }
 
 export interface Reward {
@@ -150,6 +177,52 @@ export interface Channel {
   id: string;
   name: string;
   is_active: boolean;
+}
+
+export type AuctionStatus =
+  'OPEN' | 'CLOSED' | 'AWAITING_PAYMENT' | 'SETTLED' | 'UNSOLD' | 'CANCELLED';
+
+export interface Auction {
+  id: string;
+  title: string;
+  description?: string | null;
+  type: string;
+  custom_type_label?: string | null;
+  image_url?: string | null;
+  starting_price_cents: number;
+  min_increment_cents: number;
+  current_bid_cents: number | null;
+  current_bidder_id?: string | null;
+  min_next_bid_cents: number | null;
+  ends_at: string;
+  status: AuctionStatus;
+  is_active?: boolean;
+  channel_id?: string | null;
+  bids?: { id: string; amount_cents: number; status: string; created_at: string }[];
+}
+
+export interface AuctionOffer {
+  id: string;
+  auction_id: string;
+  donor_id: string;
+  bid_id: string;
+  rank: number;
+  amount_cents: number;
+  checkout_url?: string | null;
+  status: string;
+  expires_at: string;
+  emailed_at?: string | null;
+}
+
+export interface AuctionWin {
+  id: string;
+  auction_id: string;
+  donor_id: string;
+  winning_bid_cents: number;
+  status: string;
+  created_at: string;
+  auction?: { title: string };
+  donor?: { email?: string };
 }
 
 export interface Campaign {

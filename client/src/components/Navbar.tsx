@@ -88,6 +88,14 @@ export default function Navbar() {
         help
       </NavLink>
       <NavLink
+        to="/auctions"
+        className={({ isActive }) =>
+          `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
+        }
+      >
+        auctions
+      </NavLink>
+      <NavLink
         to="/donate"
         className={({ isActive }) =>
           `font-data font-bold text-sm tracking-wider uppercase text-black no-underline px-3 py-1 rounded-sm hover:opacity-90 ${isActive ? 'opacity-80' : ''}`

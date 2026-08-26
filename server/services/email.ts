@@ -37,3 +37,41 @@ export async function sendMagicLink(email: string, token: string): Promise<void>
     `,
   });
 }
+
+/**
+ * Notify a bidder that they are the current offer-holder on a silent
+ * auction: they have a fixed window to pay via the given Stripe Checkout
+ * URL before the offer expires and cascades to the next-highest bidder.
+ * Also used to resend the same offer on demand (identical copy).
+ */
+export async function sendAuctionOfferEmail(params: {
+  email: string;
+  auctionTitle: string;
+  amountCents: number;
+  checkoutUrl: string;
+  expiresAt: Date;
+}): Promise<void> {
+  const { email, auctionTitle, amountCents, checkoutUrl, expiresAt } = params;
+  const amount = (amountCents / 100).toFixed(2);
+  const deadline = expiresAt.toUTCString();
+
+  if (!transporter) {
+    console.log(
+      `Auction offer for ${email} — "${auctionTitle}" ($${amount}), pay by ${deadline}: ${checkoutUrl}`,
+    );
+    return;
+  }
+
+  await transporter.sendMail({
+    from: process.env.EMAIL_FROM || 'Donation Platform <no-reply@example.com>',
+    to: email,
+    subject: `You're the winning bidder on "${auctionTitle}" — pay within 24 hours`,
+    html: `
+      <h2>You're currently the winning bidder!</h2>
+      <p>Your bid of <strong>$${amount}</strong> on <strong>${auctionTitle}</strong> is the highest offer.</p>
+      <p>You have <strong>24 hours</strong> (until ${deadline}) to complete payment. If payment isn't
+      received by then, this offer expires and the item goes to the next highest bidder.</p>
+      <p><a href="${checkoutUrl}">Complete your payment</a></p>
+    `,
+  });
+}

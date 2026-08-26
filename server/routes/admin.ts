@@ -6,6 +6,12 @@ import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { processDonation } from '../services/donation.js';
 import { refundGoalContributions, refundPollOptionVotes } from '../services/refund.js';
+import {
+  closeAuctionTx,
+  cancelAuctionTx,
+  skipCurrentOfferTx,
+  resendCurrentOfferTx,
+} from '../services/auction.js';
 import { TOKEN_TTL_MS } from '../config.js';
 
 const router = Router();
@@ -797,6 +803,180 @@ router.post('/goals/:id/refund', async (req, res) => {
     const status = (err as { status?: number }).status || 500;
     res.status(status).json({ error: (err as Error).message });
   }
+});
+
+// Auctions CRUD
+router.get('/auctions', async (req, res) => {
+  res.json(
+    await prisma.auction.findMany({
+      orderBy: { created_at: 'desc' },
+      include: { current_offer: true },
+    }),
+  );
+});
+
+router.post('/auctions', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
+    return res.status(400).json({
+      error: 'title, type, starting_price_cents, min_increment_cents, and ends_at are required',
+    });
+  }
+  const auction = await prisma.auction.create({
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      starting_price_cents,
+      min_increment_cents,
+      ends_at: new Date(ends_at),
+      is_active: is_active ?? true,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.put('/auctions/:id', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  const existing = await prisma.auction.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true, status: true },
+  });
+  if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  if (existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
+  const auction = await prisma.auction.update({
+    where: { id: req.params.id },
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      // Pricing/deadline are only safe to change while bidding is still open.
+      ...(existing.status === 'OPEN'
+        ? {
+            starting_price_cents,
+            min_increment_cents,
+            ends_at: ends_at ? new Date(ends_at) : undefined,
+          }
+        : {}),
+      is_active,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.delete('/auctions/:id', async (req, res) => {
+  try {
+    const bidCount = await prisma.bid.count({ where: { auction_id: req.params.id } });
+    if (bidCount > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete an auction with existing bids; cancel or deactivate it instead',
+      });
+    }
+    const existing = await prisma.auction.findUnique({
+      where: { id: req.params.id },
+      select: { image_url: true },
+    });
+    await prisma.auction.delete({ where: { id: req.params.id } });
+    await deleteUploadByUrl(existing?.image_url);
+    res.json({ success: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'P2025') return res.status(404).json({ error: 'Auction not found' });
+    if (code === 'P2003') {
+      return res.status(409).json({
+        error: 'Cannot delete an auction with existing bids; cancel or deactivate it instead',
+      });
+    }
+    throw err;
+  }
+});
+
+router.get('/auctions/:id/offers', async (req, res) => {
+  const offers = await prisma.auctionOffer.findMany({
+    where: { auction_id: req.params.id },
+    include: { donor: { select: { email: true, id: true } } },
+    orderBy: { rank: 'asc' },
+  });
+  res.json(offers);
+});
+
+router.post('/auctions/:id/close', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => closeAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/cancel', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => cancelAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/skip-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => skipCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/resend-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => resendCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/auction-wins', async (req, res) => {
+  res.json(
+    await prisma.auctionWin.findMany({
+      include: { auction: true, donor: { select: { email: true } } },
+      orderBy: { created_at: 'desc' },
+    }),
+  );
 });
 
 export default router;

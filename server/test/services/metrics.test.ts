@@ -9,6 +9,9 @@ vi.mock('../../lib/prisma.js', () => ({
     rewardClaim: { count: vi.fn() },
     pollVote: { count: vi.fn() },
     balanceAdjustment: { count: vi.fn() },
+    auction: { count: vi.fn() },
+    bid: { count: vi.fn() },
+    auctionWin: { count: vi.fn() },
   },
 }));
 
@@ -31,6 +34,9 @@ describe('refreshBusinessMetrics', () => {
     vi.mocked(prisma.rewardClaim.count).mockResolvedValue(4);
     vi.mocked(prisma.pollVote.count).mockResolvedValue(9);
     vi.mocked(prisma.balanceAdjustment.count).mockResolvedValue(0);
+    vi.mocked(prisma.auction.count).mockResolvedValue(0);
+    vi.mocked(prisma.bid.count).mockResolvedValue(0);
+    vi.mocked(prisma.auctionWin.count).mockResolvedValue(0);
   });
 
   it('populates gauges from aggregate DB queries', async () => {

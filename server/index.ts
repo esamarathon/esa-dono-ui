@@ -14,12 +14,14 @@ import pledgeRouter from './routes/pledge.js';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
+import auctionsRouter from './routes/auctions.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { metricsAuth } from './middleware/metricsAuth.js';
 import { metricsLimit } from './middleware/rateLimit.js';
 import { register } from './lib/metrics.js';
 import { startMetricsRefresh } from './services/metrics.js';
+import { startAuctionScheduler } from './services/auctionScheduler.js';
 import { UPLOADS_DIR, ensureUploadsDir } from './lib/uploads.js';
 
 const app = express();
@@ -84,6 +86,8 @@ app.use('/api/pledge', pledgeRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
+app.use('/api/auctions', auctionsRouter);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 startMetricsRefresh();
+startAuctionScheduler();

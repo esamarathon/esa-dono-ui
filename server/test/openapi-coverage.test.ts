@@ -78,6 +78,7 @@ describe('OpenAPI route coverage', () => {
     const { default: authRouter } = await import('../routes/auth.js');
     const { default: adminRouter } = await import('../routes/admin.js');
     const { default: moderatorRouter } = await import('../routes/moderator.js');
+    const { default: auctionsRouter } = await import('../routes/auctions.js');
 
     app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
     app.use(express.json());
@@ -92,6 +93,7 @@ describe('OpenAPI route coverage', () => {
     app.use('/api/auth', authRouter);
     app.use('/api/admin', adminRouter);
     app.use('/api/moderator', moderatorRouter);
+    app.use('/api/auctions', auctionsRouter);
 
     const expressRoutes = extractRoutes(app);
 

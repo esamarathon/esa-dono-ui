@@ -25,6 +25,19 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
         include: { poll: true, option: true },
         orderBy: { created_at: 'desc' },
       },
+      bids: {
+        include: { auction: { select: { title: true, status: true } } },
+        orderBy: { created_at: 'desc' },
+      },
+      auction_offers: {
+        where: { status: 'SENT' },
+        include: { auction: { select: { title: true } } },
+        orderBy: { created_at: 'desc' },
+      },
+      auction_wins: {
+        include: { auction: { select: { title: true } } },
+        orderBy: { created_at: 'desc' },
+      },
     },
   });
   if (!donor) return res.status(404).json({ error: 'Donor not found' });

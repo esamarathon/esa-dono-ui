@@ -28,6 +28,10 @@ model Donor {
   fund_contributions FundContribution[]
   balance_adjustments BalanceAdjustment[]
   custom_entries    PollCustomEntry[]
+  bids              Bid[]
+  auction_offers    AuctionOffer[]
+  auction_wins      AuctionWin[]
+  current_bid_auctions Auction[] @relation("CurrentBidder")
 }
 
 model Donation {
@@ -58,6 +62,7 @@ model Channel {
   goals      FundGoal[]
   donations  Donation[]
   pledges    PendingPledge[]
+  auctions   Auction[]
 }
 
 model Reward {
@@ -226,4 +231,89 @@ model PledgeItem {
   data        String?      // JSON string for claim_data (shoutout message, custom reward fields, etc.)
   created_at  DateTime     @default(now())
   pledge      PendingPledge @relation(fields: [pledge_id], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Auctions (silent-auction / cascading-offer model)
+//
+// Bids are non-binding commitments — NOT wallet deductions (unlike rewards,
+// polls, and goals). At close, the highest bidder is offered the item via a
+// Stripe Checkout Session (24h window) that collects payment AND, for
+// physical items, the shipping address natively on Stripe's side — the
+// address never touches this application or database. If an offer expires
+// unpaid, the cascade advances to the next-highest bidder at their own bid
+// price, walking the entire ranked list until someone pays or it's
+// exhausted (UNSOLD). See docs/adr for the full design rationale.
+// ---------------------------------------------------------------------------
+
+model Auction {
+  id                  String          @id @default(cuid())
+  title               String
+  description         String?
+  type                String          // DIGITAL | PHYSICAL | SHOUTOUT | CUSTOM
+  custom_type_label   String?
+  image_url           String?         // served at /api/uploads/<uuid>.webp
+  starting_price_cents Int
+  min_increment_cents Int
+  current_bid_cents   Int?            // denormalized high bid, mirrors Bid rows
+  current_bidder_id   String?
+  ends_at             DateTime
+  status              String          @default("OPEN") // OPEN | CLOSED | AWAITING_PAYMENT | SETTLED | UNSOLD | CANCELLED
+  current_offer_id    String?         @unique
+  channel_id          String?         // null = shared across all channels
+  is_active           Boolean         @default(true)
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @updatedAt
+  bids                Bid[]
+  offers              AuctionOffer[]  @relation("AuctionOffers")
+  current_offer       AuctionOffer?   @relation("CurrentOffer", fields: [current_offer_id], references: [id])
+  win                 AuctionWin?
+  channel             Channel?        @relation(fields: [channel_id], references: [id])
+  current_bidder      Donor?          @relation("CurrentBidder", fields: [current_bidder_id], references: [id])
+}
+
+model Bid {
+  id           String    @id @default(cuid())
+  auction_id   String
+  donor_id     String
+  amount_cents Int
+  rank         Int?      // stamped at close: 1 = highest, collapsed to one bid per donor
+  status       String    @default("ACTIVE") // ACTIVE | OUTBID | OFFERED | WON | PASSED
+  created_at   DateTime  @default(now())
+  auction      Auction   @relation(fields: [auction_id], references: [id])
+  donor        Donor     @relation(fields: [donor_id], references: [id])
+}
+
+model AuctionOffer {
+  id                  String    @id @default(cuid())
+  auction_id          String
+  donor_id            String
+  bid_id              String
+  rank                Int
+  amount_cents        Int
+  checkout_session_id String?   @unique
+  checkout_url        String?
+  status              String    @default("SENT") // SENT | PAID | EXPIRED | SKIPPED
+  expires_at          DateTime
+  emailed_at          DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  auction             Auction   @relation("AuctionOffers", fields: [auction_id], references: [id])
+  current_for         Auction?  @relation("CurrentOffer")
+  donor               Donor     @relation(fields: [donor_id], references: [id])
+}
+
+model AuctionWin {
+  id                  String    @id @default(cuid())
+  auction_id          String    @unique
+  donor_id            String
+  winning_bid_cents   Int
+  checkout_session_id String
+  status              String    @default("FULFILLED") // FULFILLED | REVERSED (reversal action reserved for future use)
+  reversed_at         DateTime?
+  reversed_by         String?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  auction             Auction   @relation(fields: [auction_id], references: [id])
+  donor               Donor     @relation(fields: [donor_id], references: [id])
 }

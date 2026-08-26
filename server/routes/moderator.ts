@@ -3,6 +3,12 @@ import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
+import {
+  closeAuctionTx,
+  cancelAuctionTx,
+  skipCurrentOfferTx,
+  resendCurrentOfferTx,
+} from '../services/auction.js';
 
 // INVARIANT: no handler in this file may select/include `donor.email` (or
 // return it via any other path) in a JSON response. Moderators can see
@@ -498,6 +504,144 @@ router.put('/goals/:id', async (req, res) => {
 router.delete('/goals/:id', async (req, res) => {
   await prisma.fundGoal.delete({ where: { id: req.params.id } });
   res.json({ success: true });
+});
+
+// Auctions CRUD — same shape as admin, but offer/cascade views never expose
+// donor.email (see file-level invariant above); donor_id is fine since it's
+// an opaque identifier, not personal data.
+router.get('/auctions', async (req, res) => {
+  res.json(
+    await prisma.auction.findMany({
+      orderBy: { created_at: 'desc' },
+      include: { current_offer: true },
+    }),
+  );
+});
+
+router.post('/auctions', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
+    return res.status(400).json({
+      error: 'title, type, starting_price_cents, min_increment_cents, and ends_at are required',
+    });
+  }
+  const auction = await prisma.auction.create({
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      starting_price_cents,
+      min_increment_cents,
+      ends_at: new Date(ends_at),
+      is_active: is_active ?? true,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.put('/auctions/:id', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  const existing = await prisma.auction.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true, status: true },
+  });
+  if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  if (existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
+  const auction = await prisma.auction.update({
+    where: { id: req.params.id },
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      ...(existing.status === 'OPEN'
+        ? {
+            starting_price_cents,
+            min_increment_cents,
+            ends_at: ends_at ? new Date(ends_at) : undefined,
+          }
+        : {}),
+      is_active,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.get('/auctions/:id/offers', async (req, res) => {
+  const offers = await prisma.auctionOffer.findMany({
+    where: { auction_id: req.params.id },
+    orderBy: { rank: 'asc' },
+  });
+  res.json(offers);
+});
+
+router.post('/auctions/:id/close', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => closeAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/cancel', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => cancelAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/skip-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => skipCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/resend-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => resendCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
 });
 
 export default router;

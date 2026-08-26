@@ -63,6 +63,36 @@ const balanceAdjustmentsTotal = new client.Gauge({
   registers: [register],
 });
 
+const auctionsOpen = new client.Gauge({
+  name: 'dono_auctions_open',
+  help: 'Number of auctions currently open for bidding',
+  registers: [register],
+});
+
+const auctionsAwaitingPayment = new client.Gauge({
+  name: 'dono_auctions_awaiting_payment',
+  help: 'Number of auctions currently mid-cascade awaiting payment from an offer-holder',
+  registers: [register],
+});
+
+const auctionBidsActive = new client.Gauge({
+  name: 'dono_auction_bids_active',
+  help: 'Number of active (non-outbid/passed) auction bids',
+  registers: [register],
+});
+
+const auctionWinsTotal = new client.Gauge({
+  name: 'dono_auction_wins_total',
+  help: 'Total number of settled (paid) auction wins',
+  registers: [register],
+});
+
+const auctionsUnsold = new client.Gauge({
+  name: 'dono_auctions_unsold',
+  help: 'Number of auctions that closed with no bidder completing payment',
+  registers: [register],
+});
+
 const metricsRefreshErrorsTotal = new client.Counter({
   name: 'dono_metrics_refresh_errors_total',
   help: 'Number of times the DB-derived metrics refresh failed',
@@ -92,8 +122,13 @@ export async function refreshBusinessMetrics(): Promise<void> {
       pledgeCount,
       activeEventCount,
       claimCount,
-      voteCount,
+      pollVoteCount,
       adjustmentCounts,
+      openAuctions,
+      awaitingPaymentAuctions,
+      activeBids,
+      settledWins,
+      unsoldAuctions,
     ] = await Promise.all([
       prisma.donor.count(),
       prisma.donation.aggregate({ _sum: { amount_cents: true } }),
@@ -109,6 +144,11 @@ export async function refreshBusinessMetrics(): Promise<void> {
             .then((count: number) => ({ type, count })),
         ),
       ),
+      prisma.auction.count({ where: { status: 'OPEN' } }),
+      prisma.auction.count({ where: { status: 'AWAITING_PAYMENT' } }),
+      prisma.bid.count({ where: { status: 'ACTIVE' } }),
+      prisma.auctionWin.count({ where: { status: 'FULFILLED' } }),
+      prisma.auction.count({ where: { status: 'UNSOLD' } }),
     ]);
 
     donorsTotal.set(donorCount);
@@ -117,10 +157,15 @@ export async function refreshBusinessMetrics(): Promise<void> {
     pledgesOpen.set(pledgeCount);
     eventsActive.set(activeEventCount);
     rewardClaimsTotal.set(claimCount);
-    pollVotesTotal.set(voteCount);
+    pollVotesTotal.set(pollVoteCount);
     for (const { type, count } of adjustmentCounts) {
       balanceAdjustmentsTotal.set({ type }, count);
     }
+    auctionsOpen.set(openAuctions);
+    auctionsAwaitingPayment.set(awaitingPaymentAuctions);
+    auctionBidsActive.set(activeBids);
+    auctionWinsTotal.set(settledWins);
+    auctionsUnsold.set(unsoldAuctions);
     metricsLastRefreshTimestamp.set(Date.now() / 1000);
   } catch (err) {
     metricsRefreshErrorsTotal.inc();

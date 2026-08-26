@@ -19,7 +19,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   try {
-    if (event.type !== 'checkout.session.completed') {
+    if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.expired') {
       return res.status(200).json({ received: true });
     }
 
@@ -37,6 +37,27 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!session) {
       return res.status(200).json({ received: true, skipped: 'no session object' });
+    }
+
+    const auctionId = session.metadata?.auction_id ?? null;
+    if (auctionId && session.id) {
+      const prisma = (await import('../lib/prisma.js')).default;
+      if (event.type === 'checkout.session.expired') {
+        const { advanceCascadeTx } = await import('../services/auction.js');
+        const sessionId = session.id;
+        await prisma.$transaction((tx) => advanceCascadeTx(tx, auctionId, sessionId));
+      } else {
+        const { settleWinTx } = await import('../services/auction.js');
+        const sessionId = session.id;
+        await prisma.$transaction((tx) => settleWinTx(tx, auctionId, sessionId));
+      }
+      return res.status(200).json({ received: true });
+    }
+
+    if (event.type !== 'checkout.session.completed') {
+      // checkout.session.expired for a non-auction (pledge) session — no
+      // action needed, pledges simply remain OPEN until their own TTL.
+      return res.status(200).json({ received: true });
     }
 
     const externalId = session.id;

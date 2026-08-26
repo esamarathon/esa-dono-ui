@@ -460,6 +460,63 @@ paths:
         '200':
           description: Contribution recorded
 
+  # ─── Auctions ───
+  # Bids are non-binding commitments — no wallet deduction. At close, the
+  # highest bidder is offered the item via a Stripe Checkout Session (24h
+  # window); if unpaid it cascades to the next-highest bidder.
+  /auctions:
+    get:
+      tags: [Auctions]
+      summary: List active auctions
+      parameters:
+        - name: channel_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Active auctions ordered by ends_at ascending
+
+  /auctions/{id}:
+    get:
+      tags: [Auctions]
+      summary: Get auction detail with recent bid history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction detail
+        '404':
+          description: Auction not found
+
+  /auctions/{id}/bid:
+    post:
+      tags: [Auctions]
+      summary: Place a bid on an open auction
+      description: |
+        Requires a verified email and at least one prior completed donation.
+        No balance is deducted — bids are commitments settled by the
+        post-close payment cascade.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents]
+              properties:
+                amount_cents: { type: integer }
+      responses:
+        '200':
+          description: Bid placed
+
   # ─── Channels ───
   /channels:
     get:
@@ -1404,6 +1461,165 @@ paths:
                   refunded_count: { type: integer }
                   refunded_cents: { type: integer }
 
+  /admin/auctions:
+    get:
+      tags: [Admin]
+      summary: List all auctions
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All auctions ordered by created_at descending
+    post:
+      tags: [Admin]
+      summary: Create an auction
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, type, starting_price_cents, min_increment_cents, ends_at]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type:
+                  type: string
+                  enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM]
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean, default: true }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction created
+
+  /admin/auctions/{id}:
+    put:
+      tags: [Admin]
+      summary: Update an auction
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type: { type: string, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction updated
+    delete:
+      tags: [Admin]
+      summary: Delete an auction (only if it has no bids)
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '409':
+          description: Cannot delete an auction with existing bids
+
+  /admin/auctions/{id}/offers:
+    get:
+      tags: [Admin]
+      summary: List the cascade offer history for an auction
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offers ordered by rank ascending
+
+  /admin/auctions/{id}/close:
+    post:
+      tags: [Admin]
+      summary: Force-close an auction ahead of its ends_at
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction closed; rank-1 offer sent, or UNSOLD if no bids
+
+  /admin/auctions/{id}/cancel:
+    post:
+      tags: [Admin]
+      summary: Cancel an auction before settlement
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction cancelled
+
+  /admin/auctions/{id}/skip-offer:
+    post:
+      tags: [Admin]
+      summary: Expire the current cascade offer early and advance to the next bidder
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Advanced to the next offer, or UNSOLD if the list is exhausted
+
+  /admin/auctions/{id}/resend-offer:
+    post:
+      tags: [Admin]
+      summary: Resend the current offer's payment email without advancing the cascade
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offer email resent
+
+  /admin/auction-wins:
+    get:
+      tags: [Admin]
+      summary: List all settled auction wins
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Wins ordered by created_at descending
+
   # ─── Moderator ───
   /moderator/stats:
     get:
@@ -1998,6 +2214,168 @@ paths:
       responses:
         '200':
           description: Deleted
+
+  /moderator/auctions:
+    get:
+      tags: [Moderator]
+      summary: List all auctions
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: All auctions ordered by created_at descending
+    post:
+      tags: [Moderator]
+      summary: Create an auction
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, type, starting_price_cents, min_increment_cents, ends_at]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type:
+                  type: string
+                  enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM]
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean, default: true }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction created
+
+  /moderator/auctions/{id}:
+    put:
+      tags: [Moderator]
+      summary: Update an auction
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type: { type: string, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction updated
+
+  /moderator/auctions/{id}/offers:
+    get:
+      tags: [Moderator]
+      summary: List the cascade offer history for an auction
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offers ordered by rank ascending (never includes donor email)
+
+  /moderator/auctions/{id}/close:
+    post:
+      tags: [Moderator]
+      summary: Force-close an auction ahead of its ends_at
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction closed; rank-1 offer sent, or UNSOLD if no bids
+
+  /moderator/auctions/{id}/cancel:
+    post:
+      tags: [Moderator]
+      summary: Cancel an auction before settlement
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction cancelled
+
+  /moderator/auctions/{id}/skip-offer:
+    post:
+      tags: [Moderator]
+      summary: Expire the current cascade offer early and advance to the next bidder
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Advanced to the next offer, or UNSOLD if the list is exhausted
+
+  /moderator/auctions/{id}/resend-offer:
+    post:
+      tags: [Moderator]
+      summary: Resend the current offer's payment email without advancing the cascade
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offer email resent
 
 components:
   securitySchemes:

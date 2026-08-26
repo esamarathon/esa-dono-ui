@@ -26,6 +26,7 @@ const NAV: SidebarNavItem[] = [
   { to: '/moderate/polls', label: 'polls', icon: PollIcon },
   { to: '/moderate/rewards', label: 'rewards', icon: GiftIcon },
   { to: '/moderate/goals', label: 'goals', icon: GoalIcon },
+  { to: '/moderate/auctions', label: 'auctions', icon: GiftIcon },
   { to: '/moderate/claims', label: 'claims', icon: CheckBadgeIcon },
   { to: '/moderate/donations', label: 'donations', icon: ReceiptIcon },
 ];

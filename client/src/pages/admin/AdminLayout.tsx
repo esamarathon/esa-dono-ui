@@ -25,6 +25,7 @@ const NAV: SidebarNavItem[] = [
   { to: '/admin/rewards', label: 'rewards', icon: GiftIcon },
   { to: '/admin/polls', label: 'polls', icon: PollIcon },
   { to: '/admin/goals', label: 'goals', icon: GoalIcon },
+  { to: '/admin/auctions', label: 'auctions', icon: GiftIcon },
   { to: '/admin/donations', label: 'donations & claims', icon: ReceiptIcon },
   { to: '/admin/pledges', label: 'pledges', icon: ClipboardIcon },
   { to: '/admin/blocked-words', label: 'blocked words', icon: BanIcon },
