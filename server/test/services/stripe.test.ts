@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createCheckoutSession, verifyWebhook, isStripeConfigured } from '../../services/stripe.js';
+import {
+  createCheckoutSession,
+  createAuctionCheckoutSession,
+  verifyWebhook,
+  isStripeConfigured,
+} from '../../services/stripe.js';
 
 const mocks = vi.hoisted(() => ({
   sessionsCreate: vi.fn(),
@@ -75,5 +80,86 @@ describe('stripe service', () => {
 
     expect(evt.type).toBe('checkout.session.completed');
     expect(mocks.constructEvent).toHaveBeenCalled();
+  });
+
+  it('createAuctionCheckoutSession throws without a key', async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    await expect(
+      createAuctionCheckoutSession({
+        amountCents: 1000,
+        email: 'bidder@example.com',
+        expiresAt: new Date(Date.now() + 3_600_000),
+        metadata: { auction_id: 'a1' },
+      }),
+    ).rejects.toThrow('STRIPE_SECRET_KEY is not configured');
+  });
+
+  it('createAuctionCheckoutSession creates a session with the auction metadata', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    mocks.sessionsCreate.mockResolvedValue({
+      id: 'cs_auction_1',
+      url: 'https://checkout.stripe.com/a1',
+    });
+
+    const result = await createAuctionCheckoutSession({
+      amountCents: 1500,
+      email: 'bidder@example.com',
+      expiresAt: new Date(Date.now() + 3_600_000),
+      metadata: { auction_id: 'a1' },
+    });
+
+    expect(result.id).toBe('cs_auction_1');
+    expect(result.url).toBe('https://checkout.stripe.com/a1');
+    expect(mocks.sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { auction_id: 'a1' },
+        customer_email: 'bidder@example.com',
+      }),
+    );
+  });
+
+  it('createAuctionCheckoutSession requests shipping address collection for physical items', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    process.env.STRIPE_SHIPPING_RATE_ID = 'shr_test';
+    mocks.sessionsCreate.mockResolvedValue({
+      id: 'cs_auction_2',
+      url: 'https://checkout.stripe.com/a2',
+    });
+
+    await createAuctionCheckoutSession({
+      amountCents: 1500,
+      email: 'bidder@example.com',
+      requiresShipping: true,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      metadata: { auction_id: 'a2' },
+    });
+
+    expect(mocks.sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shipping_address_collection: expect.any(Object),
+        shipping_options: [{ shipping_rate: 'shr_test' }],
+      }),
+    );
+    delete process.env.STRIPE_SHIPPING_RATE_ID;
+  });
+
+  it('createAuctionCheckoutSession clamps expires_at within Stripe Checkout limits', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    mocks.sessionsCreate.mockResolvedValue({
+      id: 'cs_auction_3',
+      url: 'https://checkout.stripe.com/a3',
+    });
+
+    // Far beyond the 24h max — should be clamped, not passed through verbatim.
+    await createAuctionCheckoutSession({
+      amountCents: 1500,
+      email: 'bidder@example.com',
+      expiresAt: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
+      metadata: { auction_id: 'a3' },
+    });
+
+    const call = mocks.sessionsCreate.mock.calls[0]![0] as { expires_at: number };
+    const nowSec = Math.floor(Date.now() / 1000);
+    expect(call.expires_at).toBeLessThanOrEqual(nowSec + 86_400);
   });
 });

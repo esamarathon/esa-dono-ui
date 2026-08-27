@@ -17,6 +17,7 @@ import { getGoals } from '../../src/api/goals';
 import { getPolls } from '../../src/api/polls';
 import { getRewards } from '../../src/api/rewards';
 import { createPledge, getPledge } from '../../src/api/pledge';
+import { getAuctions, getAuction, placeBid } from '../../src/api/auctions';
 
 describe('public API helpers', () => {
   beforeEach(() => {
@@ -86,5 +87,29 @@ describe('public API helpers', () => {
     mocks.get.mockResolvedValue({ data: { status: 'OPEN', total_cents: 500 } });
     await expect(getPledge('tok123')).resolves.toEqual({ status: 'OPEN', total_cents: 500 });
     expect(mocks.get).toHaveBeenCalledWith('/pledge/tok123');
+  });
+
+  it('getAuctions returns the auctions array with no params by default', async () => {
+    mocks.get.mockResolvedValue({ data: [] });
+    await expect(getAuctions()).resolves.toEqual([]);
+    expect(mocks.get).toHaveBeenCalledWith('/auctions', { params: {} });
+  });
+
+  it('getAuctions passes channel_id as a query param when provided', async () => {
+    mocks.get.mockResolvedValue({ data: [{ id: 'a1' }] });
+    await expect(getAuctions('c1')).resolves.toEqual([{ id: 'a1' }]);
+    expect(mocks.get).toHaveBeenCalledWith('/auctions', { params: { channel_id: 'c1' } });
+  });
+
+  it('getAuction returns a single auction by id', async () => {
+    mocks.get.mockResolvedValue({ data: { id: 'a1', title: 'Guitar' } });
+    await expect(getAuction('a1')).resolves.toEqual({ id: 'a1', title: 'Guitar' });
+    expect(mocks.get).toHaveBeenCalledWith('/auctions/a1');
+  });
+
+  it('placeBid posts the bid amount', async () => {
+    mocks.post.mockResolvedValue({ data: { success: true } });
+    await expect(placeBid('a1', 1500)).resolves.toEqual({ success: true });
+    expect(mocks.post).toHaveBeenCalledWith('/auctions/a1/bid', { amount_cents: 1500 });
   });
 });
