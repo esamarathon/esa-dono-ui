@@ -85,7 +85,7 @@ export default function AdminDonors() {
 
   const handleRegen = async () => {
     const result = await regenerateDonorToken(selected!.id);
-    setModal({ type: 'token', token: result.magic_token, email: result.email });
+    setModal({ type: 'token', token: result.magic_token ?? '', email: result.email });
     openWallet({ id: selected!.id });
   };
 

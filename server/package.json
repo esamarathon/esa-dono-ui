@@ -7,7 +7,7 @@
     "start": "tsx index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:ci": "vitest run --reporter=junit --coverage.enabled=false",
+    "test:ci": "vitest run --reporter=junit --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

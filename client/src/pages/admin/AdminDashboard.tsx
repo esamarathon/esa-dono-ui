@@ -44,12 +44,12 @@ export default function AdminDashboard() {
 
       {stats.channels && stats.channels.length > 0 && (
         <div className="mt-8">
-          <h2 className="font-display text-2xl uppercase mb-4">per-event totals</h2>
+          <h2 className="font-display text-2xl uppercase mb-4">per-channel totals</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-                  {['event', 'raised', 'donations'].map((h) => (
+                  {['channel', 'raised', 'donations'].map((h) => (
                     <th
                       key={h}
                       className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"

@@ -11,7 +11,12 @@ import {
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
-import { apiErrorMessage } from '../../types';
+import {
+  apiErrorMessage,
+  type WebhookDelivery,
+  type WebhookEndpoint,
+  type WebhookEventType,
+} from '../../types';
 
 const WEBHOOK_EVENT_TYPES = [
   'donation.created',
@@ -20,38 +25,7 @@ const WEBHOOK_EVENT_TYPES = [
   'incentive.enabled',
   'incentive.disabled',
   'incentive.value_changed',
-] as const;
-
-type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
-
-interface WebhookEndpoint {
-  id: string;
-  url: string;
-  secret: string;
-  is_active: boolean;
-  event_types: string[];
-  verify_ssl: boolean;
-  description: string | null;
-  created_at: string;
-  updated_at: string;
-  destination_type: 'HTTP' | 'RABBITMQ';
-  amqp_url: string | null;
-  amqp_exchange: string;
-  amqp_routing_key: string | null;
-}
-
-interface WebhookDelivery {
-  id: string;
-  seq: number;
-  event_type: string;
-  status: string;
-  attempts: number;
-  max_attempts: number;
-  last_status_code: number | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
+] as const satisfies readonly WebhookEventType[];
 
 interface WebhookForm {
   destination_type: 'HTTP' | 'RABBITMQ';
@@ -89,7 +63,7 @@ export default function AdminWebhooks() {
   const [deliveriesLoading, setDeliveriesLoading] = useState(false);
   const [, setTestLoading] = useState(false);
 
-  const reload = () => getDestinations().then((r) => setEndpoints(r.data));
+  const reload = () => getDestinations().then((r) => setEndpoints(r));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
@@ -98,7 +72,7 @@ export default function AdminWebhooks() {
     setDeliveriesLoading(true);
     try {
       const r = await getDestinationDeliveries(id);
-      setDeliveries(r.data.deliveries);
+      setDeliveries(r.deliveries);
     } finally {
       setDeliveriesLoading(false);
     }

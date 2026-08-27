@@ -48,7 +48,7 @@ export default function AdminPolls() {
 
   const reload = () => adminClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
-    Promise.all([reload(), adminClient.get('/events').then((r) => setChannels(r.data))]).finally(
+    Promise.all([reload(), adminClient.get('/channels').then((r) => setChannels(r.data))]).finally(
       () => setLoading(false),
     );
   }, []);
@@ -163,7 +163,7 @@ export default function AdminPolls() {
                   total votes: {fmt(poll.total_votes_cents)}
                 </p>
                 <p className="font-data text-xs text-off-white/40">
-                  event: {channelName(poll.channel_id)}
+                  channel: {channelName(poll.channel_id)}
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
@@ -306,13 +306,13 @@ export default function AdminPolls() {
             />
           </div>
           <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
             <select
               className="w-full px-3 py-2 text-sm"
               value={form.channel_id ?? ''}
               onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
-              <option value="">shared (any event)</option>
+              <option value="">shared (any channel)</option>
               {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}

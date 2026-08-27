@@ -107,14 +107,16 @@ export default function DonateFlow() {
 
   return (
     <div className="max-w-3xl mx-auto p-8">
-      {/* Event picker — required before browsing incentives. Every donation
-          routes to exactly one event, and incentives tied to a specific
-          event cannot be mixed with another event's in the same cart, so
+      {/* Channel picker — required before browsing incentives. Every donation
+          routes to exactly one channel, and incentives tied to a specific
+          channel cannot be mixed with another channel's in the same cart, so
           the picker filters what's shown below. */}
       <div className="btrl-panel p-4 mb-6">
-        <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">event</p>
+        <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">
+          channel
+        </p>
         {channels.length === 0 ? (
-          <p className="font-body text-sm text-off-white/55">No events are open right now.</p>
+          <p className="font-body text-sm text-off-white/55">No channels are open right now.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {channels.map((s) => (
@@ -141,16 +143,17 @@ export default function DonateFlow() {
         )}
         {!selectedChannelId && channels.length > 0 && (
           <p className="font-body text-xs text-off-white/55 mt-2">
-            Select an event to see its rewards, polls, and fund goals.
+            Select a channel to see its rewards, polls, and fund goals.
           </p>
         )}
       </div>
 
       {pendingChannelId && (
-        <Modal title="switch event?" onClose={cancelChannelSwitch}>
+        <Modal title="switch channel?" onClose={cancelChannelSwitch}>
           <p className="font-body text-sm text-off-white/55 mb-4">
-            Your cart has items tied to your current event. Incentives can't be mixed across events
-            in one donation — switching will remove those items from your cart (shared items stay).
+            Your cart has items tied to your current channel. Incentives can't be mixed across
+            channels in one donation — switching will remove those items from your cart (shared
+            items stay).
           </p>
           <div className="flex justify-end gap-2">
             <button onClick={cancelChannelSwitch} className="btrl-button btrl-button-outline">

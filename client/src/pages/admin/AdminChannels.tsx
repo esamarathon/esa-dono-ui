@@ -23,7 +23,7 @@ export default function AdminChannels() {
   const [form, setForm] = useState<EventForm>(EMPTY);
   const [error, setError] = useState('');
 
-  const reload = () => adminClient.get('/events').then((r) => setChannels(r.data));
+  const reload = () => adminClient.get('/channels').then((r) => setChannels(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
@@ -42,8 +42,8 @@ export default function AdminChannels() {
   const handleSave = async () => {
     setError('');
     try {
-      if (modal === 'create') await adminClient.post('/events', form);
-      else if (modal) await adminClient.put(`/events/${modal.id}`, form);
+      if (modal === 'create') await adminClient.post('/channels', form);
+      else if (modal) await adminClient.put(`/channels/${modal.id}`, form);
       await reload();
       setModal(null);
     } catch (e) {
@@ -52,9 +52,9 @@ export default function AdminChannels() {
   };
 
   const handleDeactivate = async (id: string) => {
-    if (!confirm('Deactivate this event? Existing incentives/donations keep referencing it.'))
+    if (!confirm('Deactivate this channel? Existing incentives/donations keep referencing it.'))
       return;
-    await adminClient.delete(`/events/${id}`);
+    await adminClient.delete(`/channels/${id}`);
     await reload();
   };
 
@@ -63,16 +63,16 @@ export default function AdminChannels() {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="font-display text-4xl uppercase">events</h1>
+        <h1 className="font-display text-4xl uppercase">channels</h1>
         <button onClick={openCreate} className="btrl-button">
-          + new event
+          + new channel
         </button>
       </div>
 
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Every donation is routed to exactly one event. Rewards, polls, and fund goals can be tied to
-        a specific event or left shared (available to any event). Deactivating an event hides it
-        from the /donate picker without deleting its history.
+        Every donation is routed to exactly one channel. Rewards, polls, and fund goals can be tied
+        to a specific channel or left shared (available to any channel). Deactivating a channel
+        hides it from the /donate picker without deleting its history.
       </p>
 
       <div className="space-y-3">
@@ -106,13 +106,13 @@ export default function AdminChannels() {
           </Card>
         ))}
         {channels.length === 0 && (
-          <p className="font-body text-sm text-off-white/55">No events yet.</p>
+          <p className="font-body text-sm text-off-white/55">No channels yet.</p>
         )}
       </div>
 
       {modal && (
         <Modal
-          title={modal === 'create' ? 'new event' : 'edit event'}
+          title={modal === 'create' ? 'new channel' : 'edit channel'}
           onClose={() => setModal(null)}
         >
           <div className="mb-3">
@@ -126,11 +126,11 @@ export default function AdminChannels() {
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"
-              id="event_active"
+              id="channel_active"
               checked={form.is_active}
               onChange={(e) => setForm((d) => ({ ...d, is_active: e.target.checked }))}
             />
-            <label htmlFor="event_active" className="font-data text-sm text-off-white">
+            <label htmlFor="channel_active" className="font-data text-sm text-off-white">
               active
             </label>
           </div>

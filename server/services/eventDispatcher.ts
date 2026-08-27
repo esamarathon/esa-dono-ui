@@ -11,7 +11,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 type DeliveryResult = { statusCode: number; error?: string };
 
-function backoffMinutes(attempts: number): number {
+export function backoffMinutes(attempts: number): number {
   return Math.min(BASE_BACKOFF_MIN * Math.pow(2, attempts), MAX_BACKOFF_MIN);
 }
 
@@ -147,7 +147,7 @@ async function deliver(
   );
 }
 
-async function processDestination(destinationId: string): Promise<void> {
+export async function processDestination(destinationId: string): Promise<void> {
   const head = await prisma.eventDelivery.findFirst({
     where: {
       destination_id: destinationId,

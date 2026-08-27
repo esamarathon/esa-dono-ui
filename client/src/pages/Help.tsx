@@ -53,9 +53,9 @@ export default function Help() {
           toward a goal, which completes once fully funded.
         </p>
         <p>
-          Every donation is routed to exactly one <Term>event</Term>. An incentive is either shared
-          (available for any event) or tied to a specific event, and you can't mix incentives from
-          two events in a single cart.
+          Every donation is routed to exactly one <Term>channel</Term>. An incentive is either
+          shared (available for any channel) or tied to a specific channel, and you can't mix
+          incentives from two channels in a single cart.
         </p>
       </Section>
 

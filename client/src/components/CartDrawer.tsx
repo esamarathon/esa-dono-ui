@@ -197,7 +197,7 @@ export default function CartDrawer() {
 
           <div className="mb-4 text-sm">
             <span className="font-mono text-[10px] tracking-widest uppercase text-off-white/40">
-              event:{' '}
+              channel:{' '}
             </span>
             <span className="font-data font-bold text-off-white">
               {activeChannel?.name ?? 'none selected'}

@@ -34,7 +34,7 @@ export function ModeratorChannelFilterProvider({ children }: { children: ReactNo
   });
 
   useEffect(() => {
-    moderatorClient.get('/events').then((r) => setChannels(r.data));
+    moderatorClient.get('/channels').then((r) => setChannels(r.data));
   }, []);
 
   const persist = (id: string | null) => {

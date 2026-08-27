@@ -22,7 +22,7 @@ import {
 
 const NAV: SidebarNavItem[] = [
   { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
-  { to: '/moderate/events', label: 'events', icon: PlayIcon },
+  { to: '/moderate/channels', label: 'channels', icon: PlayIcon },
   { to: '/moderate/polls', label: 'polls', icon: PollIcon },
   { to: '/moderate/rewards', label: 'rewards', icon: GiftIcon },
   { to: '/moderate/goals', label: 'goals', icon: GoalIcon },
@@ -111,17 +111,17 @@ export default function ModeratorLayout() {
   );
 }
 
-function EventFilterBar() {
+function ChannelFilterBar() {
   const { channels, selectedChannelId, setSelectedChannelId } = useModeratorChannelFilter();
   return (
     <div className="mb-6 flex items-center gap-3">
-      <label className="font-data text-sm text-off-white/55">event filter</label>
+      <label className="font-data text-sm text-off-white/55">channel filter</label>
       <select
         className="px-3 py-1.5 text-sm bg-transparent border border-off-white/20 rounded-sm"
         value={selectedChannelId ?? ''}
         onChange={(e) => setSelectedChannelId(e.target.value || null)}
       >
-        <option value="">all events</option>
+        <option value="">all channels</option>
         {channels.map((e) => (
           <option key={e.id} value={e.id}>
             {e.name}
@@ -138,7 +138,7 @@ function ModeratorLayoutInner({ keyValue, onLogout }: { keyValue: string; onLogo
       title="moderator"
       nav={NAV}
       storageKey="moderator_sidebar_collapsed"
-      header={<EventFilterBar />}
+      header={<ChannelFilterBar />}
       footer={(collapsed) => (
         <div className="flex flex-col">
           <Link

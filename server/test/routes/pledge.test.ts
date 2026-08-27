@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { PrismaClient } from '@prisma/client';
+import crypto from 'crypto';
 
 vi.mock('../../services/pledge.js', () => ({
   createPledge: vi.fn(),
@@ -9,6 +11,8 @@ vi.mock('../../services/pledge.js', () => ({
 
 import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
 import pledgeRouter from '../../routes/pledge.js';
+
+const prisma = new PrismaClient();
 
 function createApp() {
   const app = express();
@@ -100,5 +104,74 @@ describe('POST /api/pledge', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('channel_id is required');
+  });
+
+  it('applies a wallet discount when a valid donor token is provided', async () => {
+    const token = crypto.randomBytes(16).toString('hex');
+    const donor = await prisma.donor.create({
+      data: {
+        email: `pledge-${crypto.randomUUID()}@example.com`,
+        balance_remaining: 1500,
+        magic_token: token,
+        token_expires_at: new Date(Date.now() + 60_000),
+      },
+    });
+    vi.mocked(createPledge).mockResolvedValue({
+      pledge_token: 'pledge-abc',
+      total_cents: 500,
+      expires_at: new Date().toISOString(),
+    } as any);
+    vi.mocked(createCheckoutForPledge).mockResolvedValue({
+      donate_url: null,
+      checkout_session_id: null,
+      wallet_discount_cents: 0,
+    });
+
+    const res = await request(createApp())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: donor.email, channel_id: 'event-1', items: [] });
+
+    expect(res.status).toBe(200);
+    expect(createCheckoutForPledge).toHaveBeenCalledWith(
+      'pledge-abc',
+      expect.objectContaining({ id: donor.id, balance_remaining: 1500 }),
+      donor.email,
+    );
+
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+});
+
+describe('GET /api/pledge/:token', () => {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  it('returns the pledge status', async () => {
+    const pledge = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: `tok-${crypto.randomUUID()}`,
+        total_cents: 1000,
+        expires_at: new Date(Date.now() + 60_000),
+        items: { create: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }] },
+      },
+    });
+
+    const res = await request(createApp()).get(`/api/pledge/${pledge.pledge_token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.pledge_token).toBe(pledge.pledge_token);
+    expect(res.body.total_cents).toBe(1000);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].kind).toBe('REWARD');
+
+    await prisma.pendingPledge.delete({ where: { id: pledge.id } });
+  });
+
+  it('returns 404 for an unknown token', async () => {
+    const res = await request(createApp()).get('/api/pledge/does-not-exist');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Pledge not found');
   });
 });

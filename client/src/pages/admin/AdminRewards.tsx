@@ -49,7 +49,7 @@ export default function AdminRewards() {
 
   const reload = () => adminClient.get('/rewards').then((r) => setRewards(r.data));
   useEffect(() => {
-    Promise.all([reload(), adminClient.get('/events').then((r) => setChannels(r.data))]).finally(
+    Promise.all([reload(), adminClient.get('/channels').then((r) => setChannels(r.data))]).finally(
       () => setLoading(false),
     );
   }, []);
@@ -137,7 +137,7 @@ export default function AdminRewards() {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-              {['', 'title', 'type', 'cost', 'qty', 'event', 'active', 'actions'].map((h) => (
+              {['', 'title', 'type', 'cost', 'qty', 'channel', 'active', 'actions'].map((h) => (
                 <th
                   key={h}
                   className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
@@ -279,13 +279,13 @@ export default function AdminRewards() {
             )}
           </div>
           <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
             <select
               className="w-full px-3 py-2 text-sm"
               value={form.channel_id ?? ''}
               onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
-              <option value="">shared (any event)</option>
+              <option value="">shared (any channel)</option>
               {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}

@@ -28,5 +28,20 @@ export default defineConfig({
     // SQLITE_BUSY / "Operations timed out" flakiness. Fully sequential
     // execution trades a bit of speed for a suite that doesn't flake.
     fileParallelism: false,
+    coverage: {
+      provider: 'v8',
+      include: ['lib/**/*.ts', 'middleware/**/*.ts', 'routes/**/*.ts', 'services/**/*.ts'],
+      // `include` makes untested files appear at 0% (rather than dropping out
+      // of the metric). Entry points (index.ts) and config are left out as
+      // glue, not behavior.
+      // Global floor matching current coverage (~56% stmts / 57% lines). Raise
+      // these as tests are added.
+      thresholds: {
+        statements: 45,
+        branches: 30,
+        functions: 40,
+        lines: 45,
+      },
+    },
   },
 });

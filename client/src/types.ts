@@ -350,6 +350,54 @@ export interface AdminDonorWallet {
   balance_adjustments?: BalanceAdjustment[];
 }
 
+export type WebhookEventType =
+  | 'donation.created'
+  | 'donation.moderated'
+  | 'incentive.created'
+  | 'incentive.enabled'
+  | 'incentive.disabled'
+  | 'incentive.value_changed';
+
+export interface WebhookEndpoint {
+  id: string;
+  url: string;
+  secret: string;
+  is_active: boolean;
+  event_types: string[];
+  verify_ssl: boolean;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  destination_type: 'HTTP' | 'RABBITMQ';
+  amqp_url: string | null;
+  amqp_exchange: string;
+  amqp_routing_key: string | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  seq: number;
+  event_type: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  last_status_code: number | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminDonorList {
+  donors: AdminDonorSummary[];
+  total: number;
+}
+
+export interface RefundResult {
+  success: boolean;
+  refunded_count: number;
+  refunded_cents: number;
+}
+
 export interface AdminPledgeItem {
   id: string;
   kind: string;

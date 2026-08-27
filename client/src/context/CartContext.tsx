@@ -61,22 +61,22 @@ interface CartContextValue {
   // Live incentive data — fetched once here so every consumer (the /donate
   // stepper, the standalone browse pages, and the cart drawer) shares a
   // single fetch instead of each re-fetching independently. Already filtered
-  // to the selected event (shared incentives + the selected event's own).
+  // to the selected channel (shared incentives + the selected channel's own).
   rewards: Reward[];
   polls: Poll[];
   goals: Goal[];
   loading: boolean;
 
-  // Events — every donation is routed to exactly one event (required, for
+  // Channels — every donation is routed to exactly one channel (required, for
   // overlay routing). Incentives with a null channel_id are shared and appear
-  // regardless of which event is selected; incentives tied to a specific
-  // event only appear (and can only be added to the cart) when that event
+  // regardless of which channel is selected; incentives tied to a specific
+  // channel only appear (and can only be added to the cart) when that channel
   // is selected. A cart therefore can never mix incentives from two
   // different channels.
   channels: Channel[];
   selectedChannelId: string | null;
-  // Attempts to select an event. If the current cart holds items tied to a
-  // *different* specific event, the switch is held pending confirmation
+  // Attempts to select a channel. If the current cart holds items tied to a
+  // *different* specific channel, the switch is held pending confirmation
   // (see pendingChannelId) instead of applied immediately.
   selectChannel: (channelId: string) => void;
   pendingChannelId: string | null;
@@ -183,10 +183,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
     );
   }, [cart, topUp, comment, selectedChannelId]);
 
-  // Visible incentive lists — shared (channel_id null) + whichever event is
-  // currently selected. Until an event is selected, only shared incentives
-  // are shown; the /donate event picker requires a selection before the
-  // donor can browse event-specific incentives at all.
+  // Visible incentive lists — shared (channel_id null) + whichever channel is
+  // currently selected. Until a channel is selected, only shared incentives
+  // are shown; the /donate channel picker requires a selection before the
+  // donor can browse channel-specific incentives at all.
   const rewards = useMemo(
     () => allRewards.filter((r) => !r.channel_id || r.channel_id === selectedChannelId),
     [allRewards, selectedChannelId],
@@ -250,11 +250,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(CART_STORAGE_KEY);
   }, []);
 
-  // Incentives cannot be mixed across events in a single transaction (each
-  // donation routes to exactly one event overlay). Selecting a different
-  // event while the cart holds items tied to a *different* specific event
+  // Incentives cannot be mixed across channels in a single transaction (each
+  // donation routes to exactly one channel overlay). Selecting a different
+  // channel while the cart holds items tied to a *different* specific channel
   // is held pending confirmation rather than applied immediately; shared
-  // items are always kept regardless of which event ends up selected.
+  // items are always kept regardless of which channel ends up selected.
   const selectChannel = useCallback(
     (channelId: string) => {
       if (channelId === selectedChannelId) return;
@@ -360,7 +360,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }
     if (!selectedChannelId) {
       track('checkout_error', { 'error.reason': 'no_event_selected' });
-      setCheckoutError('Select an event before checking out');
+      setCheckoutError('Select a channel before checking out');
       return null;
     }
     if (cart.length === 0 && topUpCents <= 0) {
