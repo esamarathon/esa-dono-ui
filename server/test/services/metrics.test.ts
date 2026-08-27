@@ -17,7 +17,11 @@ vi.mock('../../lib/prisma.js', () => ({
 
 import prisma from '../../lib/prisma.js';
 import { register } from '../../lib/metrics.js';
-import { refreshBusinessMetrics, stopMetricsRefresh } from '../../services/metrics.js';
+import {
+  refreshBusinessMetrics,
+  stopMetricsRefresh,
+  startMetricsRefresh,
+} from '../../services/metrics.js';
 
 describe('refreshBusinessMetrics', () => {
   beforeEach(() => {
@@ -69,5 +73,26 @@ describe('refreshBusinessMetrics', () => {
 
     const metrics = await register.metrics();
     expect(metrics).toContain('dono_metrics_refresh_errors_total 1');
+  });
+});
+
+describe('startMetricsRefresh / stopMetricsRefresh', () => {
+  beforeEach(() => {
+    stopMetricsRefresh();
+    vi.mocked(prisma.donor.count).mockResolvedValue(0);
+    vi.mocked(prisma.donation.aggregate).mockResolvedValue({ _sum: { amount_cents: 0 } } as any);
+    vi.mocked(prisma.donation.count).mockResolvedValue(0);
+    vi.mocked(prisma.pendingPledge.count).mockResolvedValue(0);
+    vi.mocked(prisma.channel.count).mockResolvedValue(0);
+    vi.mocked(prisma.rewardClaim.count).mockResolvedValue(0);
+    vi.mocked(prisma.pollVote.count).mockResolvedValue(0);
+    vi.mocked(prisma.balanceAdjustment.count).mockResolvedValue(0);
+  });
+
+  it('starts and stops the refresh loop', () => {
+    startMetricsRefresh(100_000); // long interval — does not actually tick in test
+    startMetricsRefresh(100_000); // second call is a no-op (idempotent)
+    stopMetricsRefresh();
+    stopMetricsRefresh(); // second stop is a no-op
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const getDonor = vi.hoisted(() => vi.fn());
@@ -54,5 +54,32 @@ describe('ModeratorLayout', () => {
     );
 
     expect(await screen.findByText('dashboard')).toBeInTheDocument();
+  });
+
+  it('logs in via the key entry form', async () => {
+    localStorage.setItem('moderator_sidebar_collapsed', '0');
+
+    render(
+      <MemoryRouter>
+        <ModeratorLayout />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByPlaceholderText('Enter moderator key');
+    fireEvent.change(input, { target: { value: 'mykey' } });
+    fireEvent.click(screen.getByRole('button', { name: 'login' }));
+
+    expect(await screen.findByText('dashboard')).toBeInTheDocument();
+  });
+
+  it('shows an error when login is attempted without a key', async () => {
+    render(
+      <MemoryRouter>
+        <ModeratorLayout />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'login' }));
+    expect(screen.getByText('Enter moderator key')).toBeInTheDocument();
   });
 });

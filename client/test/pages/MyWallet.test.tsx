@@ -144,4 +144,21 @@ describe('MyWallet', () => {
 
     await waitFor(() => expect(mocks.endSession).toHaveBeenCalled());
   });
+
+  it('shows a validation error for an invalid email address', async () => {
+    mocks.getDonor.mockRejectedValue(new Error('no session'));
+
+    render(
+      <MemoryRouter>
+        <MyWallet />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), {
+      target: { value: 'notanemail' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'send me a new link' }));
+
+    expect(screen.getByText('Enter a valid email address.')).toBeInTheDocument();
+  });
 });

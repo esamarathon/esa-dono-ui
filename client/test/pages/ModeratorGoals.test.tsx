@@ -84,4 +84,25 @@ describe('ModeratorGoals', () => {
     await waitFor(() => expect(moderatorClient.delete).toHaveBeenCalledWith('/goals/g1'));
     vi.unstubAllGlobals();
   });
+
+  it('edits a goal', async () => {
+    moderatorClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/goals' ? [goal] : [] }),
+    );
+    moderatorClient.put.mockResolvedValue({ data: { ...goal, title: 'Updated' } });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorGoals />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    expect(screen.getByText('edit goal')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(moderatorClient.put).toHaveBeenCalledWith('/goals/g1', expect.any(Object)),
+    );
+  });
 });

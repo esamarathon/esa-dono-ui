@@ -34,13 +34,12 @@ export default defineConfig({
       // `include` makes untested files appear at 0% (rather than dropping out
       // of the metric). Entry points (index.ts) and config are left out as
       // glue, not behavior.
-      // Global floor matching current coverage (~56% stmts / 57% lines). Raise
-      // these as tests are added.
+      // Thresholds updated to match current coverage levels (~79% statements).
       thresholds: {
-        statements: 45,
-        branches: 30,
-        functions: 40,
-        lines: 45,
+        statements: 77,
+        branches: 65,
+        functions: 87,
+        lines: 79,
       },
     },
   },

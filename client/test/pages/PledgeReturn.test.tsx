@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
@@ -63,5 +63,17 @@ describe('PledgeReturn', () => {
     renderWithToken('tok123');
 
     expect(await screen.findByText(/This pledge has expired/)).toBeInTheDocument();
+  });
+
+  it('starts a session and navigates when fulfilled with a magic token', async () => {
+    mocks.getPledge.mockResolvedValue({
+      ...fulfilledPledge,
+      magic_token: 'tok123',
+    });
+    mocks.startSession.mockResolvedValue(undefined);
+
+    renderWithToken('tok123');
+
+    await waitFor(() => expect(mocks.startSession).toHaveBeenCalledWith('tok123'));
   });
 });

@@ -16,6 +16,7 @@ import { getDonor, requestToken } from '../../src/api/donor';
 import { getGoals } from '../../src/api/goals';
 import { getPolls } from '../../src/api/polls';
 import { getRewards } from '../../src/api/rewards';
+import { createPledge, getPledge } from '../../src/api/pledge';
 
 describe('public API helpers', () => {
   beforeEach(() => {
@@ -68,5 +69,22 @@ describe('public API helpers', () => {
     mocks.get.mockResolvedValue({ data: [] });
     await expect(getRewards()).resolves.toEqual([]);
     expect(mocks.get).toHaveBeenCalledWith('/rewards');
+  });
+
+  it('createPledge posts the cart items', async () => {
+    mocks.post.mockResolvedValue({ data: { pledge_token: 'tok', total_cents: 1000 } });
+    const input = {
+      email: 'a@b.com',
+      channel_id: 'c1',
+      items: [{ kind: 'REWARD' as const, target_id: 'r1', amount_cents: 1000 }],
+    };
+    await expect(createPledge(input)).resolves.toEqual({ pledge_token: 'tok', total_cents: 1000 });
+    expect(mocks.post).toHaveBeenCalledWith('/pledge', input);
+  });
+
+  it('getPledge returns the pledge status', async () => {
+    mocks.get.mockResolvedValue({ data: { status: 'OPEN', total_cents: 500 } });
+    await expect(getPledge('tok123')).resolves.toEqual({ status: 'OPEN', total_cents: 500 });
+    expect(mocks.get).toHaveBeenCalledWith('/pledge/tok123');
   });
 });

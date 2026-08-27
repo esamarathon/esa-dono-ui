@@ -34,3 +34,35 @@ describe('spendLimit middleware', () => {
     expect(res2.body.error).toBe('Too many requests, please slow down.');
   });
 });
+
+describe('authLimit middleware', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.RATE_LIMIT_AUTH = '2';
+  });
+
+  it('uses IP-based keying for auth endpoints', async () => {
+    const { authLimit } = await import('../../middleware/rateLimit.js');
+    const app = express();
+    app.post('/auth', authLimit, (_req, res) => res.json({ ok: true }));
+
+    const res = await request(app).post('/auth');
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('metricsLimit middleware', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.RATE_LIMIT_METRICS = '2';
+  });
+
+  it('uses IP-based keying for metrics endpoints', async () => {
+    const { metricsLimit } = await import('../../middleware/rateLimit.js');
+    const app = express();
+    app.get('/metrics', metricsLimit, (_req, res) => res.json({ ok: true }));
+
+    const res = await request(app).get('/metrics');
+    expect(res.status).toBe(200);
+  });
+});

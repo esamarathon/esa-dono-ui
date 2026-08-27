@@ -233,7 +233,7 @@ describe('Admin CRUD routes', () => {
 
       const updateRes = await request(createApp())
         .put(`/api/admin/destinations/${createRes.body.id}`)
-        .send({ is_active: false })
+        .send({ is_active: false, event_types: ['donation.created'], destination_type: 'HTTP' })
         .set(AUTH);
       expect(updateRes.status).toBe(200);
       expect(updateRes.body.is_active).toBe(false);

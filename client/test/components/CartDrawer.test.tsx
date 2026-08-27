@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import CartDrawer from '../../src/components/CartDrawer';
 import { CartProvider, useCart } from '../../src/context/CartContext';
 import type { CartItem } from '../../src/types';
@@ -9,6 +9,12 @@ vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
 vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
+vi.mock('../../src/api/pledge', () => ({ createPledge: vi.fn(), getPledge: vi.fn() }));
+vi.mock('../../src/lib/tracing', () => ({
+  track: vi.fn(),
+  trackAsync: vi.fn((_n: string, fn: () => unknown) => fn()),
+  identifyDonor: vi.fn(),
+}));
 
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
@@ -92,5 +98,97 @@ describe('CartDrawer', () => {
   it('shows the checkout button even with an empty cart', async () => {
     renderDrawer([]);
     expect(await screen.findByRole('button', { name: /^contribute/i })).toBeDefined();
+  });
+
+  it('shows cart items and allows removing them', async () => {
+    renderDrawer([{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }]);
+
+    expect(await screen.findByText('T-shirt')).toBeInTheDocument();
+    expect(screen.getByText('$10.00')).toBeInTheDocument();
+
+    // The per-item remove button uses &times; (×) not the word "remove"
+    const removeBtns = screen.getAllByRole('button', { name: '×' });
+    fireEvent.click(removeBtns[removeBtns.length - 1]!);
+
+    await waitFor(() => expect(screen.queryByText('T-shirt')).toBeNull());
+  });
+
+  it('allows entering email and comment', async () => {
+    renderDrawer([]);
+
+    const emailInput = await screen.findByPlaceholderText('you@example.com');
+    fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
+    expect(emailInput).toHaveValue('test@example.com');
+  });
+
+  it('shows a checkout error on missing email', async () => {
+    renderDrawer([{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }]);
+    fireEvent.click(await screen.findByRole('button', { name: /^contribute/i }));
+    expect(await screen.findByText(/email/i)).toBeInTheDocument();
+  });
+
+  it('shows the nudge panel when unvisited categories exist', async () => {
+    vi.mocked(getPolls).mockResolvedValue([
+      { id: 'p1', title: 'Poll', options: [], total_votes_cents: 0, is_active: true },
+    ]);
+    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    // Pre-seed a poll vote + channel so the cart is non-empty and checkout is enabled
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({
+        cart: [
+          { kind: 'POLL_VOTE', target_id: 'o1', poll_id: 'p1', amount_cents: 100, label: 'A' },
+        ],
+        topUp: '',
+        comment: '',
+        channelId: 'c1',
+      }),
+    );
+
+    renderDrawer([]);
+
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), {
+      target: { value: 'a@b.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^contribute/i }));
+
+    expect(await screen.findByRole('button', { name: 'skip anyway' })).toBeInTheDocument();
+  });
+
+  it('shows the issues panel when cart items are no longer available', async () => {
+    // Pre-seed cart with a REWARD item + channel, but mock getRewards to return empty
+    // so revalidateCart reports the item as unavailable
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({
+        cart: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }],
+        topUp: '',
+        comment: '',
+        channelId: 'c1',
+      }),
+    );
+    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    // getRewards returns empty → reward not found → issue
+
+    renderDrawer([]);
+
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), {
+      target: { value: 'a@b.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^contribute/i }));
+
+    expect(
+      await screen.findByText('Some items in your cart are no longer available:'),
+    ).toBeInTheDocument();
+  });
+
+  it('allows entering a comment', async () => {
+    renderDrawer([]);
+
+    const commentArea = await screen.findByPlaceholderText(
+      'Leave a message with your contribution',
+    );
+    fireEvent.change(commentArea, { target: { value: 'great work!' } });
+    expect(commentArea).toHaveValue('great work!');
   });
 });

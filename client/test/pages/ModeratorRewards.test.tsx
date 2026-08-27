@@ -84,4 +84,43 @@ describe('ModeratorRewards', () => {
     await waitFor(() => expect(moderatorClient.delete).toHaveBeenCalledWith('/rewards/r1'));
     vi.unstubAllGlobals();
   });
+
+  it('edits a reward', async () => {
+    moderatorClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/rewards' ? [reward] : [] }),
+    );
+    moderatorClient.put.mockResolvedValue({ data: { ...reward, title: 'Updated' } });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorRewards />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    expect(screen.getByText('edit reward')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(moderatorClient.put).toHaveBeenCalledWith('/rewards/r1', expect.any(Object)),
+    );
+  });
+
+  it('shows the custom type label field when CUSTOM type is selected', async () => {
+    moderatorClient.get.mockResolvedValue({ data: [] });
+    moderatorClient.post.mockResolvedValue({ data: { id: 'r2' } });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorRewards />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '+ new reward' }));
+    // change the type select to CUSTOM
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[0]!, { target: { value: 'CUSTOM' } });
+
+    expect(screen.getByText('custom type label')).toBeInTheDocument();
+  });
 });

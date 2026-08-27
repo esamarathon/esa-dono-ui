@@ -77,4 +77,21 @@ describe('AdminRewards', () => {
     await waitFor(() => expect(mocks.adminClient.delete).toHaveBeenCalledWith('/rewards/r1'));
     vi.unstubAllGlobals();
   });
+
+  it('edits an existing reward', async () => {
+    mocks.adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/rewards' ? [reward] : [] }),
+    );
+    mocks.adminClient.put.mockResolvedValue({ data: { ...reward, title: 'Updated' } });
+
+    render(<AdminRewards />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    expect(screen.getByText('edit reward')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(mocks.adminClient.put).toHaveBeenCalledWith('/rewards/r1', expect.any(Object)),
+    );
+  });
 });

@@ -10,6 +10,16 @@ vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
 vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
+vi.mock('../../src/api/pledge', () => ({ createPledge: vi.fn(), getPledge: vi.fn() }));
+vi.mock('../../src/lib/tracing', () => ({
+  track: vi.fn(),
+  trackAsync: vi.fn((_n: string, fn: () => unknown) => fn()),
+  identifyDonor: vi.fn(),
+}));
+vi.mock('../../src/utils/authToken', () => ({
+  isSessionActive: () => localStorage.getItem('donor_session_active') === '1',
+  endSession: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getDonor } from '../../src/api/donor';
 import { getRewards } from '../../src/api/rewards';
@@ -47,6 +57,7 @@ describe('Navbar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
@@ -101,5 +112,21 @@ describe('Navbar', () => {
 
     expect(await screen.findByText('moderate')).toBeDefined();
     expect(await screen.findByText('admin')).toBeDefined();
+  });
+
+  it('shows a cart badge when items are in the cart', async () => {
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({
+        cart: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }],
+        topUp: '',
+        comment: '',
+        channelId: null,
+      }),
+    );
+
+    renderNavbar();
+
+    expect(await screen.findByText(/1/)).toBeDefined();
   });
 });
