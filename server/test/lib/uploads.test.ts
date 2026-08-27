@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import sharp from 'sharp';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -11,6 +11,14 @@ import {
 } from '../../lib/uploads.js';
 
 describe('uploads', () => {
+  // processAndStore() writes into UPLOADS_DIR, which only exists once
+  // ensureUploadsDir() has run (normally done once at server startup). On a
+  // fresh checkout the directory doesn't exist yet, so it must be created
+  // before any test that writes a file, not just exercised by its own test.
+  beforeAll(async () => {
+    await ensureUploadsDir();
+  });
+
   it('publicUrlFor builds the public URL', () => {
     expect(publicUrlFor('abc.webp')).toBe('/api/uploads/abc.webp');
   });
