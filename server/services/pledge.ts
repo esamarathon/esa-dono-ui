@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
+import { withSpan } from '../lib/tracing.js';
 import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
@@ -41,6 +42,18 @@ const COMMENT_MAX_LENGTH = 500;
  * channel overlay.
  */
 export async function createPledge({
+  email,
+  comment,
+  items,
+  top_up_cents,
+  channel_id,
+}: CreatePledgeInput) {
+  return withSpan('pledge.create', async () => {
+    return createPledgeInner({ email, comment, items, top_up_cents, channel_id });
+  });
+}
+
+async function createPledgeInner({
   email,
   comment,
   items,
@@ -246,6 +259,16 @@ export async function createPledge({
  * remain as spendable balance_remaining.
  */
 export async function fulfillPledge(
+  tx: Prisma.TransactionClient,
+  pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
+  donorId: string,
+) {
+  return withSpan('pledge.fulfill', async () => {
+    return fulfillPledgeInner(tx, pledge, donorId);
+  });
+}
+
+async function fulfillPledgeInner(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,

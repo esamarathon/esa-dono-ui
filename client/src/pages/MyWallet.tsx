@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { getDonor, requestToken } from '../api/donor';
 import { getOAuthProviders } from '../api/auth';
+import { track, identifyDonor } from '../lib/tracing';
 import {
   extractToken,
   startSession,
@@ -185,6 +186,8 @@ export default function MyWallet() {
       setDonor(data);
       setError(null);
       noteSessionEstablished();
+      track('wallet_view', {});
+      identifyDonor(data.id, data.email);
     } catch {
       setDonor(null);
       clearSessionMarker();

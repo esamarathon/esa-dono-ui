@@ -15,6 +15,7 @@ import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
 import auctionsRouter from './routes/auctions.js';
+import { startEventDispatcher } from './services/eventDispatcher.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { metricsAuth } from './middleware/metricsAuth.js';
@@ -23,6 +24,7 @@ import { register } from './lib/metrics.js';
 import { startMetricsRefresh } from './services/metrics.js';
 import { startAuctionScheduler } from './services/auctionScheduler.js';
 import { UPLOADS_DIR, ensureUploadsDir } from './lib/uploads.js';
+import { tracingMiddleware } from './lib/tracing.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,6 +34,9 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 app.use(cors());
+// Trace every request (including the raw-body webhook) so donation processing
+// shows up in the same trace. Mounted before express.json()/routes.
+app.use(tracingMiddleware);
 
 // MUST mount webhook BEFORE express.json()
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
@@ -88,6 +93,9 @@ app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 app.use('/api/auctions', auctionsRouter);
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  startEventDispatcher();
+});
 startMetricsRefresh();
 startAuctionScheduler();

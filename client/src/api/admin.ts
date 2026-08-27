@@ -89,6 +89,66 @@ export async function updateClaimStatus(id: string, status: string) {
   return data;
 }
 
+export async function getDestinations() {
+  const { data } = await adminClient.get('/destinations');
+  return data;
+}
+
+export async function createDestination(payload: {
+  destination_type?: 'HTTP' | 'RABBITMQ';
+  url?: string;
+  secret?: string;
+  event_types: string[];
+  verify_ssl?: boolean;
+  description?: string;
+  amqp_url?: string;
+  amqp_exchange?: string;
+  amqp_routing_key?: string;
+}) {
+  const { data } = await adminClient.post('/destinations', payload);
+  return data;
+}
+
+export async function updateDestination(
+  id: string,
+  payload: {
+    destination_type?: 'HTTP' | 'RABBITMQ';
+    url?: string;
+    event_types?: string[];
+    verify_ssl?: boolean;
+    is_active?: boolean;
+    description?: string;
+    amqp_url?: string;
+    amqp_exchange?: string;
+    amqp_routing_key?: string;
+  },
+) {
+  const { data } = await adminClient.put(`/destinations/${id}`, payload);
+  return data;
+}
+
+export async function rotateDestinationSecret(id: string) {
+  const { data } = await adminClient.post(`/destinations/${id}/rotate-secret`);
+  return data;
+}
+
+export async function deleteDestination(id: string) {
+  const { data } = await adminClient.delete(`/destinations/${id}`);
+  return data;
+}
+
+export async function getDestinationDeliveries(id: string, limit = 50, offset = 0) {
+  const { data } = await adminClient.get(`/destinations/${id}/deliveries`, {
+    params: { limit, offset },
+  });
+  return data;
+}
+
+export async function testDestination(id: string) {
+  const { data } = await adminClient.post(`/destinations/${id}/test`);
+  return data;
+}
+
 /** Upload a reward image via the shared moderator upload endpoint.
  *  The admin bearer key satisfies moderatorAuth, so no separate admin
  *  upload route is needed. */

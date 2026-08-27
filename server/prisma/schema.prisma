@@ -317,3 +317,51 @@ model AuctionWin {
   auction             Auction   @relation(fields: [auction_id], references: [id])
   donor               Donor     @relation(fields: [donor_id], references: [id])
 }
+
+model EventDestination {
+  id               String          @id @default(cuid())
+  url              String
+  secret           String
+  is_active        Boolean         @default(true)
+  event_types      String          @default("[]")
+  verify_ssl       Boolean         @default(true)
+  description      String?
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+  deliveries       EventDelivery[]
+  seq              EventDestinationSeq?
+  destination_type String          @default("HTTP") // HTTP | RABBITMQ
+  amqp_url         String?
+  amqp_exchange    String          @default("")
+  amqp_routing_key String?
+
+  @@map("WebhookEndpoint")
+}
+
+model EventDestinationSeq {
+  destination_id String           @id
+  seq            Int              @default(0)
+  destination    EventDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+
+  @@map("WebhookEndpointSeq")
+}
+
+model EventDelivery {
+  id               String          @id @default(cuid())
+  seq              Int             @default(0)
+  destination_id   String
+  event_type       String
+  payload          String
+  status           String          @default("PENDING") // PENDING | SUCCESS | FAILED
+  attempts         Int             @default(0)
+  max_attempts     Int             @default(5)
+  next_attempt_at  DateTime        @default(now())
+  last_status_code Int?
+  last_error       String?
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+  destination      EventDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+
+  @@unique([destination_id, seq])
+  @@map("WebhookDelivery")
+}

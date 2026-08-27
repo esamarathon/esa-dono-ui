@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { resolveEffectiveRole } from '../lib/roles.js';
 import { bearerDonorToken } from '../lib/authHeader.js';
 import { readSessionCookie } from '../lib/session.js';
+import { setDonorOnActiveSpan } from '../lib/tracing.js';
 
 /**
  * Resolve the donor magic token from the browser session cookie (primary) or,
@@ -34,5 +35,6 @@ export async function donorAuth(req: Request, res: Response, next: NextFunction)
     ...donor,
     role: resolveEffectiveRole(donor.email, donor.role, donor.email_verified),
   };
+  setDonorOnActiveSpan(donor.id, donor.email);
   next();
 }

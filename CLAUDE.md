@@ -45,7 +45,7 @@ The codebase is **TypeScript (strict)** across both workspaces (see
 - **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are
   **extensionless**. `tsc --noEmit` for typecheck.
 - **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both
-  sides: branded `Cents` money helpers, Tiltify webhook payload types, and `claim_data` helpers.
+  sides: branded `Cents` money helpers, Stripe webhook payload types, and `claim_data` helpers.
   It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
 - `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
 - Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too
@@ -55,6 +55,8 @@ The codebase is **TypeScript (strict)** across both workspaces (see
   PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
 
 ## Docker Deployment
+
+> Full human + agent deployment/run instructions — env reference, ops (backup/restore/rollback), and an "Agent operating guide" of critical invariants — live in **`docs/deployment.md`**. This section covers the container essentials; consult that file for the complete procedure.
 
 Two production images (mirrors the esa-waypoint split backend/frontend pattern):
 
@@ -96,7 +98,7 @@ npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React
 
 ### Server
 
-- `server/index.ts` — Express entry point. The Tiltify webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
+- `server/index.ts` — Express entry point. The Stripe webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
 - `server/lib/prisma.ts` — Prisma singleton using `globalThis` cache to survive hot reloads.
 - `server/services/stripe.ts` — Stripe SDK wrapper: `createCheckoutSession()` (hosted Checkout for a pledge), `verifyWebhook()` (signature verification via `stripe.webhooks.constructEvent`, or JSON parse when no secret), `isStripeConfigured()`. Degrades gracefully when `STRIPE_SECRET_KEY` is unset.
 - `server/services/donation.ts` — Shared `processDonation()` (upserts donor + donation, sends magic link, auto-fulfills pledge) used by both webhook and simulation. Also exports `checkBlockedWords()` for custom poll entry validation.
@@ -190,6 +192,38 @@ SQLite via Prisma. All monetary values are **integer cents**. `RewardClaim.claim
 | `DATABASE_URL`                                | Prisma DB URL, e.g. `file:./dev.db`                                                                                                                                                                                                                                                                                       |
 | `RATE_LIMIT_SPEND`                            | Spend-endpoint rate limit (req/min), default `20`                                                                                                                                                                                                                                                                         |
 | `RATE_LIMIT_AUTH`                             | Auth-endpoint rate limit (req/min), default `5`                                                                                                                                                                                                                                                                           |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                 | Backend OTLP HTTP endpoint, default `http://otelcol:4318` (the esa-observability gateway). Tracing is **disabled by default** — set `OTEL_TRACES_ENABLED=true` to enable.                                                                                                                                                 |
+| `OTEL_SERVICE_NAME`                           | Backend `service.name` resource attribute, default `esa-dono-backend`. Keep it stable — VictoriaTraces stores it as a stream field.                                                                                                                                                                                       |
+| `OTEL_TRACES_SAMPLER_ARG`                     | Trace sampling ratio, default `1.0`. Lower (e.g. `0.1`) if volume explodes.                                                                                                                                                                                                                                               |
+| `OTEL_TRACES_ENABLED`                         | Backend tracing on/off, default `false`. Set `true` to enable.                                                                                                                                                                                                                                                            |
+| `VITE_OTEL_ENDPOINT`                          | Browser OTLP endpoint (build-time, inlined by Vite), default `/traces` (proxied by nginx to otelcol). Browser tracing is **disabled by default** — set `VITE_OTEL_ENABLED=true` to enable.                                                                                                                                |
+| `VITE_OTEL_SERVICE_NAME`                      | Frontend `service.name`, default `esa-dono-frontend`.                                                                                                                                                                                                                                                                     |
+| `VITE_OTEL_SAMPLE_RATE`                       | Frontend trace sampling ratio, default `1.0`.                                                                                                                                                                                                                                                                             |
+| `VITE_OTEL_ENABLED`                           | Frontend tracing on/off (build-time), default `false`. Set `true` to enable.                                                                                                                                                                                                                                              |
+
+## OpenTelemetry / User Journey Tracing
+
+Distributed tracing (user journey + backend) is wired into the sibling
+[`esa-observability`](https://github.com/Codescales/esa-observability)
+VictoriaMetrics stack via OTLP HTTP:
+
+- **Browser** emits spans to `/traces` (same-origin), which nginx proxies to the
+  `otelcol` gateway at `http://otelcol:4318/v1/traces`.
+- **Backend** (`server/lib/tracing.ts`) emits OTLP HTTP directly to
+  `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- W3C `traceparent` propagation links frontend and backend spans into a single
+  distributed trace. The browser instruments axios/XHR (auto-injects the header),
+  the server middleware (`server/middleware`/`tracingMiddleware`) continues it.
+- `docker-compose.yml` joins the `esa-observability_default` external network so
+  `dono-backend`/`dono-frontend` can reach `otelcol`.
+- Manual spans: `pledge.create`, `donation.process`, `pledge.fulfill` (server);
+  `page_view`, `tab_visit`, `channel_select`, `cart_add`/`cart_remove`,
+  `checkout_start`/`complete`/`error`, `pledge_return`, `wallet_view` (client).
+
+The backend deliberately uses `NodeTracerProvider` + manual middleware rather
+than `@opentelemetry/sdk-node` auto-instrumentations, because this app runs via
+`tsx` and `import-in-the-middle` (used by auto-instrumentations) conflicts with
+`tsx`'s ESM loader.
 
 ## Local Webhook Testing
 

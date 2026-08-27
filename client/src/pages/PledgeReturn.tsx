@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getPledge } from '../api/pledge';
 import { startSession } from '../utils/authToken';
+import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
 import type { Pledge } from '../types';
@@ -26,6 +27,7 @@ export default function PledgeReturn() {
       setError('No pledge token provided.');
       return;
     }
+    track('pledge_return', { 'pledge.token': token });
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;

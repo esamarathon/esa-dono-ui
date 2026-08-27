@@ -6,6 +6,12 @@ services:
       target: runtime
     image: ghcr.io/codescales/esa-dono-ui/backend:latest
     environment:
+      # OpenTelemetry tracing → esa-observability otelcol gateway (shared network).
+      # Disabled by default; set OTEL_TRACES_ENABLED=true to enable.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otelcol:4318}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-esa-dono-backend}
+      - OTEL_TRACES_SAMPLER_ARG=${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      - OTEL_TRACES_ENABLED=${OTEL_TRACES_ENABLED:-false}
       - NODE_ENV=production
       - PORT=3001
       - DATABASE_URL=file:/data/dono.db
@@ -49,6 +55,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        VITE_OTEL_ENDPOINT: ${VITE_OTEL_ENDPOINT:-/traces}
+        VITE_OTEL_SERVICE_NAME: ${VITE_OTEL_SERVICE_NAME:-esa-dono-frontend}
+        VITE_OTEL_SAMPLE_RATE: ${VITE_OTEL_SAMPLE_RATE:-1.0}
+        VITE_OTEL_ENABLED: ${VITE_OTEL_ENABLED:-false}
     image: ghcr.io/codescales/esa-dono-ui/frontend:latest
     ports:
       - '${FRONTEND_PORT:-8080}:8080'
@@ -58,3 +69,8 @@ services:
 
 volumes:
   dono-data:
+
+networks:
+  default:
+    name: esa-observability_default
+    external: true

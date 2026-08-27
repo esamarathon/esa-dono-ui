@@ -13,6 +13,17 @@ ENV NPM_CONFIG_LOGLEVEL=warn \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     CI=true
 
+# Build-time OpenTelemetry client config (inlined by Vite). Defaults to the
+# same-origin nginx /traces proxy, which works on any host without extra config.
+ARG VITE_OTEL_ENDPOINT=/traces
+ARG VITE_OTEL_SERVICE_NAME=esa-dono-frontend
+ARG VITE_OTEL_SAMPLE_RATE=1.0
+ARG VITE_OTEL_ENABLED=false
+ENV VITE_OTEL_ENDPOINT=$VITE_OTEL_ENDPOINT \
+    VITE_OTEL_SERVICE_NAME=$VITE_OTEL_SERVICE_NAME \
+    VITE_OTEL_SAMPLE_RATE=$VITE_OTEL_SAMPLE_RATE \
+    VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED
+
 COPY package.json package-lock.json ./
 COPY client/package.json ./client/
 # server manifest is referenced by the root workspace install

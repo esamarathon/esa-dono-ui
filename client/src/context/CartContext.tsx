@@ -13,6 +13,7 @@ import { getPolls } from '../api/polls';
 import { getGoals } from '../api/goals';
 import { getChannels } from '../api/channels';
 import { createPledge } from '../api/pledge';
+import { track, trackAsync } from '../lib/tracing';
 import {
   apiErrorMessage,
   type CartItem,
@@ -219,6 +220,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
   );
 
   const addToCart = useCallback((item: CartItem) => {
+    track('cart_add', {
+      'item.kind': item.kind,
+      'item.target_id': item.target_id,
+      'item.amount_cents': item.amount_cents,
+    });
     setCart((prev) => {
       const idx = prev.findIndex(
         (i) => i.kind === item.kind && i.target_id === item.target_id && i.poll_id === item.poll_id,
@@ -233,6 +239,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const removeFromCart = useCallback((kind: CartItem['kind'], targetId: string) => {
+    track('cart_remove', { 'item.kind': kind, 'item.target_id': targetId });
     setCart((prev) => prev.filter((i) => !(i.kind === kind && i.target_id === targetId)));
   }, []);
 
@@ -347,32 +354,41 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const checkout = useCallback(async (): Promise<PledgeResult | null> => {
     setCheckoutError('');
     if (!email.trim()) {
+      track('checkout_error', { 'error.reason': 'missing_email' });
       setCheckoutError('Please enter your email address');
       return null;
     }
     if (!selectedChannelId) {
+      track('checkout_error', { 'error.reason': 'no_event_selected' });
       setCheckoutError('Select an event before checking out');
       return null;
     }
     if (cart.length === 0 && topUpCents <= 0) {
+      track('checkout_error', { 'error.reason': 'empty_cart' });
       setCheckoutError('Add an incentive or an additional donation to continue');
       return null;
     }
+    track('checkout_start', { total_cents: totalCents, item_count: cart.length });
     setSubmitting(true);
     try {
-      const result = await createPledge({
-        email: email.trim(),
-        comment: comment.trim() || undefined,
-        top_up_cents: topUpCents > 0 ? topUpCents : undefined,
-        channel_id: selectedChannelId,
-        items: cart.map((item) => ({
-          kind: item.kind,
-          target_id: item.target_id,
-          amount_cents: item.amount_cents,
-          poll_id: item.poll_id,
-          data: item.data,
-        })),
-      });
+      const result = await trackAsync(
+        'checkout_create_pledge',
+        () =>
+          createPledge({
+            email: email.trim(),
+            comment: comment.trim() || undefined,
+            top_up_cents: topUpCents > 0 ? topUpCents : undefined,
+            channel_id: selectedChannelId,
+            items: cart.map((item) => ({
+              kind: item.kind,
+              target_id: item.target_id,
+              amount_cents: item.amount_cents,
+              poll_id: item.poll_id,
+              data: item.data,
+            })),
+          }),
+        { 'pledge.total_cents': totalCents },
+      );
       localStorage.setItem(EMAIL_STORAGE_KEY, email.trim());
       // Clear now — the server-side PendingPledge is the source of truth
       // from here on. Re-submitting the same client cart after this point
@@ -380,17 +396,19 @@ export function CartProvider({ children }: { children: ReactNode }) {
       // pledge; clearing avoids that. If Stripe is abandoned, the pledge
       // simply expires — no money is ever taken, nothing is lost.
       clearCart();
+      track('checkout_complete', { 'pledge.total_cents': totalCents });
       if (result.donate_url) {
         window.location.href = result.donate_url;
       }
       return result;
     } catch (e) {
+      track('checkout_error', { 'error.reason': (e as Error).message });
       setCheckoutError(apiErrorMessage(e, 'Failed to create pledge'));
       return null;
     } finally {
       setSubmitting(false);
     }
-  }, [email, comment, cart, topUpCents, selectedChannelId, clearCart]);
+  }, [email, comment, cart, topUpCents, selectedChannelId, totalCents, clearCart]);
 
   const value: CartContextValue = {
     rewards,

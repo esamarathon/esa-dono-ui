@@ -1,7 +1,9 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 import Navbar from './components/Navbar';
 import CartDrawer from './components/CartDrawer';
 import { CartProvider } from './context/CartContext';
+import { track } from './lib/tracing';
 import Home from './pages/Home';
 import DonateFlow from './pages/DonateFlow';
 import PledgeReturn from './pages/PledgeReturn';
@@ -20,6 +22,7 @@ import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
 import AdminPledges from './pages/admin/AdminPledges';
 import AdminAuctions from './pages/admin/AdminAuctions';
+import AdminDestinations from './pages/admin/AdminDestinations';
 import ModeratorLayout from './pages/moderator/ModeratorLayout';
 import ModeratorDashboard from './pages/moderator/ModeratorDashboard';
 import ModeratorChannels from './pages/moderator/ModeratorChannels';
@@ -29,6 +32,15 @@ import ModeratorGoals from './pages/moderator/ModeratorGoals';
 import ModeratorClaims from './pages/moderator/ModeratorClaims';
 import ModeratorDonations from './pages/moderator/ModeratorDonations';
 import ModeratorAuctions from './pages/moderator/ModeratorAuctions';
+
+/** Fires a `page_view` span on every client-side route change. */
+function PageViewTracker() {
+  const location = useLocation();
+  useEffect(() => {
+    track('page_view', { 'page.path': location.pathname, 'page.title': document.title });
+  }, [location.pathname]);
+  return null;
+}
 
 export default function App() {
   return (
@@ -46,6 +58,7 @@ export default function App() {
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
           <Route path="auctions" element={<AdminAuctions />} />
+          <Route path="destinations" element={<AdminDestinations />} />
         </Route>
         <Route path="/moderate" element={<ModeratorLayout />}>
           <Route index element={<ModeratorDashboard />} />
@@ -62,6 +75,7 @@ export default function App() {
           element={
             <div className="min-h-screen">
               <CartProvider>
+                <PageViewTracker />
                 <Navbar />
                 <CartDrawer />
                 <Routes>

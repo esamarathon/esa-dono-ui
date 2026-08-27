@@ -4,6 +4,8 @@ import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
+import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
+import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
   externalId: string;
@@ -50,20 +52,45 @@ export async function processDonation({
   shippingCents = 0,
   channelId = null,
 }: ProcessDonationOptions) {
+  return withSpan('donation.process', async () => {
+    return processDonationInner({
+      externalId,
+      email,
+      donorName,
+      amountCents,
+      comment,
+      pledgeToken,
+      shippingCents,
+      channelId,
+    });
+  });
+}
+
+async function processDonationInner({
+  externalId,
+  email,
+  donorName,
+  amountCents,
+  comment,
+  pledgeToken,
+  shippingCents = 0,
+  channelId = null,
+}: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
   // Shipping is passed through to Stripe, not donated — exclude it from the
   // spendable wallet balance (but keep the full amount in total_donated).
   const creditedCents = amountCents - shippingCents;
 
+  let result: {
+    donor: { id: string; magic_token: string | null; email: string; balance_remaining: number };
+    donation: { id: string; external_id: string };
+    pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
+  } | null = null;
   try {
-    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
-      // Donating never grants or changes role. Moderator/admin access is
-      // resolved per-request from ADMIN_EMAILS/MODERATOR_EMAILS allowlists
-      // (see server/lib/roles.ts) or assigned explicitly via the admin API —
-      // never as a side effect of payment.
       const donor = await tx.donor.upsert({
         where: { email: normalizedEmail },
         update: {
@@ -91,7 +118,6 @@ export async function processDonation({
         },
       });
 
-      // Try to resolve and fulfill a pledge
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
       try {
         const pledge = await resolvePledge({
@@ -118,7 +144,7 @@ export async function processDonation({
         console.error('Email error:', err),
       );
 
-      return { donor, token: donor.magic_token, pledge: pledgeResult };
+      return { donor, donation, pledge: pledgeResult };
     });
   } catch (err) {
     if ((err as { code?: string }).code === 'P2002') {
@@ -126,6 +152,24 @@ export async function processDonation({
     }
     throw err;
   }
+
+  emitWebhookEvent(
+    'donation.created',
+    buildDonationCreatedPayload({
+      donationId: result!.donation.id,
+      externalId,
+      amountCents,
+      channelId: channelId ?? null,
+      donorRef: result!.donor.id,
+    }),
+  );
+
+  return {
+    donor: result!.donor,
+    token: result!.donor.magic_token,
+    pledge: result!.pledge,
+    donation: result!.donation,
+  };
 }
 
 /**

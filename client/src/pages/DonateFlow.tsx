@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
+import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import { CheckBadgeIcon } from '../components/icons';
@@ -70,6 +71,7 @@ export default function DonateFlow() {
     const currentIndex = TABS.indexOf(tab);
     setDirection(nextIndex >= currentIndex ? 'next' : 'prev');
     setTab(next);
+    track('tab_visit', { tab: next });
   };
 
   if (loading) return <LoadingSpinner />;
@@ -118,7 +120,10 @@ export default function DonateFlow() {
             {channels.map((s) => (
               <button
                 key={s.id}
-                onClick={() => selectChannel(s.id)}
+                onClick={() => {
+                  selectChannel(s.id);
+                  track('channel_select', { 'channel.id': s.id });
+                }}
                 className={`font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
                   selectedChannelId === s.id
                     ? 'text-black'

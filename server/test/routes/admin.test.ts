@@ -30,6 +30,7 @@ vi.mock('../../lib/prisma.js', () => ({
       update: vi.fn(),
     },
     poll: {
+      findUnique: vi.fn(),
       update: vi.fn(),
     },
     fundContribution: {
@@ -44,6 +45,13 @@ vi.mock('../../lib/prisma.js', () => ({
     balanceAdjustment: {
       create: vi.fn(),
     },
+    eventDestination: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    eventDelivery: {
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+    },
     $transaction: vi.fn((ops: any[]) =>
       Promise.all(ops.map((o) => (typeof o === 'function' ? o() : o))),
     ),
@@ -52,6 +60,34 @@ vi.mock('../../lib/prisma.js', () => ({
 
 vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
+}));
+
+vi.mock('../../services/webhooks.js', () => ({
+  emitWebhookEvent: vi.fn(),
+  buildIncentiveCreatedPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.created',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveEnabledPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.enabled',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveDisabledPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.disabled',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveValueChangedPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.value_changed',
+    created_at: '',
+    data: {},
+  })),
 }));
 
 import prisma from '../../lib/prisma.js';
@@ -71,6 +107,8 @@ describe('Admin donor management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.ADMIN_API_KEY = 'test-key';
+    px.poll.findUnique?.mockResolvedValue({ id: 'p1', is_active: true, title: 'Test Poll' });
+    px.fundGoal.findUnique?.mockResolvedValue({ id: 'g1', is_active: true, title: 'Test Goal' });
   });
 
   const auth = { Authorization: 'Bearer key_admin_test-key' };
