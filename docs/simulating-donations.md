@@ -49,4 +49,24 @@ Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl
 
 **Known limitation**: auction bids require a donor with a verified email, which no admin API can set — bids are attempted for coverage but expected to be rejected with 403 (logged as an expected note, not a failure).
 
-To reset the demo to a clean baseline before/after simulation runs: `DEMO_RESET_ALLOWED=1 ./scripts/reset-demo.sh` (destroys and recreates the DB volume, then re-seeds via `seed-dev.sh`). Intended to also run on a daily/weekly cron/systemd timer on the demo host.
+To reset the demo to a clean baseline before/after simulation runs: `DEMO_RESET_ALLOWED=1 ./scripts/reset-demo.sh` (destroys and recreates the DB volume, then re-seeds via `seed-dev.sh`). Falls back to seeding via a throwaway container on the backend's own Docker network when the backend has no host port mapping (e.g. behind a reverse proxy with no published ports).
+
+### Scheduled runs on a deployed host
+
+For a container deployment where the backend has Node + `tsx` baked in (the standard runtime image does) but no host access, three pieces run the simulator on a recurring schedule:
+
+- **`server/scripts/run-sim.sh`** — runs _inside_ the backend container. Sane defaults (`SEED` auto-generated from a UTC timestamp, `EVENTS=150`, `RATE=3/s`, writes to `/data/sim-runs/<seed>` so output survives container restarts), all overridable via env vars, and prunes runs older than `KEEP_DAYS` (default 14).
+- **`scripts/run-simulator.sh`** — host-side wrapper that `docker exec`s into the running backend container to invoke `run-sim.sh`, forwarding any of the env overrides that are set.
+- **`scripts/systemd/`** — `simulator-run.service` + `simulator-run.timer` (every 6h by default, `Persistent=true`) and `install-systemd-timers.sh` to install/enable them (`sudo scripts/systemd/install-systemd-timers.sh`).
+
+```bash
+# Run once, right now:
+./scripts/run-simulator.sh
+
+# With overrides:
+EVENTS=300 RATE=5/s ./scripts/run-simulator.sh
+
+# Install the recurring timer:
+sudo scripts/systemd/install-systemd-timers.sh
+journalctl -u simulator-run.service -f   # tail logs
+```

@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the seeded platform simulator on a schedule
+
+[Timer]
+# Every 6 hours. Adjust to taste — e.g. OnCalendar=daily for a lighter cadence,
+# or OnCalendar=*:0/30 for every 30 minutes during active bug-hunting.
+OnCalendar=*-*-* 00/6:00:00
+# Run the missed occurrence on boot if the host was down when it was due.
+Persistent=true
+# Spread start time slightly to avoid thundering-herd if multiple timers fire
+# at once on this host.
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
