@@ -258,3 +258,17 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
 ```
 
 Returns `{ success: true, token, donor }`. Use the token to build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie and redirects to the wallet).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues in `Codescales/esa-dono-ui`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles mapped to default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo: `CONTEXT.md` + `docs/adr/` at the root. See `docs/agents/domain.md`.

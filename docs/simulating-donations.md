@@ -26,3 +26,27 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
 ```
 
 Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet).
+
+## Option D — Seeded platform simulator (bulk, reproducible)
+
+For behavioral/bug-hunting runs against the resettable demo site — many donations and incentive selections in one go, replayable from a seed. See [wayfinder map #30](https://github.com/Codescales/esa-dono-ui/issues/30) for the design decisions.
+
+```bash
+# Inspect what a seed generates, offline, no server needed:
+npx tsx server/scripts/simulate.ts --seed bug-repro-tuesday --events 50 --dry-run
+
+# Run it for real against a local server:
+ADMIN_API_KEY=change-me npx tsx server/scripts/simulate.ts \
+  --seed bug-repro-tuesday --events 200 --rate 2/s
+
+# Replay a prior run's exact decision log (flags any outcome divergence):
+npx tsx server/scripts/simulate.ts --replay sim-runs/<runId>/decisions.jsonl
+```
+
+Key flags: `--seed` (int or string; the repro handle), `--events`/`--duration` (stopping condition), `--rate` (mean events/sec, e.g. `2/s`), `--base-url`, `--admin-key` (or `ADMIN_API_KEY` env), `--run-id` (donor-email isolation namespace, auto-generated if omitted), `--donors`, `--out` (default `./sim-runs/<runId>/`), `--dry-run`, `--verbose`.
+
+Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl` (observed server responses, keyed by `seq`), and `manifest.json` (seed, simVersion, args, git SHA) under `--out`.
+
+**Known limitation**: auction bids require a donor with a verified email, which no admin API can set — bids are attempted for coverage but expected to be rejected with 403 (logged as an expected note, not a failure).
+
+To reset the demo to a clean baseline before/after simulation runs: `DEMO_RESET_ALLOWED=1 ./scripts/reset-demo.sh` (destroys and recreates the DB volume, then re-seeds via `seed-dev.sh`). Intended to also run on a daily/weekly cron/systemd timer on the demo host.
