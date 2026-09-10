@@ -2,24 +2,30 @@
 
 ## Quick Instructions
 
-To run the new dev seed script on the oci-public staging server and create persistent dev accounts + banner:
+To run the dev seed script on the oci-public staging server and create persistent dev accounts + banner:
 
 ### Prerequisites
-- SSH access to oci-public staging server
+- SSH access to the oci-public server (host alias `oci-public`)
 - Docker compose deployed and running on staging
-- Latest images pulled (commit 4d54458 or later with seed feature)
+- Images pulled from `ghcr.io/esamarathon/esa-dono-ui` (the canonical org — do **not** use `ghcr.io/codescales/esa-dono-ui`)
 
 ### Execute on Staging Server
 
 ```bash
 # SSH into staging
-ssh user@oci-public-ip
+ssh oci-public
 
-# Navigate to deployment directory
-cd /opt/esa-dono-ui  # (or wherever deployed)
+# Deployment directory
+cd /home/ubuntu/projects/esa-dono-ui
 
-# Run the seed
-docker compose exec dono-backend npx prisma db seed --schema ./server/prisma/schema.prisma
+# Pull latest images and recreate containers
+docker compose pull
+docker compose up -d
+
+# Run the seed — the runtime image has no npm/npx (stripped to save space),
+# so invoke tsx directly against the seed script from server/'s working dir,
+# where server/package.json's "prisma.seed" config and relative imports resolve.
+docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 
 # Expected output:
 # 🌱 Starting seed...
@@ -36,84 +42,60 @@ docker compose exec dono-backend npx prisma db seed --schema ./server/prisma/sch
 - `admin@localhost` (role: ADMIN, email_verified: true)
 
 **Banner:**
-- Displays at top of app showing moderator and admin API keys
+- Displayed at top of app showing moderator and admin API keys
 - Message: `🔑 Moderator Key: key_mod_<KEY> | Admin Key: key_admin_<KEY>`
-- Uses keys from MODERATOR_API_KEY and ADMIN_API_KEY env vars
+- Uses keys from MODERATOR_API_KEY and ADMIN_API_KEY env vars set in staging's `.env`
 
 ## Persistence
 
 ✅ Accounts and banner survive:
-- Database restarts
 - Container restarts
-- Staging daily reset cycle
-
-Simply re-run the seed after any reset to recreate the accounts and banner.
+- Container recreation (`docker compose up -d` after a pull)
+- Staging daily reset cycle (as long as the `dono-data` volume itself isn't wiped —
+  re-run the seed if it is)
 
 ## Verification
 
-1. Visit the staging app at `https://staging.esa.example.com`
-2. Look for the blue INFO-level banner at the top with the API keys
-3. Try moderator login at `/moderate` with the displayed key
-4. Try admin login at `/admin` with the displayed key
+1. Visit the staging app: **https://donate.codescales.xyz**
+2. Check the banner directly: `curl -s https://donate.codescales.xyz/api/campaign/broadcast`
+3. Test moderator login at `/moderate` with the `key_mod_...` key from the banner
+4. Test admin login at `/admin` with the `key_admin_...` key from the banner
 
-## If Running in Non-Interactive Shell
+## Container/Image Notes
 
-If using automation or scripts that don't have an interactive terminal:
-
-```bash
-docker compose exec -T dono-backend npx prisma db seed --schema ./server/prisma/schema.prisma
-```
-
-The `-T` flag disables pseudo-TTY allocation.
-
-## Using the Helper Script
-
-If code has been pulled to staging:
-
-```bash
-cd /opt/esa-dono-ui
-./scripts/run-seed-staging.sh dono-backend
-```
-
-## Documentation
-
-- **Full dev seed documentation:** `docs/deployment.md#seeding-data`
-- **Detailed staging guide:** `docs/STAGING_SEED.md`
-- **Implementation details:** `DEV_SEED.md`
-- **CLAUDE.md reference:** See Bootstrap section for local seed usage
+- Container names: `esa-dono-ui-dono-backend-1`, `esa-dono-ui-dono-frontend-1`
+- Compose file lives at `/home/ubuntu/projects/esa-dono-ui/docker-compose.yml`
+- Images: `ghcr.io/esamarathon/esa-dono-ui/backend:dev`, `ghcr.io/esamarathon/esa-dono-ui/frontend:dev`
+  (as of 2026-09-10, updated from the previously-deployed `ghcr.io/codescales/esa-dono-ui/*` images —
+  `esamarathon` is now the canonical registry namespace)
+- The runtime image has **no npm/npx** — use `/app/node_modules/.bin/tsx` or
+  `/app/node_modules/.bin/prisma` directly
 
 ## Troubleshooting
 
-### "npx: command not found"
-The backend image must have Node.js installed. Verify the image was built from commit 4d54458+:
+### "npx: executable file not found in $PATH"
+The runtime image strips npm to keep it slim. Use the binary directly instead:
 ```bash
-docker image inspect ghcr.io/esamarathon/esa-dono-ui/backend:dev | grep -A5 "Created"
+docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 ```
 
-Pull latest:
+### "spawn tsx ENOENT" (when using `prisma db seed`)
+`node_modules/.bin` isn't on `$PATH` in the exec session, so Prisma's seed
+runner (which just shells out to `tsx prisma/seed.ts`) can't find `tsx`. Skip
+the Prisma CLI wrapper and invoke tsx directly as shown above.
+
+### "No such file or directory: server/prisma/seed.ts"
+The running container predates the seed feature commit. Pull the latest
+`:dev` image and recreate:
 ```bash
-docker pull ghcr.io/esamarathon/esa-dono-ui/backend:dev
+docker compose pull
 docker compose up -d
 ```
 
-### "Environment variable not found: DATABASE_URL"
-DATABASE_URL is set in docker-compose.yml. Try the full working directory:
-```bash
-docker compose exec dono-backend sh -c "cd /app && npx prisma db seed --schema ./server/prisma/schema.prisma"
-```
-
-### "database is locked"
-Another process is accessing the database. Wait a moment and retry:
-```bash
-sleep 5
-docker compose exec dono-backend npx prisma db seed --schema ./server/prisma/schema.prisma
-```
-
-### Seed ran but banner doesn't appear
-Clear browser cache (Ctrl+Shift+Delete or Cmd+Shift+Delete) and reload.
+### Database locked
+Wait a moment and retry — the database might be in use by background tasks.
 
 ---
 
-**Commit:** 4d54458 (feat: add dev seed with persistent moderator/admin accounts and banner)
-**Branch:** dev
-**Date:** 2026-09-10
+**Last updated:** 2026-09-10 (verified against a live run on oci-public)
+**Feature commit:** 4d54458 (dev seed implementation)

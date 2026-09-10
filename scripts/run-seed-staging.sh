@@ -4,28 +4,27 @@
 # Usage:
 #   ./scripts/run-seed-staging.sh [container-name]
 #
-# Defaults to running on the 'dono-backend' container if no argument provided.
+# Defaults to 'esa-dono-ui-dono-backend-1' (the container name docker compose
+# assigns based on the project directory name on oci-public).
+#
+# The runtime image has no npm/npx (stripped from the image to stay slim), so
+# this invokes tsx directly against node_modules/.bin rather than going
+# through `npx prisma db seed`.
 #
 # Prerequisites:
-#   - Must be run from the project root
-#   - Docker/Podman must be running on the staging server
-#   - Must have access to the staging server (SSH or direct Docker connection)
+#   - Run from a machine with SSH/docker access to the target host, or
+#     directly on the host itself
+#   - Docker must be running and the named container must be up
 
 set -e
 
-CONTAINER_NAME="${1:-dono-backend}"
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTAINER_NAME="${1:-esa-dono-ui-dono-backend-1}"
 
 echo "🌱 Running Prisma seed on staging server"
 echo "Container: $CONTAINER_NAME"
 echo ""
 
-# Option 1: If you have SSH access to staging, run this:
-# ssh user@staging-server "cd /path/to/esa-dono-ui && docker exec $CONTAINER_NAME sh -c 'cd /app && npm run prisma db seed'"
-
-# Option 2: If Docker is accessible locally from staging, use:
-# (This assumes you have docker context set up for the staging server)
-docker exec "$CONTAINER_NAME" sh -c "cd /app && npx prisma db seed --schema ./server/prisma/schema.prisma"
+docker exec -w /app/server "$CONTAINER_NAME" sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 
 echo ""
 echo "✅ Seed completed successfully!"

@@ -254,11 +254,18 @@ Restore: stop the backend, copy the file back into the volume, restart.
 ### Seeding data (development / staging)
 
 To create persistent dev accounts (moderator@localhost, admin@localhost) and a
-banner displaying API keys, run the seed script:
+banner displaying API keys, run the seed script.
+
+The production runtime image has no npm/npx (stripped to keep the image slim),
+so invoke `tsx` directly against `node_modules/.bin` rather than
+`npx prisma db seed` (its seed runner shells out to plain `tsx` via `$PATH`,
+which isn't set up in an `exec` session):
 
 ```bash
-docker compose exec dono-backend npx prisma db seed --schema ./server/prisma/schema.prisma
+docker exec -w /app/server <backend-container-name> sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 ```
+
+(In local development, where npm is available, `cd server && npx prisma db seed` works directly — see CLAUDE.md.)
 
 This creates:
 - Moderator account (role: MODERATOR, email_verified: true)
