@@ -67,8 +67,15 @@ async function main() {
   // Create or update banner showing moderator and admin keys.
   // We check for an active banner first; if none exists, create one.
   // This approach allows the seed to be idempotent without hardcoding an ID.
+  //
+  // IMPORTANT: the /moderate and /admin login forms take the RAW key and
+  // prepend "key_mod_"/"key_admin_" themselves (see client/src/api/moderator.ts
+  // and client/src/api/admin.ts) before sending it as an Authorization Bearer
+  // credential. The banner must show the raw value, not the prefixed one —
+  // pasting an already-prefixed value into the login box double-prefixes it
+  // and the key is silently rejected (403).
   const existingBanner = await prisma.broadcast.findFirst();
-  const bannerMessage = `🔑 Moderator Key: key_mod_${MODERATOR_API_KEY} | Admin Key: key_admin_${ADMIN_API_KEY}`;
+  const bannerMessage = `🔑 Moderator Key (paste at /moderate): ${MODERATOR_API_KEY} | Admin Key (paste at /admin): ${ADMIN_API_KEY}`;
 
   let banner;
   if (existingBanner) {
@@ -97,11 +104,13 @@ async function main() {
   console.log(`   Moderator: ${DEV_MODERATOR_EMAIL} (role: MODERATOR)`);
   console.log(`   Admin:     ${DEV_ADMIN_EMAIL} (role: ADMIN)`);
   console.log('');
-  console.log('🔑 API Keys:');
-  console.log(`   Moderator: key_mod_${MODERATOR_API_KEY}`);
-  console.log(`   Admin:     key_admin_${ADMIN_API_KEY}`);
+  console.log('🔑 Raw keys (paste these directly into the /moderate and /admin login boxes):');
+  console.log(`   Moderator: ${MODERATOR_API_KEY}`);
+  console.log(`   Admin:     ${ADMIN_API_KEY}`);
   console.log('');
-  console.log('✨ Banner displayed at the top of the app showing these keys.');
+  console.log('   (For a direct API call instead, prefix them: Authorization: Bearer key_mod_<key> / key_admin_<key>)');
+  console.log('');
+  console.log('✨ Banner displayed at the top of the app showing these raw keys.');
 }
 
 main()
