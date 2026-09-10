@@ -46,7 +46,8 @@ docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.
 **Banner:**
 
 - Displayed at top of app showing moderator and admin API keys
-- Message: `🔑 Moderator Key: key_mod_<KEY> | Admin Key: key_admin_<KEY>`
+- Message: `🔑 Moderator login: go to /moderate and paste this key: <KEY> | Admin login: go to /admin and paste this key: <KEY>`
+  (the raw key, not prefixed — the /moderate and /admin login forms add `key_mod_`/`key_admin_` themselves)
 - Uses keys from MODERATOR_API_KEY and ADMIN_API_KEY env vars set in staging's `.env`
 
 ## Persistence

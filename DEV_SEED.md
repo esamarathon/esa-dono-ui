@@ -12,7 +12,8 @@ Added a Prisma seed script that creates persistent dev accounts and a banner dis
 2. Creates an `ADMIN` role account at `admin@localhost` (persistent across restarts)
 3. Creates/updates a broadcast banner that displays both API keys with:
    - Level: `INFO` (blue styling)
-   - Message format: `🔑 Moderator Key: key_mod_<KEY> | Admin Key: key_admin_<KEY>`
+   - Message format: `🔑 Moderator login: go to /moderate and paste this key: <KEY> | Admin login: go to /admin and paste this key: <KEY>`
+     (raw key, not prefixed — the login forms add `key_mod_`/`key_admin_` themselves before sending the Bearer credential)
 
 The script reads `MODERATOR_API_KEY` and `ADMIN_API_KEY` from environment variables (.env file).
 
