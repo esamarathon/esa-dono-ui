@@ -268,6 +268,7 @@ docker exec -w /app/server <backend-container-name> sh -c '/app/node_modules/.bi
 (In local development, where npm is available, `cd server && npx prisma db seed` works directly — see CLAUDE.md.)
 
 This creates:
+
 - Moderator account (role: MODERATOR, email_verified: true)
 - Admin account (role: ADMIN, email_verified: true)
 - Broadcast banner showing current MODERATOR_API_KEY and ADMIN_API_KEY from .env

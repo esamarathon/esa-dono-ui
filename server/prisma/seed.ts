@@ -108,7 +108,9 @@ async function main() {
   console.log(`   Moderator: ${MODERATOR_API_KEY}`);
   console.log(`   Admin:     ${ADMIN_API_KEY}`);
   console.log('');
-  console.log('   (For a direct API call instead, prefix them: Authorization: Bearer key_mod_<key> / key_admin_<key>)');
+  console.log(
+    '   (For a direct API call instead, prefix them: Authorization: Bearer key_mod_<key> / key_admin_<key>)',
+  );
   console.log('');
   console.log('✨ Banner displayed at the top of the app showing these raw keys.');
 }

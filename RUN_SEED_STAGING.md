@@ -5,6 +5,7 @@
 To run the dev seed script on the oci-public staging server and create persistent dev accounts + banner:
 
 ### Prerequisites
+
 - SSH access to the oci-public server (host alias `oci-public`)
 - Docker compose deployed and running on staging
 - Images pulled from `ghcr.io/esamarathon/esa-dono-ui` (the canonical org — do **not** use `ghcr.io/codescales/esa-dono-ui`)
@@ -38,10 +39,12 @@ docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.
 ## What Gets Created
 
 **Accounts:**
+
 - `moderator@localhost` (role: MODERATOR, email_verified: true)
 - `admin@localhost` (role: ADMIN, email_verified: true)
 
 **Banner:**
+
 - Displayed at top of app showing moderator and admin API keys
 - Message: `🔑 Moderator Key: key_mod_<KEY> | Admin Key: key_admin_<KEY>`
 - Uses keys from MODERATOR_API_KEY and ADMIN_API_KEY env vars set in staging's `.env`
@@ -49,6 +52,7 @@ docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.
 ## Persistence
 
 ✅ Accounts and banner survive:
+
 - Container restarts
 - Container recreation (`docker compose up -d` after a pull)
 - Staging daily reset cycle (as long as the `dono-data` volume itself isn't wiped —
@@ -74,25 +78,31 @@ docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.
 ## Troubleshooting
 
 ### "npx: executable file not found in $PATH"
+
 The runtime image strips npm to keep it slim. Use the binary directly instead:
+
 ```bash
 docker exec -w /app/server esa-dono-ui-dono-backend-1 sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 ```
 
 ### "spawn tsx ENOENT" (when using `prisma db seed`)
+
 `node_modules/.bin` isn't on `$PATH` in the exec session, so Prisma's seed
 runner (which just shells out to `tsx prisma/seed.ts`) can't find `tsx`. Skip
 the Prisma CLI wrapper and invoke tsx directly as shown above.
 
 ### "No such file or directory: server/prisma/seed.ts"
+
 The running container predates the seed feature commit. Pull the latest
 `:dev` image and recreate:
+
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
 ### Database locked
+
 Wait a moment and retry — the database might be in use by background tasks.
 
 ---
