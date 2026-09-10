@@ -75,7 +75,7 @@ async function main() {
   // pasting an already-prefixed value into the login box double-prefixes it
   // and the key is silently rejected (403).
   const existingBanner = await prisma.broadcast.findFirst();
-  const bannerMessage = `🔑 Moderator Key (paste at /moderate): ${MODERATOR_API_KEY} | Admin Key (paste at /admin): ${ADMIN_API_KEY}`;
+  const bannerMessage = `🔑 Moderator login: go to /moderate and paste this key: ${MODERATOR_API_KEY} | Admin login: go to /admin and paste this key: ${ADMIN_API_KEY}`;
 
   let banner;
   if (existingBanner) {
