@@ -187,7 +187,7 @@ export default function AdminBroadcast() {
         <div className="mt-6">
           <h2 className="font-display text-lg uppercase mb-3">Preview</h2>
           <div
-            className="px-4 py-3 text-sm rounded-sm"
+            className="px-4 py-3 text-sm rounded-sm whitespace-pre-line"
             style={LEVEL_PREVIEW_STYLE[broadcast.level ?? 'default']}
           >
             {broadcast.message}

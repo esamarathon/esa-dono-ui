@@ -66,7 +66,7 @@ export default function BroadcastBanner() {
   const style = LEVEL_STYLES[broadcast.level ?? 'default'];
 
   return (
-    <div className="px-4 py-3 text-sm text-center font-body" style={style}>
+    <div className="px-4 py-3 text-sm text-center font-body whitespace-pre-line" style={style}>
       {broadcast.message}
     </div>
   );
