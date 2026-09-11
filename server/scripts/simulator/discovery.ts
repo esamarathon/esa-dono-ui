@@ -33,6 +33,27 @@ async function getJson<T>(baseUrl: string, path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * Try to fetch a resource, returning an empty array if the endpoint is
+ * feature-gated (403) or missing. Used for optional discovery endpoints
+ * like /api/auctions which may be disabled via feature flags.
+ */
+async function getJsonOptional<T extends { id: string }>(
+  baseUrl: string,
+  path: string,
+): Promise<T[]> {
+  try {
+    return await getJson<T[]>(baseUrl, path);
+  } catch (err) {
+    const status = Number((err as Error).message.match(/failed: (\d+)/)?.[1] ?? NaN);
+    // Return empty array if the endpoint is feature-gated (403) or not found (404)
+    if (status === 403 || status === 404) {
+      return [];
+    }
+    throw err;
+  }
+}
+
 /** Build the synthetic-ref catalog from live discovery endpoints. */
 export async function discover(baseUrl: string): Promise<Catalog> {
   const [channels, rewards, polls, goals, auctions] = await Promise.all([
@@ -40,7 +61,7 @@ export async function discover(baseUrl: string): Promise<Catalog> {
     getJson<RewardShape[]>(baseUrl, '/api/rewards'),
     getJson<PollShape[]>(baseUrl, '/api/polls'),
     getJson<GoalShape[]>(baseUrl, '/api/goals'),
-    getJson<HasId[]>(baseUrl, '/api/auctions'),
+    getJsonOptional<HasId>(baseUrl, '/api/auctions'),
   ]);
 
   const resolve: Record<string, string> = {};
