@@ -74,8 +74,15 @@ async function main() {
   // credential. The banner must show the raw value, not the prefixed one —
   // pasting an already-prefixed value into the login box double-prefixes it
   // and the key is silently rejected (403).
+  //
+  // The banner now renders line breaks (whitespace-pre-line, commit d06f486)
+  // instead of squashing everything onto one line, so use real newlines here
+  // for readability rather than cramming both keys onto a single '|'-joined line.
   const existingBanner = await prisma.broadcast.findFirst();
-  const bannerMessage = `🔑 Moderator login: go to /moderate and paste this key: ${MODERATOR_API_KEY} | Admin login: go to /admin and paste this key: ${ADMIN_API_KEY}`;
+  const bannerMessage = [
+    `🔑 Moderator login: go to /moderate and paste this key: ${MODERATOR_API_KEY}`,
+    `🔑 Admin login: go to /admin and paste this key: ${ADMIN_API_KEY}`,
+  ].join('\n');
 
   let banner;
   if (existingBanner) {
