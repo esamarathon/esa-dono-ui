@@ -55,7 +55,7 @@ upload_image() {
   curl -sf -X POST "$BASE/api/moderator/uploads" -H "$AUTH" -F "file=@$path;type=image/webp" | jq -r .url
 }
 
-IMG_REWARD_SHOUTOUT=$(upload_image "reward-shoutout" "UklGRtIAAABXRUJQVlA4IMYAAACQEwCdASpAAfAAPp1OpE4lpCOiICgAsBOJaW7hd2Ee3AAAFZu14uTkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk4UAA/v9hw/+Cepco///PTP62/j/xzfdaGMCAAAAAAAAAAAA=")
+IMG_REWARD_THANKS=$(upload_image "reward-thanks" "UklGRtIAAABXRUJQVlA4IMYAAACQEwCdASpAAfAAPp1OpE4lpCOiICgAsBOJaW7hd2Ee3AAAFZu14uTkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk4UAA/v9hw/+Cepco///PTP62/j/xzfdaGMCAAAAAAAAAAAA=")
 IMG_REWARD_DISCORD=$(upload_image "reward-discord" "UklGRtoAAABXRUJQVlA4IM4AAACQEwCdASpAAfAAPp1OpE4lpCOiICgAsBOJaW7hd2EaHAAAE9gHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZMQAA/v9hw/9ahdt5H/xC72MxwcGy8aYKsvTz3wIeG+BAAAAAAAAAAAAAAA==")
 IMG_REWARD_SHIRT=$(upload_image "reward-shirt" "UklGRs4AAABXRUJQVlA4IMIAAABQEwCdASpAAfAAPp1OpE4lpCOiICgAsBOJaW7hd2EbQAtLZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfWAAP7+xF/Ox78H//+LQ/t5/wa2tqBsoEAAAAAAAAAAAA==")
 IMG_REWARD_GAME=$(upload_image "reward-game" "UklGRs4AAABXRUJQVlA4IMIAAACQEwCdASpAAfAAPp1OpE4lpCOiICgAsBOJaW7hd2Ee3AAAFZu14uTkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk4UAA/v+z1n//7FnLYGar/9RrY1SAAAAAAAAAAAAAAA==")
@@ -78,10 +78,17 @@ C_BONUS=$(curl -sf -X POST $BASE/api/admin/channels \
 echo "   Channels: $C_MAIN (Main Marathon) $C_BONUS (Bonus Stream)"
 
 # --- Rewards ---
-# Shoutouts and the Discord role are left shared (no channel_id) — available
-# from either channel's donate flow. The t-shirt and game pick are scoped to
-# the Main Marathon, to demonstrate a channel-specific incentive. All four
-# carry a real uploaded test image.
+# The 'thank-you card' and the Discord role are left shared (no channel_id)
+# — available from either channel's donate flow. The t-shirt and game pick
+# are scoped to the Main Marathon, to demonstrate a channel-specific
+# incentive. All four carry a real uploaded test image.
+#
+# NOTE: a SHOUTOUT-type reward ('Shoutout on Stream') used to live here, but
+# it collects its own 'Shoutout Message' claim_data field (see FIELDS in
+# client/src/components/incentives/RewardList.tsx) that donors confused with
+# the donation cart's own comment field — two similar-looking free-text
+# message boxes in the same checkout flow. Replaced with a plain DIGITAL
+# reward (no claim_data fields at all) to remove that ambiguity.
 #
 # Quantities are deliberately generous (not just enough for a manual demo
 # walkthrough): the seeded/scheduled platform simulator (server/scripts/
@@ -91,9 +98,9 @@ echo "   Channels: $C_MAIN (Main Marathon) $C_BONUS (Bonus Stream)"
 # reset. Low test-only quantities (e.g. 1, 20, 50) were exhausted within a
 # day of scheduled runs in practice.
 echo "==> Creating rewards..."
-R_SHOUT=$(curl -sf -X POST $BASE/api/admin/rewards \
+R_THANKS=$(curl -sf -X POST $BASE/api/admin/rewards \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"title\":\"Shoutout on Stream\",\"description\":\"Get shouted out live during the broadcast\",\"type\":\"SHOUTOUT\",\"cost_cents\":500,\"is_active\":true,\"image_url\":\"$IMG_REWARD_SHOUTOUT\"}" | jq -r .id)
+  -d "{\"title\":\"Digital Thank-You Card\",\"description\":\"A personalized digital thank-you card, emailed after the event\",\"type\":\"DIGITAL\",\"cost_cents\":500,\"is_active\":true,\"image_url\":\"$IMG_REWARD_THANKS\"}" | jq -r .id)
 
 R_DISC=$(curl -sf -X POST $BASE/api/admin/rewards \
   -H "Content-Type: application/json" -H "$AUTH" \
@@ -123,7 +130,7 @@ R_COSTUME=$(curl -sf -X POST $BASE/api/admin/rewards \
   -H "Content-Type: application/json" -H "$AUTH" \
   -d "{\"title\":\"Choose the Runner's Costume\",\"description\":\"Pick a themed costume for the next runner\",\"type\":\"CUSTOM\",\"cost_cents\":3000,\"quantity_total\":300,\"is_active\":true,\"custom_type_label\":\"Costume idea\",\"image_url\":\"$IMG_AUCTION_STREAM\"}" | jq -r .id)
 
-echo "   Rewards: $R_SHOUT $R_DISC $R_SHIRT $R_GAME $R_CHEATSHEET $R_ARTPRINT $R_COSTUME"
+echo "   Rewards: $R_THANKS $R_DISC $R_SHIRT $R_GAME $R_CHEATSHEET $R_ARTPRINT $R_COSTUME"
 
 # --- Auctions ---
 # A1 (signed memorabilia) is left shared — biddable from either channel's
@@ -226,16 +233,16 @@ echo "   6 donations created (Alice/Dave -> Main Marathon, Bob/Carol -> Bonus St
 # Donor spend routes authenticate via `Authorization: Bearer <magic-token>`
 # (the legacy ?token= query param is gone).
 echo "==> Claiming rewards..."
-curl -sf -X POST "$BASE/api/rewards/$R_SHOUT/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
-  -d '{"claim_data":{"message":"Shoutout to my cat Mittens!"}}' > /dev/null
+curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
+  -d '{"claim_data":{}}' > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_DISC/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
   -d '{"claim_data":{}}' > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_SHIRT/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE" \
   -d '{"claim_data":{"name":"Dave Smith","address":"123 Main St","city":"Portland","country":"US"}}' > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_GAME/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE" \
   -d '{"claim_data":{"your_game_pick":"Outer Wilds"}}' > /dev/null
-curl -sf -X POST "$BASE/api/rewards/$R_SHOUT/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" \
-  -d '{"claim_data":{"message":"Bob was here!"}}' > /dev/null
+curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" \
+  -d '{"claim_data":{}}' > /dev/null
 echo "   5 claims created."
 
 # --- Poll votes ---
@@ -268,7 +275,7 @@ echo "==> Done. Summary:"
 curl -sf $BASE/api/admin/stats -H "$AUTH" | jq .
 echo ""
 echo "Channels:     Main Marathon ($C_MAIN), Bonus Stream ($C_BONUS)"
-echo "Rewards:      $R_SHOUT (shared), $R_DISC (shared), $R_SHIRT (Main), $R_GAME (Main), $R_CHEATSHEET (shared), $R_ARTPRINT (shared), $R_COSTUME (shared) — all with test images or reused images"
+echo "Rewards:      $R_THANKS (shared), $R_DISC (shared), $R_SHIRT (Main), $R_GAME (Main), $R_CHEATSHEET (shared), $R_ARTPRINT (shared), $R_COSTUME (shared) — all with test images or reused images"
 echo "Auctions:     $A_SHARED (shared), $A_STREAM (Bonus) — all with test images, no bids (needs verified-email donor)"
 echo "Polls:        $P1 (Main), $P2 (Bonus), $P3 (shared)"
 echo "Goals:        $G1 (Bonus), $G2 (shared), $G3 (shared)"
