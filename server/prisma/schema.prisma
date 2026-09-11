@@ -45,9 +45,16 @@ model Donation {
   moderated_at DateTime?
   moderated_by String?
   channel_id  String?
+  // PENDING | COMPLETED | REFUNDED | CHARGEBACK (#63). Existing/new webhook
+  // and simulated donations default to COMPLETED since they only ever get
+  // created after a successful payment; REFUNDED/CHARGEBACK are set when a
+  // linked BalanceAdjustment reverses the donation.
+  status      String   @default("COMPLETED")
+  refund_id   String?  @unique
   created_at  DateTime @default(now())
   donor       Donor    @relation(fields: [donor_id], references: [id])
   channel     Channel? @relation(fields: [channel_id], references: [id])
+  refund      BalanceAdjustment? @relation("DonationRefund", fields: [refund_id], references: [id])
   pledge      PendingPledge?
 }
 
@@ -197,6 +204,7 @@ model BalanceAdjustment {
   created_by        String   @default("admin")
   created_at        DateTime @default(now())
   donor             Donor    @relation(fields: [donor_id], references: [id])
+  refunded_donation Donation? @relation("DonationRefund")
 }
 
 model PendingPledge {
@@ -211,6 +219,7 @@ model PendingPledge {
   checkout_session_id   String?      // Stripe Checkout Session id for deterministic linkage
   checkout_url          String?      // Stripe Checkout Session URL used in the redirect
   comment               String?      // donor comment captured in the cart before checkout
+  display_name          String?      // donor-facing display name captured in the cart, carried through to Donation.donor_name (#54)
   channel_id            String?      // channel this donation routes to (required at creation)
   fulfilled_by_donation_id String? @unique
   created_at            DateTime     @default(now())
@@ -228,6 +237,7 @@ model PledgeItem {
   target_id   String       // reward_id | poll_option_id | goal_id | poll_id (POLL_CUSTOM)
   poll_id     String?      // required for POLL_VOTE and POLL_CUSTOM
   amount_cents Int
+  quantity    Int          @default(1) // REWARD only — how many units of the reward this line claims; amount_cents is already the line total (cost_cents * quantity), not the unit price. Always 1 for other kinds.
   data        String?      // JSON string for claim_data (shoutout message, custom reward fields, etc.)
   created_at  DateTime     @default(now())
   pledge      PendingPledge @relation(fields: [pledge_id], references: [id], onDelete: Cascade)
@@ -364,4 +374,22 @@ model EventDelivery {
 
   @@unique([destination_id, seq])
   @@map("WebhookDelivery")
+}
+
+model FeatureFlag {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  is_enabled  Boolean   @default(false)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+}
+
+model Broadcast {
+  id         String   @id @default(cuid())
+  message    String   // The banner message/content
+  level      String?  // INFO | WARNING | CRITICAL (#68); null = original single fixed style
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }

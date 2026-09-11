@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getAuctions, placeBid } from '../api/auctions';
+import { getFeatureFlags } from '../api/featureFlags';
 import Card from '../components/Card';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { apiErrorMessage, type Auction } from '../types';
@@ -118,14 +119,56 @@ function AuctionCard({ auction, onBid }: { auction: Auction; onBid: () => void }
 export default function Auctions() {
   const [auctions, setAuctions] = useState<Auction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isEnabled, setIsEnabled] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const checkFlag = async () => {
+      try {
+        const flags = await getFeatureFlags();
+        setIsEnabled(flags.auctions ?? false);
+      } catch (e) {
+        console.error('Failed to fetch feature flags:', e);
+      }
+    };
+    checkFlag();
+  }, []);
 
   const reload = () => getAuctions().then(setAuctions);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-  }, []);
+    if (!isEnabled) {
+      setLoading(false);
+      return;
+    }
+    reload()
+      .catch((err) => {
+        setError(apiErrorMessage(err, 'Failed to load auctions'));
+      })
+      .finally(() => setLoading(false));
+  }, [isEnabled]);
 
   if (loading) return <LoadingSpinner />;
+
+  if (!isEnabled) {
+    return (
+      <div className="max-w-3xl mx-auto p-8">
+        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <p className="font-body text-sm text-off-white/55">Auctions are not currently enabled.</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-3xl mx-auto p-8">
+        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <p className="font-body text-sm" style={{ color: 'var(--red)' }}>
+          {error}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto p-8">

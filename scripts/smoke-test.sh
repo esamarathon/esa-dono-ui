@@ -4,12 +4,15 @@
 #
 # Assumes the backend and frontend images are already built and tagged as the
 # names used in docker-compose.yml:
-#   ghcr.io/codescales/esa-dono-ui/backend:latest
-#   ghcr.io/codescales/esa-dono-ui/frontend:latest
+#   ghcr.io/esamarathon/esa-dono-ui/backend:${BACKEND_IMAGE_TAG:-latest}
+#   ghcr.io/esamarathon/esa-dono-ui/frontend:${FRONTEND_IMAGE_TAG:-latest}
 #
 # Usage:
 #   scripts/smoke-test.sh                 # uses docker compose, FRONTEND_PORT=18080
 #   FRONTEND_PORT=9090 scripts/smoke-test.sh
+#   BACKEND_IMAGE_TAG=<sha> FRONTEND_IMAGE_TAG=<sha> scripts/smoke-test.sh
+#     # test a specific build (e.g. the one just pushed for a non-main branch)
+#     # instead of whatever :latest currently resolves to.
 #
 # Requires: docker (or a docker-compatible CLI) + curl.
 # Exits non-zero on the first failed check and always tears the stack down.
@@ -18,10 +21,12 @@ set -euo pipefail
 
 ADMIN_API_KEY="${ADMIN_API_KEY:-smoke-test-key}"
 FRONTEND_PORT="${FRONTEND_PORT:-18080}"
+BACKEND_IMAGE_TAG="${BACKEND_IMAGE_TAG:-latest}"
+FRONTEND_IMAGE_TAG="${FRONTEND_IMAGE_TAG:-latest}"
 BASE="http://localhost:${FRONTEND_PORT}"
 COMPOSE="docker compose"
 
-export ADMIN_API_KEY FRONTEND_PORT
+export ADMIN_API_KEY FRONTEND_PORT BACKEND_IMAGE_TAG FRONTEND_IMAGE_TAG
 
 cleanup() {
   echo "==> Tearing down stack"

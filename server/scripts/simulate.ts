@@ -82,6 +82,9 @@ function mockCatalog(): Awaited<ReturnType<typeof discover>> {
     ],
     goals: ['g1', 'g2'],
     auctions: ['a1'],
+    channelOf: {},
+    pledgeableRewards: ['r1', 'r2', 'r3'],
+    rewardCostCents: { r1: 500, r2: 1000, r3: 1500 },
     resolve: {},
   };
 }

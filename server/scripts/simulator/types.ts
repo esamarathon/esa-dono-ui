@@ -8,7 +8,7 @@
  */
 
 export type ActionType =
-  'DONATE' | 'CLAIM_REWARD' | 'VOTE_POLL' | 'CONTRIBUTE_GOAL' | 'BID_AUCTION';
+  'DONATE' | 'CLAIM_REWARD' | 'VOTE_POLL' | 'CONTRIBUTE_GOAL' | 'BID_AUCTION' | 'PLEDGE_CHECKOUT';
 
 /** One intended action — the reproducible contract entry (#32.6). Intent only. */
 export interface DecisionEntry {
@@ -53,4 +53,27 @@ export interface Catalog {
   auctions: string[];
   /** Maps synthetic ref -> real server id, resolved at execution time (#34). */
   resolve: Record<string, string>;
+  /**
+   * Synthetic channelRef each reward/poll/goal belongs to, or undefined when
+   * shared (channel_id is null server-side) — lets PLEDGE_CHECKOUT (#58) pick
+   * a pledge channel_id consistent with the item's own channel scoping,
+   * mirroring the real donor cart flow's "no mixing channels" rule.
+   */
+  channelOf: Record<string, string | undefined>;
+  /**
+   * Non-physical reward refs only. PHYSICAL rewards always require a Stripe
+   * checkout to collect a shipping address (never wallet-auto-fulfilled), and
+   * this simulator never drives real Stripe checkouts — so a pledge cart
+   * containing one would just sit OPEN forever. Excluded from PLEDGE_CHECKOUT's
+   * reward pool (CLAIM_REWARD's plain wallet-claim pool is unaffected).
+   */
+  pledgeableRewards: string[];
+  /**
+   * rewardRef -> cost_cents, so PLEDGE_CHECKOUT can send amount_cents on a
+   * REWARD cart item — the real donor cart always does (RewardList.tsx),
+   * and the server defaults a REWARD item's stored amount_cents to 0 when a
+   * client omits it (the pledge total itself is computed server-side from
+   * the reward, but the *per-item* amount is whatever the client sent).
+   */
+  rewardCostCents: Record<string, number>;
 }

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
+import ShareLinkButton from '../components/ShareLinkButton';
 import { CheckBadgeIcon } from '../components/icons';
 import RewardList from '../components/incentives/RewardList';
 import PollList from '../components/incentives/PollList';
@@ -34,6 +35,7 @@ export default function DonateFlow() {
     channels,
     selectedChannelId,
     selectChannel,
+    refreshChannels,
     pendingChannelId,
     confirmChannelSwitch,
     cancelChannelSwitch,
@@ -44,6 +46,16 @@ export default function DonateFlow() {
   const [tab, setTab] = useState<Tab>(() => tabFromPathname(location.pathname));
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
   const [prefillWarning, setPrefillWarning] = useState<string | null>(null);
+
+  // Refetch the channel list once when the donate flow mounts (the channel
+  // picker at the top of this page), rather than relying solely on the
+  // background poll — CartProvider persists for the app's lifetime, so a
+  // channel opened by an admin while the donor was elsewhere on the site
+  // otherwise wouldn't show until the next poll tick (#46).
+  useEffect(() => {
+    refreshChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Warning shown when "review & checkout" is clicked before every category
   // has been opened. A second click while it's showing bypasses it and
@@ -59,6 +71,26 @@ export default function DonateFlow() {
   useEffect(() => {
     setTab(tabFromPathname(location.pathname));
   }, [location.pathname]);
+
+  // Deep link to a channel (#49): ?channel=<id> selects that channel on load,
+  // the same action as clicking its picker button, so a shared link lands
+  // directly on a channel's incentives without the donor manually picking.
+  // Consumed once via a ref — channels refetches on a background interval
+  // (new tab, new poll, etc.), and without the guard each refetch would
+  // re-select the linked channel even after the donor switched away.
+  const consumedChannelParam = useRef(false);
+  useEffect(() => {
+    if (loading || channels.length === 0 || consumedChannelParam.current) return;
+    const channelParam = new URLSearchParams(location.search).get('channel');
+    if (!channelParam) return;
+    consumedChannelParam.current = true;
+    const channel = channels.find((c) => c.id === channelParam);
+    if (!channel) {
+      setPrefillWarning('That channel is no longer available.');
+      return;
+    }
+    selectChannel(channel.id);
+  }, [loading, channels, location.search, selectChannel]);
 
   // Apply a shared permalink (e.g. /rewards?reward=<id>) once the incentive
   // data has loaded. prefillFromLink resolves the target, auto-selects its
@@ -141,7 +173,7 @@ export default function DonateFlow() {
             {prefillWarning}
           </p>
           <p className="font-body text-xs text-off-white/55 mt-1">
-            The item you were linked to couldn't be added to your cart.
+            This link couldn't be fully applied.
           </p>
         </div>
       )}
@@ -159,24 +191,26 @@ export default function DonateFlow() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {channels.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => {
-                  selectChannel(s.id);
-                  track('channel_select', { 'channel.id': s.id });
-                }}
-                className={`font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
-                  selectedChannelId === s.id
-                    ? 'text-black'
-                    : 'text-off-white/55 hover:text-off-white'
-                }`}
-                style={{
-                  background:
-                    selectedChannelId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
-                }}
-              >
-                {s.name}
-              </button>
+              <div key={s.id} className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    selectChannel(s.id);
+                    track('channel_select', { 'channel.id': s.id });
+                  }}
+                  className={`font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
+                    selectedChannelId === s.id
+                      ? 'text-black'
+                      : 'text-off-white/55 hover:text-off-white'
+                  }`}
+                  style={{
+                    background:
+                      selectedChannelId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
+                  }}
+                >
+                  {s.name}
+                </button>
+                <ShareLinkButton path={`/donate?channel=${s.id}`} />
+              </div>
             ))}
           </div>
         )}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Home from '../../src/pages/Home';
+import { CampaignProvider } from '../../src/context/CampaignContext';
 
 vi.mock('../../src/api/campaign', () => ({
   getCampaign: vi.fn(),
@@ -12,7 +13,9 @@ import { getCampaign } from '../../src/api/campaign';
 function renderHome() {
   return render(
     <MemoryRouter>
-      <Home />
+      <CampaignProvider>
+        <Home />
+      </CampaignProvider>
     </MemoryRouter>,
   );
 }

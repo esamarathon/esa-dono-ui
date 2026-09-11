@@ -24,6 +24,24 @@ describe('AdminDashboard', () => {
     expect(screen.getByText('donors')).toBeInTheDocument();
   });
 
+  it('renders the unallocated credits card (#59)', async () => {
+    adminClient.get.mockResolvedValue({
+      data: {
+        total_raised_cents: 12345,
+        donors: 3,
+        donations: 5,
+        claims: 2,
+        pledges: 1,
+        unallocated_credits_cents: 4000,
+      },
+    });
+
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('unallocated credits')).toBeInTheDocument();
+    expect(screen.getByText('$40.00')).toBeInTheDocument();
+  });
+
   it('renders per-channel totals when present', async () => {
     adminClient.get.mockResolvedValue({
       data: {

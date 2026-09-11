@@ -92,6 +92,22 @@ export async function reverseDonorSpend(
   return data;
 }
 
+export interface SweepCreditsResult {
+  preview?: boolean;
+  success?: boolean;
+  donor_count: number;
+  total_cents: number;
+  sample?: { id: string; balance_remaining: number; donor_name: string | null }[];
+}
+
+export async function sweepCredits(
+  filter: { min_balance_cents?: number; max_balance_cents?: number },
+  confirm: boolean,
+): Promise<SweepCreditsResult> {
+  const { data } = await adminClient.post('/donors/sweep-credits', { ...filter, confirm });
+  return data;
+}
+
 export async function refundPollOption(id: string): Promise<RefundResult> {
   const { data } = await adminClient.post(`/polls/options/${id}/refund`);
   return data;

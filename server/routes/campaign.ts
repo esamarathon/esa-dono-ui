@@ -29,4 +29,18 @@ router.get('/', async (_req: Request, res: Response) => {
   }
 });
 
+router.get('/broadcast', async (_req: Request, res: Response) => {
+  try {
+    const broadcast = await prisma.broadcast.findFirst();
+    res.json(
+      broadcast && broadcast.is_active
+        ? { message: broadcast.message, level: broadcast.level }
+        : { message: null, level: null },
+    );
+  } catch (err) {
+    console.error('Broadcast error:', err);
+    res.status(500).json({ error: 'Failed to fetch broadcast' });
+  }
+});
+
 export default router;

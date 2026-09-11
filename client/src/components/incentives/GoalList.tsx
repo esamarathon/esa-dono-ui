@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
 import ProgressBar from '../ProgressBar';
+import AddRemoveButton from '../AddRemoveButton';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
 import { useCart } from '../../context/CartContext';
@@ -42,6 +43,14 @@ export default function GoalList() {
   const getAmount = (goalId: string) => amounts[goalId] ?? DEFAULT_GOAL_AMOUNT;
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'GOAL' && i.target_id === id);
+
+  // Donation-impact preview (#52): a goal's target is fixed, so a pending
+  // cart amount only grows the numerator.
+  const previewPctFor = (goal: Goal) => {
+    const item = cart.find((i) => i.kind === 'GOAL' && i.target_id === goal.id);
+    if (!item) return undefined;
+    return ((goal.current_cents + item.amount_cents) / goal.target_cents) * 100;
+  };
 
   const handleAdd = (goal: Goal) => {
     const cents = Math.round(parseFloat(amounts[goal.id] ?? DEFAULT_GOAL_AMOUNT) * 100);
@@ -133,23 +142,21 @@ export default function GoalList() {
                     onChange={(e) => handleAmountChange(g, e.target.value)}
                     onBlur={() => handleAmountBlur(g)}
                   />
-                  {inCart(g.id) ? (
-                    <button
-                      onClick={() => removeFromCart('GOAL', g.id)}
-                      className={`btrl-button btrl-button-outline text-sm ${flashId === g.id ? 'animate-add-flash' : ''}`}
-                    >
-                      remove
-                    </button>
-                  ) : (
-                    <button onClick={() => handleAdd(g)} className="btrl-button text-sm">
-                      add
-                    </button>
-                  )}
+                  <AddRemoveButton
+                    added={inCart(g.id)}
+                    onAdd={() => handleAdd(g)}
+                    onRemove={() => removeFromCart('GOAL', g.id)}
+                    flash={flashId === g.id}
+                  />
                   <ShareLinkButton path={`/goals?goal=${g.id}`} />
                 </div>
               )}
             </div>
-            <ProgressBar value={g.current_cents} max={g.target_cents} />
+            <ProgressBar
+              value={g.current_cents}
+              max={g.target_cents}
+              previewPct={previewPctFor(g)}
+            />
             <div className="flex justify-between font-data text-sm text-off-white/55 mt-1">
               <span>{fmt(g.current_cents)} raised</span>
               <span>goal: {fmt(g.target_cents)}</span>

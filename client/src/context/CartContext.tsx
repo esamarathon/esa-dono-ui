@@ -34,6 +34,7 @@ import { INCENTIVES_POLL_MS } from '../config';
 
 const CART_STORAGE_KEY = 'donation_cart_v1';
 const EMAIL_STORAGE_KEY = 'last_donor_email';
+const DISPLAY_NAME_STORAGE_KEY = 'last_donor_display_name';
 
 /**
  * Merge freshly-fetched records into the current list while preserving the
@@ -162,6 +163,11 @@ interface CartContextValue {
   // different channels.
   channels: Channel[];
   selectedChannelId: string | null;
+  // Refetches only the channel list on demand (e.g. when the donate flow
+  // mounts), so a newly opened channel shows up immediately instead of
+  // waiting for the next background poll (#46). Cheap and safe to call
+  // repeatedly — it's a plain replace, same as the background poll does.
+  refreshChannels: () => void;
   // Attempts to select a channel. If the current cart holds items tied to a
   // *different* specific channel, the switch is held pending confirmation
   // (see pendingChannelId) instead of applied immediately.
@@ -174,6 +180,13 @@ interface CartContextValue {
   cart: CartItem[];
   addToCart: (item: CartItem) => void;
   removeFromCart: (kind: CartItem['kind'], targetId: string) => void;
+  // REWARD-only quantity stepper: increments/decrements the quantity of an
+  // already-added reward, recomputing amount_cents as cost_cents * quantity
+  // from the live reward data. Decrementing to 0 removes the item. A no-op
+  // if the reward isn't in the cart, or (increment) if it would exceed the
+  // reward's remaining stock.
+  incrementRewardQuantity: (targetId: string) => void;
+  decrementRewardQuantity: (targetId: string) => void;
   cartTotal: number;
 
   // Additional donation on top of incentives, plus donor-facing fields.
@@ -186,6 +199,8 @@ interface CartContextValue {
   setEmail: (value: string) => void;
   comment: string;
   setComment: (value: string) => void;
+  displayName: string;
+  setDisplayName: (value: string) => void;
   totalCents: number;
 
   // Tracks which incentive categories the donor has actually been shown
@@ -256,6 +271,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
   );
   const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
   const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_STORAGE_KEY) || '');
+  const [displayName, setDisplayName] = useState(
+    () => localStorage.getItem(DISPLAY_NAME_STORAGE_KEY) || '',
+  );
 
   const [visited, setVisited] = useState<Set<IncentiveCategory>>(new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -290,6 +308,12 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setAllGoals(g);
     setChannels(s);
     return { r, p, g, s };
+  }, []);
+
+  const refreshChannels = useCallback(() => {
+    getChannels()
+      .then(setChannels)
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -397,7 +421,16 @@ export function CartProvider({ children }: { children: ReactNode }) {
       );
       if (idx >= 0) {
         const updated = [...prev];
-        updated[idx] = { ...updated[idx]!, amount_cents: item.amount_cents, data: item.data };
+        // label must also sync on re-add: a POLL_CUSTOM write-in's label can
+        // change when the donor edits it (#44) — previously only
+        // amount_cents/data were carried over, so an edited write-in silently
+        // kept its old label in the cart despite the modal showing the edit.
+        updated[idx] = {
+          ...updated[idx]!,
+          amount_cents: item.amount_cents,
+          label: item.label,
+          data: item.data,
+        };
         return updated;
       }
       return [...prev, item];
@@ -408,6 +441,56 @@ export function CartProvider({ children }: { children: ReactNode }) {
     track('cart_remove', { 'item.kind': kind, 'item.target_id': targetId });
     setCart((prev) => prev.filter((i) => !(i.kind === kind && i.target_id === targetId)));
   }, []);
+
+  const incrementRewardQuantity = useCallback(
+    (targetId: string) => {
+      const reward = allRewards.find((r) => r.id === targetId);
+      if (!reward) return;
+      setCart((prev) => {
+        const idx = prev.findIndex((i) => i.kind === 'REWARD' && i.target_id === targetId);
+        if (idx < 0) return prev;
+        const current = prev[idx]!;
+        const nextQuantity = (current.quantity ?? 1) + 1;
+        const available =
+          reward.quantity_total === null
+            ? Infinity
+            : reward.quantity_total - reward.quantity_claimed;
+        if (nextQuantity > available) return prev;
+        const updated = [...prev];
+        updated[idx] = {
+          ...current,
+          quantity: nextQuantity,
+          amount_cents: reward.cost_cents * nextQuantity,
+        };
+        return updated;
+      });
+    },
+    [allRewards],
+  );
+
+  const decrementRewardQuantity = useCallback(
+    (targetId: string) => {
+      setCart((prev) => {
+        const idx = prev.findIndex((i) => i.kind === 'REWARD' && i.target_id === targetId);
+        if (idx < 0) return prev;
+        const current = prev[idx]!;
+        const nextQuantity = (current.quantity ?? 1) - 1;
+        if (nextQuantity <= 0) {
+          return prev.filter((_, i) => i !== idx);
+        }
+        const reward = allRewards.find((r) => r.id === targetId);
+        const unitCost = reward?.cost_cents ?? current.amount_cents / (current.quantity ?? 1);
+        const updated = [...prev];
+        updated[idx] = {
+          ...current,
+          quantity: nextQuantity,
+          amount_cents: unitCost * nextQuantity,
+        };
+        return updated;
+      });
+    },
+    [allRewards],
+  );
 
   const clearCart = useCallback(() => {
     setCart([]);
@@ -494,7 +577,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
           continue;
         }
         const soldOut =
-          reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total;
+          reward.quantity_total !== null &&
+          reward.quantity_total - reward.quantity_claimed < (item.quantity ?? 1);
         if (soldOut) issues.push({ item, reason: 'Sold out' });
       } else if (item.kind === 'POLL_VOTE' || item.kind === 'POLL_CUSTOM') {
         const poll = freshPolls.find((p) => p.id === item.poll_id);
@@ -624,6 +708,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
           createPledge({
             email: email.trim(),
             comment: comment.trim() || undefined,
+            display_name: displayName.trim() || undefined,
             top_up_cents: topUpCents > 0 ? topUpCents : undefined,
             channel_id: selectedChannelId,
             items: cart.map((item) => ({
@@ -632,11 +717,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
               amount_cents: item.amount_cents,
               poll_id: item.poll_id,
               data: item.data,
+              quantity: item.quantity,
             })),
           }),
         { 'pledge.total_cents': totalCents },
       );
       localStorage.setItem(EMAIL_STORAGE_KEY, email.trim());
+      if (displayName.trim()) {
+        localStorage.setItem(DISPLAY_NAME_STORAGE_KEY, displayName.trim());
+      }
       // Clear now — the server-side PendingPledge is the source of truth
       // from here on. Re-submitting the same client cart after this point
       // (e.g. the donor hits "back" from Stripe) would create a duplicate
@@ -655,7 +744,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     } finally {
       setSubmitting(false);
     }
-  }, [email, comment, cart, topUpCents, selectedChannelId, totalCents, clearCart]);
+  }, [email, comment, displayName, cart, topUpCents, selectedChannelId, totalCents, clearCart]);
 
   const value: CartContextValue = {
     rewards,
@@ -664,6 +753,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     loading,
     channels,
     selectedChannelId,
+    refreshChannels,
     selectChannel,
     pendingChannelId,
     confirmChannelSwitch,
@@ -671,6 +761,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     cart,
     addToCart,
     removeFromCart,
+    incrementRewardQuantity,
+    decrementRewardQuantity,
     cartTotal,
     topUp,
     setTopUp,
@@ -679,6 +771,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setEmail,
     comment,
     setComment,
+    displayName,
+    setDisplayName,
     totalCents,
     markVisited,
     unvisitedAvailableCategories,

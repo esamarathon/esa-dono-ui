@@ -65,6 +65,22 @@ const SPEND_WEIGHTS: readonly (readonly [ActionType, number])[] = [
   ['VOTE_POLL', 3],
   ['CONTRIBUTE_GOAL', 2],
   ['BID_AUCTION', 1],
+  ['PLEDGE_CHECKOUT', 3],
+];
+
+type PledgeItemKind = 'REWARD' | 'POLL_VOTE' | 'GOAL';
+
+/**
+ * PLEDGE_CHECKOUT amounts are deliberately small ($1–$5, vs the $1–$20 range
+ * plain VOTE_POLL/CONTRIBUTE_GOAL use) to raise the odds a donor's already-
+ * donated wallet balance fully covers the cart — this sim never drives a real
+ * Stripe checkout, so a pledge that isn't wallet-fully-covered just sits OPEN
+ * until it expires, never becoming a visible fulfilled donation (#58).
+ */
+const PLEDGE_ITEM_WEIGHTS: readonly (readonly [PledgeItemKind, number])[] = [
+  ['REWARD', 3],
+  ['POLL_VOTE', 3],
+  ['GOAL', 2],
 ];
 
 export interface GenerateOptions {
@@ -123,6 +139,41 @@ export function generate(opts: GenerateOptions): DecisionEntry[] {
         targetRef = { auctionRef: pick(s.incentivePick, catalog.auctions) };
         params = { amountCents: int(s.amount, 10, 500) * 100 };
         break;
+      case 'PLEDGE_CHECKOUT': {
+        const itemKind = weighted(s.incentiveType, availablePledgeItemKinds(catalog));
+        if (itemKind === 'REWARD') {
+          const rewardRef = pick(s.incentivePick, catalog.pledgeableRewards);
+          targetRef = {
+            rewardRef,
+            channelRef: catalog.channelOf[rewardRef] ?? pick(s.incentivePick, catalog.channels),
+          };
+        } else if (itemKind === 'POLL_VOTE') {
+          const eligiblePolls = catalog.polls.filter((p) => p.options.length > 0);
+          const poll = pick(s.incentivePick, eligiblePolls);
+          targetRef = {
+            pollRef: poll.pollRef,
+            optionRef: pick(s.incentivePick, poll.options),
+            channelRef: catalog.channelOf[poll.pollRef] ?? pick(s.incentivePick, catalog.channels),
+          };
+        } else {
+          const goalRef = pick(s.incentivePick, catalog.goals);
+          targetRef = {
+            goalRef,
+            channelRef: catalog.channelOf[goalRef] ?? pick(s.incentivePick, catalog.channels),
+          };
+        }
+        params = { itemKind };
+        if (itemKind === 'REWARD') {
+          // Mirror the real donor cart (RewardList.tsx): amount_cents is
+          // always the reward's own cost, sent explicitly on the item —
+          // the server defaults a REWARD item's stored amount_cents to 0
+          // when a client omits it (#58 data-quality fix).
+          params.amountCents = catalog.rewardCostCents[targetRef.rewardRef!];
+        } else {
+          params.amountCents = MIN_SPEND_CENTS * int(s.voteAmount, 1, 5);
+        }
+        break;
+      }
     }
 
     log.push({ seq, delayMs, actor: { donorRef }, action, params, targetRef });
@@ -138,8 +189,27 @@ function availableSpends(catalog: Catalog): readonly (readonly [ActionType, numb
     VOTE_POLL: catalog.polls.some((p) => p.options.length > 0),
     CONTRIBUTE_GOAL: catalog.goals.length > 0,
     BID_AUCTION: catalog.auctions.length > 0,
+    PLEDGE_CHECKOUT:
+      catalog.pledgeableRewards.length > 0 ||
+      catalog.polls.some((p) => p.options.length > 0) ||
+      catalog.goals.length > 0,
   };
   const available = SPEND_WEIGHTS.filter(([a]) => has[a]);
   // If no incentives exist at all, fall back to more donations.
   return available.length > 0 ? available : [['DONATE', 1]];
+}
+
+/** Only offer PLEDGE_CHECKOUT item kinds whose incentive type actually exists. */
+function availablePledgeItemKinds(
+  catalog: Catalog,
+): readonly (readonly [PledgeItemKind, number])[] {
+  const has: Record<PledgeItemKind, boolean> = {
+    REWARD: catalog.pledgeableRewards.length > 0,
+    POLL_VOTE: catalog.polls.some((p) => p.options.length > 0),
+    GOAL: catalog.goals.length > 0,
+  };
+  const available = PLEDGE_ITEM_WEIGHTS.filter(([k]) => has[k]);
+  // availableSpends() already gates PLEDGE_CHECKOUT itself on at least one of
+  // these being true, so this is unreachable in practice — kept defensive.
+  return available.length > 0 ? available : [['GOAL', 1]];
 }

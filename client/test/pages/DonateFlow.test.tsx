@@ -59,6 +59,55 @@ describe('DonateFlow (tabbed browse page)', () => {
     vi.mocked(getGoals).mockResolvedValue([]);
   });
 
+  it('refetches channels when the donate flow mounts, picking up a channel opened after initial load (#46)', async () => {
+    vi.mocked(getChannels)
+      .mockResolvedValueOnce([{ id: 'event-1', name: 'Event One', is_active: true }])
+      .mockResolvedValue([
+        { id: 'event-1', name: 'Event One', is_active: true },
+        { id: 'event-2', name: 'New Event', is_active: true },
+      ]);
+    vi.mocked(getRewards).mockResolvedValue([]);
+
+    renderAt('/donate');
+
+    expect(await screen.findByText('New Event')).toBeInTheDocument();
+  });
+
+  it('selects the channel named by ?channel=<id> without the donor picking manually (#49)', async () => {
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
+    );
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'event-1', name: 'Event One', is_active: true },
+      { id: 'event-2', name: 'New Event', is_active: true },
+    ]);
+    vi.mocked(getRewards).mockResolvedValue([]);
+
+    renderAt('/donate?channel=event-2');
+
+    // The tab bar (and incentive lists) only render once a channel is
+    // selected — its appearance confirms the deep link took effect.
+    expect(await screen.findByText(/no rewards available/i)).toBeInTheDocument();
+  });
+
+  it('warns when ?channel=<id> does not match any known channel (#49)', async () => {
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
+    );
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'event-1', name: 'Event One', is_active: true },
+    ]);
+    vi.mocked(getRewards).mockResolvedValue([]);
+
+    renderAt('/donate?channel=bogus-id');
+
+    expect(await screen.findByText(/that channel is no longer available/i)).toBeInTheDocument();
+    // No channel got selected, so the tab bar stays hidden.
+    expect(screen.queryByText(/no rewards available/i)).toBeNull();
+  });
+
   it('renders the rewards tab when visiting /rewards', async () => {
     localStorage.setItem('donor_session_active', '1');
     vi.mocked(getRewards).mockResolvedValue([
@@ -128,7 +177,9 @@ describe('DonateFlow (tabbed browse page)', () => {
     const addButton = await screen.findByText('add');
     addButton.click();
 
-    expect(await screen.findByText('remove')).toBeDefined();
+    // PHYSICAL is a fieldless reward type, so it shows a quantity stepper
+    // once in the cart rather than a plain "remove" button (#50).
+    expect(await screen.findByRole('button', { name: 'increase quantity' })).toBeDefined();
   });
 
   it('switches to the polls tab when clicked', async () => {

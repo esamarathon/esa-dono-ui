@@ -43,7 +43,7 @@ FROM docker.io/nginxinc/nginx-unprivileged:1.27-alpine AS runner
 
 LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.description="ESA charity donation platform SPA (nginx)" \
-      org.opencontainers.image.source="https://github.com/Codescales/esa-dono-ui" \
+      org.opencontainers.image.source="https://github.com/esamarathon/esa-dono-ui" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="ESA"
 

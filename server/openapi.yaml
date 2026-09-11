@@ -128,12 +128,31 @@ paths:
                     properties:
                       value: { type: string }
 
+  /campaign/broadcast:
+    get:
+      tags: [Campaign]
+      summary: Get the active site-wide broadcast banner message, if any
+      responses:
+        '200':
+          description: Active broadcast message, or null if none/inactive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, nullable: true }
+                  level:
+                    type: string
+                    nullable: true
+                    enum: [INFO, WARNING, CRITICAL]
+                    description: Banner severity; null uses the original fixed style
+
   # ─── Donor ───
   /donor:
     get:
       tags: [Donor]
       summary: Get current donor profile
-      description: Returns the authenticated donor with nested donations, claims, votes, contributions, and custom entries.
+      description: Returns the authenticated donor with nested donations (including each donation's channel, #53), claims, votes, contributions, and custom entries.
       parameters:
         - name: token
           in: query
@@ -342,6 +361,11 @@ paths:
               type: object
               properties:
                 claim_data: {}
+                quantity:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                  description: Number of units of this reward to claim in one call. Decrements quantity_total by this amount and creates one RewardClaim row per unit (claim_data is shared across all of them).
       responses:
         '200':
           description: Claim created
@@ -584,6 +608,10 @@ paths:
                 comment:
                   type: string
                   maxLength: 500
+                display_name:
+                  type: string
+                  maxLength: 60
+                  description: Optional donor-facing display name, carried through to the fulfilled Donation's donor_name (falls back to Stripe's customer name, or null, when omitted)
                 channel_id:
                   type: string
                   description: Required. The channel this donation is routed to.
@@ -610,6 +638,11 @@ paths:
                       poll_id:
                         type: string
                         description: Required for POLL_VOTE and POLL_CUSTOM
+                      quantity:
+                        type: integer
+                        minimum: 1
+                        default: 1
+                        description: REWARD only — number of units of this reward to claim. amount_cents should be cost_cents * quantity (the line total, not the unit price). Ignored for other kinds.
                       data:
                         description: Claim data for REWARD, { label } for POLL_CUSTOM
       responses:
@@ -654,10 +687,6 @@ paths:
                     enum: [OPEN, FULFILLED, EXPIRED, CANCELLED]
                   donor_email: { type: string, nullable: true }
                   expires_at: { type: string, format: date-time }
-                  magic_token:
-                    type: string
-                    nullable: true
-                    description: Donor's magic token (present when FULFILLED)
                   items:
                     type: array
                     items:
@@ -713,6 +742,9 @@ paths:
                   claims: { type: integer }
                   pledges: { type: integer }
                   total_raised_cents: { type: integer }
+                  unallocated_credits_cents:
+                    type: integer
+                    description: Sum of Donor.balance_remaining across all donors — credited but not yet spent on a reward/poll/goal (#59)
                   channels:
                     type: array
                     description: Per-channel raised totals (admin-only; not shown publicly)
@@ -792,9 +824,51 @@ paths:
       tags: [Admin]
       summary: List all donations
       security: [{ AdminKey: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated status filter (#63), e.g. "REFUNDED,CHARGEBACK"
+          schema: { type: string }
       responses:
         '200':
           description: Donations with donor email and channel (id, name), ordered by created_at descending
+
+  /admin/donations/{id}/status:
+    patch:
+      tags: [Admin]
+      summary: Set a donation's lifecycle status (#63)
+      description: >-
+        Moving into REFUNDED/CHARGEBACK claws back whatever of the donation's
+        amount is still sitting in the donor's unspent balance_remaining
+        (capped there), records a linked BalanceAdjustment, and stamps
+        Donation.refund_id. Once a donation has a refund_id it is terminal —
+        no further status changes are allowed.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [PENDING, COMPLETED, REFUNDED, CHARGEBACK]
+                reason: { type: string }
+      responses:
+        '200':
+          description: Donation updated
+        '400':
+          description: Invalid status, unchanged status, or donation already refunded/charged back
+        '404':
+          description: Donation not found
 
   /admin/claims:
     get:
@@ -907,7 +981,14 @@ paths:
   /admin/simulate-donation:
     post:
       tags: [Admin]
-      summary: Simulate a donation (no real money)
+      summary: Add a donation (manual entry / no real payment) — dev simulation or a real donation received externally (#62)
+      description: |
+        Credits a donor's wallet balance and sends a magic link exactly as if
+        a real Stripe donation had completed. Used both for dev/test
+        simulations and for recording a real donation received outside
+        Stripe (e.g. at an external event) — pass `external_id` with that
+        platform's own reference for dedup/traceability, and `occurred_at`
+        to backdate it to when it was actually received.
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -925,10 +1006,17 @@ paths:
                 channel_id:
                   type: string
                   nullable: true
-                  description: Optional channel to attribute this simulated donation to (bypasses the pledge flow's required-channel check).
+                  description: Optional channel to attribute this donation to (bypasses the pledge flow's required-channel check).
+                external_id:
+                  type: string
+                  description: Optional caller-supplied reference (e.g. an external platform's own transaction id) for dedup/traceability. Falls back to an auto-generated sim-<uuid> when omitted. Must be unique — reusing one returns 409.
+                occurred_at:
+                  type: string
+                  format: date-time
+                  description: Optional; backdates the created Donation's created_at to when the donation actually occurred (e.g. on the external platform). Defaults to now.
       responses:
         '200':
-          description: Donation simulated
+          description: Donation added
           content:
             application/json:
               schema:
@@ -943,6 +1031,10 @@ paths:
                       email: { type: string }
                       balance_remaining: { type: integer }
                   pledge: { type: object, nullable: true }
+        '400':
+          description: Missing/invalid email, amount_cents, external_id, or occurred_at
+        '409':
+          description: A donation with the given external_id already exists
 
   /admin/donors:
     get:
@@ -1135,6 +1227,55 @@ paths:
                   balance_before: { type: integer }
                   balance_after: { type: integer }
                   adjustment: { type: object }
+
+  /admin/donors/sweep-credits:
+    post:
+      tags: [Admin]
+      summary: Bulk credit sweep-out (#60)
+      description: |
+        Zeros balance_remaining for every donor with a positive balance,
+        optionally filtered to a balance range. Two-step confirmation:
+        omit/false `confirm` for a dry-run preview (nothing written);
+        `confirm: true` to actually perform the sweep. Each swept donor gets
+        a FREEZE_ZERO BalanceAdjustment whose reason references the donor's
+        most recent donation's self-reported donor_name (or "Anonymous").
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                min_balance_cents: { type: integer, minimum: 0 }
+                max_balance_cents: { type: integer, minimum: 0 }
+                confirm:
+                  type: boolean
+                  description: Must be true to actually perform the sweep; otherwise a preview is returned.
+      responses:
+        '200':
+          description: Preview (confirm omitted/false) or sweep result (confirm true)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preview: { type: boolean, description: 'true only on the dry-run response' }
+                  success:
+                    { type: boolean, description: 'true only on the executed-sweep response' }
+                  donor_count: { type: integer }
+                  total_cents: { type: integer }
+                  sample:
+                    type: array
+                    description: First 10 matching donors (preview only)
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        balance_remaining: { type: integer }
+                        donor_name: { type: string, nullable: true }
+        '400':
+          description: Invalid min_balance_cents/max_balance_cents
 
   /admin/donors/{id}/reverse-spend:
     post:
@@ -1371,6 +1512,130 @@ paths:
       responses:
         '200':
           description: Deleted
+
+  /admin/feature-flags:
+    get:
+      tags: [Admin]
+      summary: List all feature flags
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Feature flags ordered by name
+    post:
+      tags: [Admin]
+      summary: Create a feature flag (disabled by default)
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Flag created
+        '400':
+          description: name is required
+        '409':
+          description: Flag name already exists
+
+  /admin/feature-flags/{name}:
+    get:
+      tags: [Admin]
+      summary: Get a feature flag by name
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Feature flag
+        '404':
+          description: Feature flag not found
+    patch:
+      tags: [Admin]
+      summary: Toggle or update a feature flag
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_enabled: { type: boolean }
+                description: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Flag updated
+        '400':
+          description: No fields to update
+    delete:
+      tags: [Admin]
+      summary: Delete a feature flag
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '404':
+          description: Feature flag not found
+
+  /admin/broadcast:
+    get:
+      tags: [Admin]
+      summary: Get the current site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Current broadcast (empty message/inactive if none set)
+    put:
+      tags: [Admin]
+      summary: Set or clear the site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  description: Banner text; an empty/blank string clears the banner
+                level:
+                  type: string
+                  nullable: true
+                  enum: [INFO, WARNING, CRITICAL]
+                  description: Optional severity level; omit/null for the original fixed style (#68)
+      responses:
+        '200':
+          description: Broadcast updated (or cleared)
+        '400':
+          description: message must be a string, or level is not a recognized value
+    delete:
+      tags: [Admin]
+      summary: Clear the site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Cleared
 
   /admin/destinations:
     get:
@@ -2284,35 +2549,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Claims with reward details (no donor email)
-
-  /moderator/claims/{id}:
-    patch:
-      tags: [Moderator]
-      summary: Update claim status
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [status]
-              properties:
-                status:
-                  type: string
-                  enum: [PENDING, FULFILLED]
-      responses:
-        '200':
-          description: Claim updated
+          description: Claims with reward details and a human-readable donor_name (from the donor's most recent donation; never donor email or id)
 
   /moderator/donations:
     get:
@@ -2325,7 +2562,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations with donor name (no donor email), channel (id, name), and moderation status
+          description: Donations with donor name (no donor email), channel (id, name), moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
 
   /moderator/donations/{id}:
     patch:

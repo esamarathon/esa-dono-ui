@@ -120,6 +120,33 @@ export class Executor {
         }
         return out;
       }
+
+      case 'PLEDGE_CHECKOUT': {
+        const itemKind = p.itemKind as 'REWARD' | 'POLL_VOTE' | 'GOAL';
+        const channelId = this.ref(entry.targetRef!.channelRef!);
+        let item: Record<string, unknown>;
+        if (itemKind === 'REWARD') {
+          item = {
+            kind: 'REWARD',
+            target_id: this.ref(entry.targetRef!.rewardRef!),
+            amount_cents: p.amountCents,
+          };
+        } else if (itemKind === 'POLL_VOTE') {
+          item = {
+            kind: 'POLL_VOTE',
+            target_id: this.ref(entry.targetRef!.optionRef!),
+            poll_id: this.ref(entry.targetRef!.pollRef!),
+            amount_cents: p.amountCents,
+          };
+        } else {
+          item = {
+            kind: 'GOAL',
+            target_id: this.ref(entry.targetRef!.goalRef!),
+            amount_cents: p.amountCents,
+          };
+        }
+        return this.pledgeCheckout(donorRef, [item], channelId);
+      }
     }
   }
 
@@ -146,5 +173,53 @@ export class Executor {
       body: JSON.stringify(body),
     });
     return { status: res.status, accepted: res.ok };
+  }
+
+  /**
+   * POST a cart to /api/pledge using a donor-authenticated token so the
+   * wallet-discount path applies (#58). This sim never drives a real Stripe
+   * checkout, so `accepted` reflects whether the wallet FULLY covered the
+   * cart (i.e. the pledge auto-fulfilled into a visible Donation) — not just
+   * whether the HTTP request itself succeeded, since a partially-covered
+   * pledge is created (200) but silently sits OPEN until it expires.
+   */
+  private async pledgeCheckout(
+    donorRef: string,
+    items: unknown[],
+    channelId: string,
+  ): Promise<{ status: number; accepted: boolean; note?: string }> {
+    const token = this.tokens.get(donorRef);
+    if (!token) {
+      return {
+        status: 0,
+        accepted: false,
+        note: `donor ${donorRef} has no token yet (no prior donation)`,
+      };
+    }
+    const res = await fetch(`${this.opts.baseUrl}/api/pledge`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ items, channel_id: channelId }),
+    });
+    if (!res.ok) return { status: res.status, accepted: false };
+
+    const json = (await res.json()) as {
+      wallet_discount_cents?: number;
+      total_cents?: number;
+    };
+    const fullyCovered =
+      typeof json.wallet_discount_cents === 'number' &&
+      typeof json.total_cents === 'number' &&
+      json.wallet_discount_cents >= json.total_cents;
+    return {
+      status: res.status,
+      accepted: fullyCovered,
+      note: fullyCovered
+        ? undefined
+        : 'pledge created but not wallet-fully-covered (no Stripe in sim) — stays OPEN until it expires',
+    };
   }
 }

@@ -18,6 +18,9 @@ npm run build
 cd server && npx prisma migrate dev --name <name>
 cd server && npx prisma generate
 
+# DB seed (creates dev moderator/admin accounts + banner with API keys)
+cd server && npx prisma db seed
+
 # DB studio
 cd server && npx prisma studio
 
@@ -79,17 +82,38 @@ After building, always confirm the stack _functions_ — not just that the image
 ADMIN_API_KEY=change-me FRONTEND_PORT=18080 ./scripts/smoke-test.sh
 ```
 
-The CI `container-test` job runs this against the freshly built runtime images, and `docker-publish.yml` runs it against the just-pushed `:latest` images after the Trivy gate.
+The CI `container-test` job runs this against the freshly built runtime images, and `docker-publish.yml` runs it against the just-pushed `:<sha>` images (not `:latest`, so it verifies exactly what this run built, on any branch) after the Trivy gate.
 
-Images publish to `ghcr.io/codescales/esa-dono-ui/{backend,frontend}` via
-`.github/workflows/docker-publish.yml` (buildx multiarch amd64/arm64 + Trivy CRITICAL gate) on push to `main`.
+Images publish to `ghcr.io/esamarathon/esa-dono-ui/{backend,frontend}` via
+`.github/workflows/docker-publish.yml` (buildx multiarch amd64/arm64 + Trivy CRITICAL gate) on push to `main`/`dev` and on PRs against `main`. Every push tags `:<sha>` and a sanitized `:<branch>` (e.g. `:dev`); `main` additionally gets `:latest`. PRs publish `:pr-<number>` (Trivy-scanned, but skip the smoke test since there's nothing to compose/deploy). `docker-compose.yml` image tags default to `latest`, overridable via `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG` env vars to run a specific branch/commit build.
 
 ## Bootstrap
 
 ```bash
 cp .env.example .env   # fill in values
 cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+cd server && npx prisma db seed  # creates dev moderator/admin accounts + banner
+cd ..
 npm run dev
+```
+
+### Dev Seed
+
+The seed script creates:
+
+- **Moderator account** (`moderator@localhost`) with role `MODERATOR`
+- **Admin account** (`admin@localhost`) with role `ADMIN`
+- **Banner** at the top of the app displaying the moderator and admin API keys
+
+The banner uses the keys from `MODERATOR_API_KEY` and `ADMIN_API_KEY` env vars (defaults:
+`key_mod_dev-moderator-key` and `key_admin_change-me`). The accounts and banner survive
+restarts and are preserved on staging through daily resets — the banner always displays
+the current API keys from the `.env` file.
+
+To re-run the seed (e.g., after clearing the DB or updating env keys):
+
+```bash
+cd server && npx prisma db seed
 ```
 
 ## Architecture
@@ -121,14 +145,14 @@ Donors have a `role` field (`USER` | `MODERATOR` | `ADMIN`, `ADMIN` implies mode
 
 - Set `ADMIN_EMAILS`/`MODERATOR_EMAILS` env vars (comma-separated) to allowlist emails. `resolveEffectiveRole()` re-checks these allowlists on every authenticated request (in `donorAuth`), granting the role without ever persisting it as a result of a donation. Allowlist resolution is **gated on `Donor.email_verified`** — the email must have been verified via an OAuth login (Google/Discord) before it earns an allowlist role, so a self-supplied Stripe checkout email can never buy moderator/admin access. Donors not on an allowlist keep their persisted `role` (default `USER`), which an `ADMIN_API_KEY` holder can change explicitly via `PATCH /api/admin/donors/:id/role`.
 - `MODERATOR_API_KEY`/`ADMIN_API_KEY` also grant moderator access directly via `Authorization: Bearer key_mod_<key>`/`Bearer key_admin_<key>` — an operational fallback independent of the donor/role system, useful for bootstrapping or scripting.
-- Moderators/admins access their dashboard at `/moderate` via their magic link (Navbar shows a "Moderate" link when `hasModeratorAccess(donor.role)`), or by entering a moderator key directly in the `/moderate` login gate. They can CRUD polls/rewards/goals, view/fulfill claims, and approve custom poll entries. They cannot access `/api/admin/*` routes (require the admin key).
+- Moderators/admins access their dashboard at `/moderate` via their magic link (Navbar shows a "Moderate" link when `hasModeratorAccess(donor.role)`), or by entering a moderator key directly in the `/moderate` login gate. They can CRUD polls/rewards/goals, view claims (read-only — fulfillment status/toggle was removed from the moderator view, #56; only `/api/admin/*` retains a claim-status PATCH), and approve custom poll entries. They cannot access `/api/admin/*` routes (require the admin key).
 - **SSO / verified identity**: `server/services/oauth.ts` + `server/routes/auth.ts` implement OAuth login for Google, Discord, and Twitch. `GET /api/auth/:provider` starts the flow (CSRF `state` in an HttpOnly cookie); the callback exchanges the code, upserts the donor by verified email (creating an empty donor on first sign-in), sets the `dono_session` httpOnly cookie, and redirects to `/wallet` (the token never appears in the URL). Google/Discord assert the email is verified (setting `Donor.email_verified = true`); Twitch has no verification flag, so its email stays unverified. A donor can also request a fresh magic link by email via `POST /api/auth/request-token` (rotates the token, uniform response to avoid enumeration).
 
 ### Webhook flow (`server/routes/webhook.ts`)
 
 1. Signature verify via `stripe.webhooks.constructEvent(rawBody, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET)`. Skipped if `STRIPE_WEBHOOK_SECRET` is unset (useful for local testing). Mounted at `/api/webhooks/stripe` with `express.raw` before `express.json()` so the raw body buffer is available.
 2. Only `checkout.session.completed` is processed. Extracts `externalId` (session id), `pledge_token` (from `metadata.pledge_token` or `client_reference_id`), email (from `customer_details`), and `amount_total` (integer cents).
-3. Delegates to `processDonation()` in `server/services/donation.ts` — upserts donor (credits balance, extends token TTL without rotating; never grants or changes `role`), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink. Donation comment is sourced from the fulfilled pledge (donor captured it in the cart).
+3. Delegates to `processDonation()` in `server/services/donation.ts` — upserts donor (credits balance, extends token TTL without rotating; never grants or changes `role`), creates donation (P2002 = duplicate → no-op), resolves and fulfills any matching pledge, fire-and-forget sendMagicLink. Donation comment and `donor_name` are sourced from the fulfilled pledge's `comment`/`display_name` (donor captured both in the cart, #54) when present, overriding the Stripe-derived name; the wallet-fully-covered path (no Stripe event at all) sets `donor_name` from `display_name` directly since there's no Stripe checkout to derive a name from.
 
 ### Pledge / Cart Flow
 
@@ -236,9 +260,9 @@ ngrok http 3001
 # Omit STRIPE_WEBHOOK_SECRET during dev to skip signature verification
 ```
 
-### Simulate Donations (no real money)
+### Simulate Donations (no real money) / Add a Real External Donation (#62)
 
-**Option A — Admin UI:** Visit `/admin/simulate`, fill in donor email + amount, click "Simulate Donation". Copy the generated magic link to access the donor wallet.
+**Option A — Admin UI:** Visit `/admin/simulate` (nav label "add donation"), fill in donor email + amount, click "Add Donation". Copy the generated magic link to access the donor wallet. Same form doubles as a dev/test tool and as the way to record a donation actually received outside Stripe (e.g. at an external event/platform) — set an **external reference** (that platform's own transaction id, for dedup/traceability) and a **date received** (backdates `Donation.created_at`) when recording a real one.
 
 **Option B — curl (full webhook path):** When `STRIPE_WEBHOOK_SECRET` is unset, signature verification is skipped. POST directly:
 
@@ -255,6 +279,14 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer key_admin_change-me" \
   -d '{"email":"test@example.com","amount_cents":1000}'
+
+# Recording a real donation received externally (#62) — external_id and
+# occurred_at are both optional; external_id must be unique (409 on reuse),
+# occurred_at backdates Donation.created_at (defaults to now):
+curl -X POST http://localhost:3001/api/admin/simulate-donation \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer key_admin_change-me" \
+  -d '{"email":"test@example.com","amount_cents":2500,"external_id":"hekathon-12345","occurred_at":"2026-01-15T12:00:00.000Z","channel_id":"<channel-id>"}'
 ```
 
 Returns `{ success: true, token, donor }`. Use the token to build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie and redirects to the wallet).

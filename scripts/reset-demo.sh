@@ -2,7 +2,11 @@
 # Reset the demo site to a clean, deterministic baseline.
 #
 # Destroys the database volume, brings the stack back up (migrations run via the
-# backend entrypoint), waits for health, then re-seeds via seed-dev.sh.
+# backend entrypoint), waits for health, then re-seeds via seed-dev.sh AND
+# server/prisma/seed.ts (the latter recreates the persistent
+# moderator@localhost/admin@localhost accounts and the API-key broadcast
+# banner, which 'down -v' otherwise wipes every night — seed-dev.sh only
+# covers demo rewards/polls/goals, not donor roles or the banner).
 #
 # This is engine-agnostic: `down -v` drops whichever data volume backs the DB
 # (SQLite file today, a Postgres pgdata volume in future), and seed-dev.sh seeds
@@ -120,6 +124,16 @@ else
   docker run --rm --network "$NETWORK" -v "$(pwd)/seed-dev.sh:/seed-dev.sh:ro" "$SEED_HELPER_IMAGE" \
     bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl jq >/dev/null 2>&1 && bash /seed-dev.sh '$SEED_BASE' '$CLIENT' '$KEY'"
 fi
+
+# --- 4b. Re-seed persistent moderator/admin accounts + key banner ---------
+# seed-dev.sh (above) only seeds demo rewards/polls/goals over the HTTP API;
+# it does not touch donor roles or the broadcast banner. Without this step,
+# 'down -v' wipes the moderator@localhost/admin@localhost accounts and the
+# API-key banner every night and they never come back until someone runs
+# the seed by hand (server/prisma/seed.ts, run in-container since the
+# runtime image ships no npm/npx).
+echo "==> Seeding persistent dev accounts (moderator/admin) + key banner"
+$COMPOSE exec -T -w /app/server dono-backend sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 
 # --- 5. Completion marker (audit trail for scheduled runs) -----------------
 echo "==> [$(ts)] Demo reset COMPLETE"

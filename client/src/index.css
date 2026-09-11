@@ -547,4 +547,67 @@ tr.border-t:hover {
   .animate-total-pulse {
     animation: total-pulse 0.3s steps(3, end);
   }
+
+  @keyframes coin-bounce {
+    0% {
+      opacity: 0;
+      transform: translateY(10px) scale(0.5) rotate(0deg);
+    }
+    30% {
+      opacity: 1;
+      transform: translateY(-16px) scale(1.2) rotate(180deg);
+    }
+    60% {
+      transform: translateY(-8px) scale(1) rotate(270deg);
+    }
+    85% {
+      opacity: 1;
+      transform: translateY(-20px) scale(1.1) rotate(360deg);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-28px) scale(0.8) rotate(360deg);
+    }
+  }
+
+  .animate-coin-bounce {
+    animation: coin-bounce 1.2s ease-out forwards;
+  }
+
+  @keyframes plus-float {
+    0% {
+      opacity: 0;
+      transform: translateY(4px) scale(0.6);
+    }
+    20% {
+      opacity: 1;
+      transform: translateY(-6px) scale(1.2);
+    }
+    80% {
+      opacity: 0.9;
+      transform: translateY(-16px) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-24px) scale(0.8);
+    }
+  }
+
+  .animate-plus-float {
+    animation: plus-float 1.2s ease-out forwards;
+  }
+
+  @keyframes preview-pulse {
+    0%,
+    100% {
+      opacity: 0.28;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .animate-preview-pulse {
+    animation: preview-pulse 1.6s ease-in-out infinite;
+  }
 }

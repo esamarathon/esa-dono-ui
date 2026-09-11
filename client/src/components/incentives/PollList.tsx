@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
 import Modal from '../Modal';
 import ProgressBar from '../ProgressBar';
+import AddRemoveButton from '../AddRemoveButton';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
 import { useCart } from '../../context/CartContext';
@@ -62,6 +63,22 @@ export default function PollList() {
 
   const inCart = (pollId: string, optionId: string) =>
     cart.some((i) => i.kind === 'POLL_VOTE' && i.target_id === optionId && i.poll_id === pollId);
+
+  // Donation-impact preview (#52): if this option already has a pending cart
+  // amount, show what its bar would look like once that vote is cast. Both
+  // numerator and denominator grow by the pending amount (the vote adds to
+  // this option's total *and* the poll's total_votes_cents), so recompute
+  // the percentage with both adjusted rather than just overlaying the raw
+  // cents onto the existing percentage.
+  const previewPctFor = (poll: Poll, opt: PollOption) => {
+    const item = cart.find(
+      (i) => i.kind === 'POLL_VOTE' && i.target_id === opt.id && i.poll_id === poll.id,
+    );
+    if (!item) return undefined;
+    const newValue = opt.votes_cents + item.amount_cents;
+    const newMax = (poll.total_votes_cents || 1) + item.amount_cents;
+    return (newValue / newMax) * 100;
+  };
 
   const writeInInCart = (pollId: string) =>
     cart.find((i) => i.kind === 'POLL_CUSTOM' && i.poll_id === pollId);
@@ -133,6 +150,18 @@ export default function PollList() {
     setWriteInError('');
   };
 
+  // Re-hydrates the draft from the cart item so an already-added write-in can
+  // be edited instead of forcing remove-then-re-add (#44). Regular vote
+  // amounts re-sync on every render via getAmount()/the cart; a write-in's
+  // draft state only lived in this component's local state, so without this
+  // it silently went stale/uneditable once added.
+  const openWriteInEdit = (poll: Poll, item: { amount_cents: number; label?: string }) => {
+    setWritingIn(poll);
+    setWriteInLabel(item.label ?? '');
+    setWriteInAmount((item.amount_cents / 100).toFixed(2));
+    setWriteInError('');
+  };
+
   const handleWriteIn = () => {
     setWriteInError('');
     if (!writeInLabel.trim()) {
@@ -200,7 +229,11 @@ export default function PollList() {
                           {fmt(opt.votes_cents)}
                         </span>
                       </div>
-                      <ProgressBar value={opt.votes_cents} max={poll.total_votes_cents || 1} />
+                      <ProgressBar
+                        value={opt.votes_cents}
+                        max={poll.total_votes_cents || 1}
+                        previewPct={previewPctFor(poll, opt)}
+                      />
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <input
@@ -213,22 +246,13 @@ export default function PollList() {
                         onBlur={() => handleAmountBlur(poll, opt)}
                         disabled={optionUnavailable}
                       />
-                      {added ? (
-                        <button
-                          onClick={() => removeFromCart('POLL_VOTE', opt.id)}
-                          className={`btrl-button btrl-button-outline text-sm ${flashKey === `${poll.id}-${opt.id}` ? 'animate-add-flash' : ''}`}
-                        >
-                          remove
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleAdd(poll, opt)}
-                          disabled={optionUnavailable}
-                          className="btrl-button text-sm"
-                        >
-                          add
-                        </button>
-                      )}
+                      <AddRemoveButton
+                        added={added}
+                        onAdd={() => handleAdd(poll, opt)}
+                        onRemove={() => removeFromCart('POLL_VOTE', opt.id)}
+                        disabled={optionUnavailable}
+                        flash={flashKey === `${poll.id}-${opt.id}`}
+                      />
                     </div>
                   </div>
                 );
@@ -247,12 +271,20 @@ export default function PollList() {
                         {fmt(writeIn.amount_cents)}
                       </span>
                     </div>
-                    <button
-                      onClick={() => removeFromCart('POLL_CUSTOM', writeIn.target_id)}
-                      className="btrl-button btrl-button-outline text-sm"
-                    >
-                      remove
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openWriteInEdit(poll, writeIn)}
+                        className="btrl-button btrl-button-ghost text-sm"
+                      >
+                        edit
+                      </button>
+                      <button
+                        onClick={() => removeFromCart('POLL_CUSTOM', writeIn.target_id)}
+                        className="btrl-button btrl-button-outline text-sm"
+                      >
+                        remove
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <button
@@ -272,7 +304,10 @@ export default function PollList() {
       )}
 
       {writingIn && (
-        <Modal title="add your own option" onClose={() => setWritingIn(null)}>
+        <Modal
+          title={writeInInCart(writingIn.id) ? 'edit your option' : 'add your own option'}
+          onClose={() => setWritingIn(null)}
+        >
           <p className="font-body text-sm text-off-white/55 mb-3">
             Poll: <strong className="text-off-white">{writingIn.title}</strong>
           </p>
@@ -323,7 +358,7 @@ export default function PollList() {
               cancel
             </button>
             <button onClick={handleWriteIn} className="btrl-button">
-              add to cart
+              {writeInInCart(writingIn.id) ? 'save changes' : 'add to cart'}
             </button>
           </div>
         </Modal>

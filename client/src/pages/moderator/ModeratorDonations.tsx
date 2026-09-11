@@ -59,6 +59,28 @@ export default function ModeratorDonations() {
                     &ldquo;{d.comment}&rdquo;
                   </p>
                 )}
+                {(d.pledge_items?.length ?? 0) > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {d.pledge_items!.map((item, i) => (
+                      <span
+                        key={i}
+                        className="font-data text-xs px-2 py-0.5 rounded-sm"
+                        style={{ background: 'rgba(115,78,158,.3)', color: 'var(--off-white)' }}
+                        title={`${item.kind} · ${fmt(item.amount_cents)}`}
+                      >
+                        {item.label} &middot; {fmt(item.amount_cents)}
+                      </span>
+                    ))}
+                    {!!d.top_up_cents && (
+                      <span
+                        className="font-data text-xs px-2 py-0.5 rounded-sm"
+                        style={{ background: 'rgba(208,152,70,.16)', color: 'var(--d-yellow)' }}
+                      >
+                        additional contribution &middot; {fmt(d.top_up_cents)}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <p className="font-data text-xs text-off-white/40 mt-1">
                   {new Date(d.created_at).toLocaleString()}
                 </p>
