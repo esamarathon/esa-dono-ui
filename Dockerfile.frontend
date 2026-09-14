@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27
 # Frontend image for esa-dono-ui: builds the Vite SPA and serves it via nginx,
 # proxying /api to the backend service.
 #
