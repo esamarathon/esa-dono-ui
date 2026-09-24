@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import Navbar from './components/Navbar';
 import GlobalProgressBar from './components/GlobalProgressBar';
 import CartDrawer from './components/CartDrawer';
+import FeedbackButton from './components/FeedbackButton';
 import BroadcastBanner from './components/BroadcastBanner';
 import { CartProvider } from './context/CartContext';
 import { CampaignProvider } from './context/CampaignContext';
@@ -91,6 +92,7 @@ export default function App() {
                   <Navbar />
                   <GlobalProgressBar />
                   <CartDrawer />
+                  <FeedbackButton />
                   <div className="flex-1">
                     <Routes>
                       <Route path="/" element={<Home />} />
