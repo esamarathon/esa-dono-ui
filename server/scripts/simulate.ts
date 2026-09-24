@@ -22,7 +22,7 @@ import { Executor } from './simulator/executor.js';
 import { RunLogger, readDecisions, readOutcomes, diffOutcome } from './simulator/logging.js';
 import type { DecisionEntry, Manifest, OutcomeEntry } from './simulator/types.js';
 
-const SIM_VERSION = 'v1';
+const SIM_VERSION = 'v2';
 
 // --- CLI parsing -----------------------------------------------------------
 function parseArgs(argv: string[]): Record<string, string | boolean> {
@@ -104,6 +104,14 @@ async function main() {
   const events = Number(args.events ?? 200);
   const donors = Number(args.donors ?? 5);
   const ratePerSec = parseRate(args.rate as string | undefined);
+  if (args['repeat-donation-chance'] === true) {
+    throw new Error('--repeat-donation-chance requires a number between 0 and 1');
+  }
+  const repeatDonationChance = Number(args['repeat-donation-chance'] ?? 0.3);
+  const traffic = args.traffic ?? 'phased';
+  if (traffic !== 'steady' && traffic !== 'phased') {
+    throw new Error('--traffic must be steady or phased');
+  }
   const durationMs = parseDurationMs(args.duration as string | undefined);
   const dryRun = args['dry-run'] === true;
   const verbose = args.verbose === true;
@@ -133,7 +141,15 @@ async function main() {
       );
       catalog = mockCatalog();
     }
-    decisions = generate({ seed, events, donors, ratePerSec, catalog });
+    decisions = generate({
+      seed,
+      events,
+      donors,
+      ratePerSec,
+      catalog,
+      repeatDonationChance,
+      traffic,
+    });
   }
 
   console.log(
@@ -148,7 +164,7 @@ async function main() {
       console.log(
         `  #${String(e.seq).padStart(3)} +${String(e.delayMs).padStart(4)}ms ` +
           `${e.actor.donorRef.padEnd(3)} ${e.action.padEnd(16)} ` +
-          `${JSON.stringify(e.params)}${tgt}`,
+          `${JSON.stringify(e.params)}${tgt}${e.items ? ` items=${JSON.stringify(e.items)}` : ''}`,
       );
     }
     console.log('\n(dry run — no API calls made)\n');
@@ -165,7 +181,16 @@ async function main() {
     simVersion: SIM_VERSION,
     seed,
     runId,
-    args: { events, donors, ratePerSec, durationMs, baseUrl, replayFile },
+    args: {
+      events,
+      donors,
+      ratePerSec,
+      repeatDonationChance,
+      traffic,
+      durationMs,
+      baseUrl,
+      replayFile,
+    },
     startedAt: new Date().toISOString(),
     eventCount: decisions.length,
     gitSha: gitSha(),
@@ -190,7 +215,7 @@ async function main() {
     logger.outcome(outcome);
 
     byAction[entry.action] = (byAction[entry.action] ?? 0) + 1;
-    if (outcome.status === 0) counts.errors++;
+    if (outcome.status === 0 || outcome.status >= 500) counts.errors++;
     else if (outcome.accepted) counts.accepted++;
     else counts.rejected++;
 
@@ -244,7 +269,8 @@ async function main() {
   }
   console.log('');
 
-  // Exit non-zero if the run surfaced anomalies worth a human's attention.
+  // Expected 4xx rejections (e.g. depleted wallets) are not infrastructure errors.
+  // Transport failures, HTTP 5xx, and replay divergences must fail the run.
   process.exit(counts.errors > 0 || divergences.length > 0 ? 1 : 0);
 }
 

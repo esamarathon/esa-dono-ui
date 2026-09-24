@@ -67,7 +67,7 @@ export class Executor {
       case 'DONATE': {
         const body = {
           email: donorEmail(this.opts.runId, donorRef),
-          donor_name: donorRef,
+          donor_name: p.displayName ?? donorRef,
           amount_cents: p.amountCents,
           comment: p.comment as string | undefined,
           channel_id: p.channelRef ? this.ref(p.channelRef as string) : null,
@@ -90,6 +90,7 @@ export class Executor {
       case 'CLAIM_REWARD':
         return this.spend(donorRef, `/api/rewards/${this.ref(entry.targetRef!.rewardRef!)}/claim`, {
           claim_data: {},
+          quantity: p.quantity ?? 1,
         });
 
       case 'VOTE_POLL':
@@ -122,8 +123,37 @@ export class Executor {
       }
 
       case 'PLEDGE_CHECKOUT': {
-        const itemKind = p.itemKind as 'REWARD' | 'POLL_VOTE' | 'GOAL';
         const channelId = this.ref(entry.targetRef!.channelRef!);
+        if (entry.items !== undefined) {
+          const items = entry.items.map((item) => {
+            switch (item.kind) {
+              case 'REWARD':
+                return {
+                  kind: item.kind,
+                  target_id: this.ref(item.rewardRef),
+                  amount_cents: item.amountCents,
+                  quantity: item.quantity,
+                };
+              case 'POLL_VOTE':
+                return {
+                  kind: item.kind,
+                  target_id: this.ref(item.optionRef),
+                  poll_id: this.ref(item.pollRef),
+                  amount_cents: item.amountCents,
+                };
+              case 'GOAL':
+                return {
+                  kind: item.kind,
+                  target_id: this.ref(item.goalRef),
+                  amount_cents: item.amountCents,
+                };
+            }
+          });
+          return this.pledgeCheckout(donorRef, items, channelId, p);
+        }
+
+        // V1 replay: one cart line stored in params + targetRef.
+        const itemKind = p.itemKind as 'REWARD' | 'POLL_VOTE' | 'GOAL';
         let item: Record<string, unknown>;
         if (itemKind === 'REWARD') {
           item = {
@@ -145,7 +175,7 @@ export class Executor {
             amount_cents: p.amountCents,
           };
         }
-        return this.pledgeCheckout(donorRef, [item], channelId);
+        return this.pledgeCheckout(donorRef, [item], channelId, p);
       }
     }
   }
@@ -187,6 +217,7 @@ export class Executor {
     donorRef: string,
     items: unknown[],
     channelId: string,
+    params: DecisionEntry['params'],
   ): Promise<{ status: number; accepted: boolean; note?: string }> {
     const token = this.tokens.get(donorRef);
     if (!token) {
@@ -202,7 +233,12 @@ export class Executor {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ items, channel_id: channelId }),
+      body: JSON.stringify({
+        items,
+        channel_id: channelId,
+        comment: params.comment,
+        display_name: params.displayName,
+      }),
     });
     if (!res.ok) return { status: res.status, accepted: false };
 

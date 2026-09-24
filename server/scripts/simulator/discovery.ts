@@ -65,7 +65,7 @@ export async function discover(baseUrl: string): Promise<Catalog> {
   ]);
 
   const resolve: Record<string, string> = {};
-  const channelOf: Record<string, string | undefined> = {};
+  const channelOf: Catalog['channelOf'] = {};
   const cat: Catalog = {
     channels: [],
     rewards: [],
@@ -91,14 +91,14 @@ export async function discover(baseUrl: string): Promise<Catalog> {
     const ref = `r${i + 1}`;
     cat.rewards.push(ref);
     resolve[ref] = r.id;
-    channelOf[ref] = r.channel_id ? channelIdToRef.get(r.channel_id) : undefined;
+    channelOf[ref] = r.channel_id ? (channelIdToRef.get(r.channel_id) ?? null) : undefined;
     cat.rewardCostCents[ref] = r.cost_cents;
     if (r.type !== 'PHYSICAL') cat.pledgeableRewards.push(ref);
   });
   polls.forEach((p, i) => {
     const pollRef = `p${i + 1}`;
     resolve[pollRef] = p.id;
-    channelOf[pollRef] = p.channel_id ? channelIdToRef.get(p.channel_id) : undefined;
+    channelOf[pollRef] = p.channel_id ? (channelIdToRef.get(p.channel_id) ?? null) : undefined;
     const options = p.options.map((o, j) => {
       const optRef = `${pollRef}o${j + 1}`;
       resolve[optRef] = o.id;
@@ -110,7 +110,7 @@ export async function discover(baseUrl: string): Promise<Catalog> {
     const ref = `g${i + 1}`;
     cat.goals.push(ref);
     resolve[ref] = g.id;
-    channelOf[ref] = g.channel_id ? channelIdToRef.get(g.channel_id) : undefined;
+    channelOf[ref] = g.channel_id ? (channelIdToRef.get(g.channel_id) ?? null) : undefined;
   });
   auctions.forEach((a, i) => {
     const ref = `a${i + 1}`;

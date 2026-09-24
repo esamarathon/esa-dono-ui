@@ -108,6 +108,25 @@ describe('Simulator Discovery', () => {
     expect(catalog.auctions).toEqual([]);
   });
 
+  it('does not treat incentives on an undiscovered channel as shared', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input) => {
+      const path = new URL(getUrlString(input)).pathname;
+      const bodies: Record<string, unknown> = {
+        '/api/channels': [{ id: 'active' }],
+        '/api/rewards': [
+          { id: 'shared', type: 'DIGITAL', cost_cents: 500, channel_id: null },
+          { id: 'scoped', type: 'DIGITAL', cost_cents: 500, channel_id: 'inactive' },
+        ],
+        '/api/polls': [{ id: 'poll', channel_id: 'inactive', options: [{ id: 'option' }] }],
+        '/api/goals': [{ id: 'goal', channel_id: 'inactive' }],
+        '/api/auctions': [],
+      };
+      return new Response(JSON.stringify(bodies[path]));
+    });
+    const catalog = await discover('http://localhost:3001');
+    expect(catalog.channelOf).toEqual({ r1: undefined, r2: null, p1: null, g1: null });
+  });
+
   it('should fail if a required endpoint returns an error', async () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock.mockImplementation((url: string | URL | Request) => {

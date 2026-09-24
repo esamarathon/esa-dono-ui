@@ -10,15 +10,27 @@
 export type ActionType =
   'DONATE' | 'CLAIM_REWARD' | 'VOTE_POLL' | 'CONTRIBUTE_GOAL' | 'BID_AUCTION' | 'PLEDGE_CHECKOUT';
 
+export type DonorProfile = 'casual' | 'regular' | 'collector' | 'voter';
+export type TrafficPhase = 'quiet' | 'normal' | 'busy';
+
+/** V2 cart lines retain synthetic refs so logs can replay against a reset DB. */
+export type PledgeDecisionItem =
+  | { kind: 'REWARD'; rewardRef: string; amountCents: number; quantity: number }
+  | { kind: 'POLL_VOTE'; pollRef: string; optionRef: string; amountCents: number }
+  | { kind: 'GOAL'; goalRef: string; amountCents: number };
+
 /** One intended action — the reproducible contract entry (#32.6). Intent only. */
 export interface DecisionEntry {
   seq: number;
   /** ms to wait BEFORE dispatching this event (seeded `timing` sub-stream, #36). */
   delayMs: number;
-  actor: { donorRef: string };
+  actor: { donorRef: string; profile?: DonorProfile };
   action: ActionType;
   params: Record<string, unknown>;
   targetRef?: Record<string, string>;
+  /** Absent in v1 logs, which used params.itemKind + targetRef for one line. */
+  items?: PledgeDecisionItem[];
+  trafficPhase?: TrafficPhase;
 }
 
 /** Observed server response for a decision, keyed by `seq` (#36). */
@@ -26,7 +38,7 @@ export interface OutcomeEntry {
   seq: number;
   action: ActionType;
   status: number;
-  /** true = server accepted (2xx), false = rejected/errored. */
+  /** For pledges, true requires wallet fulfillment, not merely HTTP 2xx. */
   accepted: boolean;
   latencyMs: number;
   note?: string;
@@ -55,11 +67,11 @@ export interface Catalog {
   resolve: Record<string, string>;
   /**
    * Synthetic channelRef each reward/poll/goal belongs to, or undefined when
-   * shared (channel_id is null server-side) — lets PLEDGE_CHECKOUT (#58) pick
-   * a pledge channel_id consistent with the item's own channel scoping,
-   * mirroring the real donor cart flow's "no mixing channels" rule.
+   * shared (channel_id is null server-side). A null mapping means its channel
+   * was not discovered, so it is NOT eligible for any pledge channel. This
+   * preserves the real donor cart flow's "no mixing channels" rule.
    */
-  channelOf: Record<string, string | undefined>;
+  channelOf: Record<string, string | null | undefined>;
   /**
    * Non-physical reward refs only. PHYSICAL rewards always require a Stripe
    * checkout to collect a shipping address (never wallet-auto-fulfilled), and
