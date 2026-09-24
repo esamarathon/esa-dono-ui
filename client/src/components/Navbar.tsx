@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { getDonor } from '../api/donor';
+import { getFeatureFlags } from '../api/featureFlags';
 import { isSessionActive, endSession } from '../utils/authToken';
 import { useCart } from '../context/CartContext';
 import UserMenu from './UserMenu';
@@ -12,6 +13,7 @@ function fmt(cents: number) {
 
 export default function Navbar() {
   const [donor, setDonor] = useState<DonorWallet | null>(null);
+  const [auctionsEnabled, setAuctionsEnabled] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const { cart, totalCents, toggleDrawer } = useCart();
@@ -34,6 +36,12 @@ export default function Navbar() {
     const timer = setTimeout(() => setPop(false), 400);
     return () => clearTimeout(timer);
   }, [cart.length, totalCents]);
+
+  useEffect(() => {
+    getFeatureFlags()
+      .then((flags) => setAuctionsEnabled(flags.auctions ?? false))
+      .catch(() => setAuctionsEnabled(false));
+  }, []);
 
   useEffect(() => {
     const refresh = () => {
@@ -87,14 +95,16 @@ export default function Navbar() {
       >
         help
       </NavLink>
-      <NavLink
-        to="/auctions"
-        className={({ isActive }) =>
-          `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
-        }
-      >
-        auctions
-      </NavLink>
+      {auctionsEnabled && (
+        <NavLink
+          to="/auctions"
+          className={({ isActive }) =>
+            `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
+          }
+        >
+          auctions
+        </NavLink>
+      )}
       <NavLink
         to="/donate"
         className={({ isActive }) =>
@@ -107,12 +117,12 @@ export default function Navbar() {
       <div className="ml-auto flex items-center gap-4">
         <button
           onClick={toggleDrawer}
-          className="relative font-data font-bold text-sm tracking-wider uppercase text-off-white/80 hover:text-off-white flex items-center gap-2"
+          className="relative font-data font-bold text-base tracking-wider uppercase text-off-white/80 hover:text-off-white flex items-center gap-2"
         >
           <span>cart</span>
           {cart.length > 0 && (
             <span
-              className={`font-data text-xs font-bold px-2 py-0.5 rounded-sm ${pop ? 'animate-cart-pop' : ''}`}
+              className={`font-data text-sm font-bold px-3 py-1 rounded-sm ${pop ? 'animate-cart-pop' : ''}`}
               style={{ background: 'var(--d-yellow)', color: 'black' }}
             >
               {cart.length} &middot; {fmt(totalCents)}

@@ -36,6 +36,8 @@ export default function CartDrawer() {
     setEmail,
     comment,
     setComment,
+    displayName,
+    setDisplayName,
     cartTotal,
     totalCents,
     unvisitedAvailableCategories,
@@ -215,7 +217,9 @@ export default function CartDrawer() {
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-data text-off-white truncate">
-                      {item.label || item.kind.toLowerCase()}
+                      {item.quantity && item.quantity > 1
+                        ? `${item.quantity}× ${item.label || item.kind.toLowerCase()}`
+                        : item.label || item.kind.toLowerCase()}
                     </p>
                     <p className="font-mono text-[10px] text-off-white/55 uppercase">
                       {KIND_LABELS[item.kind] ?? item.kind.toLowerCase()}
@@ -253,15 +257,15 @@ export default function CartDrawer() {
           </div>
 
           <div
-            className="flex justify-between font-data font-bold pt-3 mb-4"
+            className="flex justify-between items-center font-data font-bold pt-3 mb-4"
             style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
           >
-            <span className="text-off-white">
+            <span className="text-off-white text-lg">
               total{' '}
               <InfoTip text="The full value of your cart — the cost of your incentives plus any additional contribution." />
             </span>
             <span
-              className={`text-d-yellow inline-block ${totalPulse ? 'animate-total-pulse' : ''}`}
+              className={`font-display text-4xl text-d-yellow inline-block ${totalPulse ? 'animate-total-pulse' : ''}`}
             >
               {fmt(totalCents)}
             </span>
@@ -300,6 +304,21 @@ export default function CartDrawer() {
               placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">
+              display name <span className="text-off-white/40 font-normal">(optional)</span>{' '}
+              <InfoTip text="Shown alongside your donation instead of your email. Leave blank to donate anonymously." />
+            </label>
+            <input
+              type="text"
+              className="w-full px-3 py-2 text-sm"
+              placeholder="Your name"
+              maxLength={60}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
             />
           </div>
 
@@ -378,7 +397,7 @@ export default function CartDrawer() {
           <button
             onClick={handleCheckoutClick}
             disabled={disableCheckout}
-            className="btrl-button w-full text-center text-lg py-3"
+            className="btrl-button w-full text-center text-xl py-4"
             style={{ background: 'var(--d-yellow)', color: 'black' }}
           >
             {submitting

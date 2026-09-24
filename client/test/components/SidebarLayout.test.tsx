@@ -111,4 +111,26 @@ describe('SidebarLayout', () => {
     fireEvent.click(screen.getByTitle('collapse'));
     expect(screen.getByText('footer-collapsed')).toBeDefined();
   });
+
+  it('gives the sidebar and main content their own independent scroll viewport (#64)', () => {
+    renderExpandedLayout('scroll_test_key');
+
+    // Outer shell is pinned to exactly one viewport height and never
+    // scrolls itself — the sidebar and main content each scroll on their
+    // own (overflow-y-auto) instead of the whole document growing/scrolling
+    // as one long page.
+    const outer = screen.getByText('admin').closest('div.flex.h-screen') as HTMLElement;
+    expect(outer).not.toBeNull();
+    expect(outer.className).toContain('overflow-hidden');
+
+    const aside = outer.querySelector('aside') as HTMLElement;
+    expect(aside).not.toBeNull();
+    expect(aside.className).toContain('overflow-y-auto');
+    // No longer relies on sticky-positioning-within-document-scroll.
+    expect(aside.className).not.toContain('sticky');
+
+    const main = outer.querySelector('main') as HTMLElement;
+    expect(main).not.toBeNull();
+    expect(main.className).toContain('overflow-y-auto');
+  });
 });

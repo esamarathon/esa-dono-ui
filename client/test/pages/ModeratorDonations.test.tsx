@@ -42,6 +42,31 @@ describe('ModeratorDonations', () => {
     expect(screen.getByText('UNMODERATED')).toBeInTheDocument();
   });
 
+  it('shows what the donor selected/pledged toward, human-readable (#58)', async () => {
+    const donationWithPledge = {
+      ...donation,
+      pledge_items: [
+        { kind: 'REWARD', label: 'T-shirt', amount_cents: 500 },
+        { kind: 'POLL_VOTE', label: 'Best Runner: Runner A', amount_cents: 400 },
+      ],
+      top_up_cents: 1000,
+    };
+    moderatorClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/donations' ? [donationWithPledge] : [] }),
+    );
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorDonations />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    expect(await screen.findByText(/T-shirt/)).toBeInTheDocument();
+    expect(screen.getByText(/Best Runner: Runner A/)).toBeInTheDocument();
+    expect(screen.getByText(/additional contribution/)).toBeInTheDocument();
+    expect(screen.getByText(/\$10\.00/)).toBeInTheDocument();
+  });
+
   it('shows the empty state', async () => {
     moderatorClient.get.mockResolvedValue({ data: [] });
 

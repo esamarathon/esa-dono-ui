@@ -82,4 +82,42 @@ describe('GET /api/donor', () => {
 
     await prisma.donor.delete({ where: { id: donor.id } });
   });
+
+  it("includes each donation's channel (#53)", async () => {
+    const email = `chan-${Date.now()}-${Math.random()}@example.com`;
+    const { token, donor } = await makeDonor(email);
+    const channel = await prisma.channel.create({
+      data: { name: `Main Marathon ${crypto.randomUUID()}` },
+    });
+    const channeled = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 1000,
+        channel_id: channel.id,
+      },
+    });
+    const shared = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 500,
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/donor')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+
+    const channeledDonation = res.body.donations.find((d: { id: string }) => d.id === channeled.id);
+    expect(channeledDonation.channel).toMatchObject({ id: channel.id, name: channel.name });
+
+    const sharedDonation = res.body.donations.find((d: { id: string }) => d.id === shared.id);
+    expect(sharedDonation.channel).toBeNull();
+
+    await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+    await prisma.channel.delete({ where: { id: channel.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
 });

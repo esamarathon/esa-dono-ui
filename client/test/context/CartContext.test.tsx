@@ -188,6 +188,7 @@ describe('CartContext', () => {
 
     act(() => {
       result.current.setEmail('a@b.com');
+      result.current.setDisplayName('Jane Donor');
       result.current.selectChannel('c1');
       result.current.addToCart({ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 });
     });
@@ -197,9 +198,87 @@ describe('CartContext', () => {
     });
     expect(res).toEqual({ total_cents: 1000, donate_url: null });
     expect(mocks.createPledge).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'a@b.com', channel_id: 'c1' }),
+      expect.objectContaining({
+        email: 'a@b.com',
+        display_name: 'Jane Donor',
+        channel_id: 'c1',
+      }),
     );
     expect(result.current.cart).toHaveLength(0);
+  });
+
+  it('incrementRewardQuantity increases quantity and recomputes amount_cents from live cost_cents (#50)', async () => {
+    const { result } = renderHook(() => useCart(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.addToCart({ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 });
+    });
+    act(() => {
+      result.current.incrementRewardQuantity('r1');
+    });
+    expect(result.current.cart[0]!.quantity).toBe(2);
+    expect(result.current.cart[0]!.amount_cents).toBe(2000);
+  });
+
+  it('decrementRewardQuantity decreases quantity, removing the item once it reaches zero (#50)', async () => {
+    const { result } = renderHook(() => useCart(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.addToCart({ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 });
+      result.current.incrementRewardQuantity('r1');
+    });
+    expect(result.current.cart[0]!.quantity).toBe(2);
+
+    act(() => {
+      result.current.decrementRewardQuantity('r1');
+    });
+    expect(result.current.cart[0]!.quantity).toBe(1);
+    expect(result.current.cart[0]!.amount_cents).toBe(1000);
+
+    act(() => {
+      result.current.decrementRewardQuantity('r1');
+    });
+    expect(result.current.cart).toHaveLength(0);
+  });
+
+  it("incrementRewardQuantity refuses to exceed the reward's remaining stock (#50)", async () => {
+    mocks.getRewards.mockResolvedValue([{ ...reward, quantity_total: 2, quantity_claimed: 0 }]);
+    const { result } = renderHook(() => useCart(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.addToCart({ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 });
+      result.current.incrementRewardQuantity('r1');
+    });
+    expect(result.current.cart[0]!.quantity).toBe(2);
+
+    act(() => {
+      result.current.incrementRewardQuantity('r1');
+    });
+    expect(result.current.cart[0]!.quantity).toBe(2);
+  });
+
+  it("checkout forwards each item's quantity to createPledge (#50)", async () => {
+    mocks.createPledge.mockResolvedValue({ total_cents: 2000, donate_url: null });
+    const { result } = renderHook(() => useCart(), { wrapper });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.setEmail('a@b.com');
+      result.current.selectChannel('c1');
+      result.current.addToCart({ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 });
+      result.current.incrementRewardQuantity('r1');
+    });
+    await act(async () => {
+      await result.current.checkout();
+    });
+    expect(mocks.createPledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ target_id: 'r1', quantity: 2 })],
+      }),
+    );
   });
 
   it('drawer open/close/toggle', async () => {

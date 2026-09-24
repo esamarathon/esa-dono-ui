@@ -10,3 +10,6 @@ coverage
 
 # Seeded simulator run output (wayfinder #37)
 sim-runs/
+
+# Local git worktrees (must never be committed as gitlinks)
+/dev-security/

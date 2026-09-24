@@ -186,11 +186,54 @@ describe('Moderator CRUD routes', () => {
   });
 
   describe('claims', () => {
-    it('lists and patches a claim status', async () => {
+    it('lists claims with a human-readable donor_name (never email/id) alongside the reward (#57)', async () => {
       const { token, donor } = await makeModerator();
       donorIds.push(donor.id);
       const reward = await prisma.reward.create({
         data: { title: 'Mod Claim Reward', type: 'DIGITAL', cost_cents: 100 },
+      });
+      rewardIds.push(reward.id);
+      // donor_name lives on Donation (self-reported at checkout), not on
+      // Donor — the claims list joins to the donor's most recent donation.
+      await prisma.donation.create({
+        data: {
+          external_id: `ext-${crypto.randomUUID()}`,
+          donor_id: donor.id,
+          amount_cents: 500,
+          donor_name: 'Jane Donor',
+        },
+      });
+      const claim = await prisma.rewardClaim.create({
+        data: { donor_id: donor.id, reward_id: reward.id, status: 'PENDING' },
+      });
+
+      const listRes = await request(createApp())
+        .get('/api/moderator/claims')
+        .set('Authorization', `Bearer ${token}`);
+      expect(listRes.status).toBe(200);
+      const found = listRes.body.find((c: { id: string }) => c.id === claim.id);
+      expect(found).toBeTruthy();
+      expect(found.donor_name).toBe('Jane Donor');
+      expect(found.reward.title).toBe('Mod Claim Reward');
+      // Never expose the donor object itself (id/email) — only the flat,
+      // human-readable donor_name field.
+      expect(found.donor).toBeUndefined();
+
+      // The moderator status-toggle endpoint was removed — fulfillment is not
+      // moderator-managed. The admin side retains its own PATCH /claims/:id
+      // (unaffected, different router).
+      const patchRes = await request(createApp())
+        .patch(`/api/moderator/claims/${claim.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: 'FULFILLED' });
+      expect(patchRes.status).toBe(404);
+    });
+
+    it('falls back to null donor_name (never a raw donor id) when the donor has no donation on record', async () => {
+      const { token, donor } = await makeModerator();
+      donorIds.push(donor.id);
+      const reward = await prisma.reward.create({
+        data: { title: 'No-donation Claim Reward', type: 'DIGITAL', cost_cents: 100 },
       });
       rewardIds.push(reward.id);
       const claim = await prisma.rewardClaim.create({
@@ -200,14 +243,11 @@ describe('Moderator CRUD routes', () => {
       const listRes = await request(createApp())
         .get('/api/moderator/claims')
         .set('Authorization', `Bearer ${token}`);
-      expect(listRes.status).toBe(200);
-
-      const patchRes = await request(createApp())
-        .patch(`/api/moderator/claims/${claim.id}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ status: 'FULFILLED' });
-      expect(patchRes.status).toBe(200);
-      expect(patchRes.body.status).toBe('FULFILLED');
+      const found = listRes.body.find((c: { id: string }) => c.id === claim.id);
+      expect(found.donor_name).toBeNull();
+      // No nested donor object (id/email) is ever exposed — just the flat,
+      // human-readable (here, absent) donor_name field.
+      expect(found.donor).toBeUndefined();
     });
   });
 

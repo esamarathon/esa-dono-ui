@@ -13,6 +13,7 @@ import {
   skipCurrentOfferTx,
   resendCurrentOfferTx,
 } from '../services/auction.js';
+import { invalidateFlagCache } from '../services/featureFlags.js';
 import { TOKEN_TTL_MS } from '../config.js';
 import {
   emitWebhookEvent,
@@ -27,15 +28,27 @@ router.use(adminAuth);
 
 // Stats
 router.get('/stats', async (req, res) => {
-  const [donorCount, donationCount, claimCount, totalRaised, pledgeCount, channels] =
-    await Promise.all([
-      prisma.donor.count(),
-      prisma.donation.count(),
-      prisma.rewardClaim.count(),
-      prisma.donation.aggregate({ _sum: { amount_cents: true } }),
-      prisma.pendingPledge.count(),
-      prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
-    ]);
+  const [
+    donorCount,
+    donationCount,
+    claimCount,
+    totalRaised,
+    pledgeCount,
+    channels,
+    unallocatedCredits,
+  ] = await Promise.all([
+    prisma.donor.count(),
+    prisma.donation.count(),
+    prisma.rewardClaim.count(),
+    prisma.donation.aggregate({ _sum: { amount_cents: true } }),
+    prisma.pendingPledge.count(),
+    prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
+    // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
+    // on a reward/poll/goal — i.e. the platform's total outstanding
+    // liability to donors, not visible anywhere except by summing every
+    // donor individually.
+    prisma.donor.aggregate({ _sum: { balance_remaining: true } }),
+  ]);
 
   const perChannel = await Promise.all(
     channels.map(async (channel) => {
@@ -61,6 +74,7 @@ router.get('/stats', async (req, res) => {
     claims: claimCount,
     pledges: pledgeCount,
     total_raised_cents: totalRaised._sum.amount_cents ?? 0,
+    unallocated_credits_cents: unallocatedCredits._sum.balance_remaining ?? 0,
     channels: perChannel,
   });
 });
@@ -118,12 +132,93 @@ router.delete('/channels/:id', async (req, res) => {
 });
 
 // Donations
+const DONATION_STATUSES = ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'];
+
 router.get('/donations', async (req, res) => {
+  const { status } = req.query;
+  const statuses = typeof status === 'string' ? status.split(',').filter(Boolean) : [];
+  if (statuses.some((s) => !DONATION_STATUSES.includes(s))) {
+    return res.status(400).json({ error: 'Invalid status filter' });
+  }
   const donations = await prisma.donation.findMany({
+    where: statuses.length > 0 ? { status: { in: statuses } } : undefined,
     include: { donor: { select: { email: true } }, channel: { select: { id: true, name: true } } },
     orderBy: { created_at: 'desc' },
   });
   res.json(donations);
+});
+
+/**
+ * PATCH /admin/donations/:id/status (#63)
+ * Sets a donation's lifecycle status. Moving into REFUNDED/CHARGEBACK claws
+ * back whatever of the donation's amount is still sitting in the donor's
+ * unspent balance_remaining (capped there — already-spent credit is not
+ * cascaded through claims/votes/goals; use reverse-spend for that), records
+ * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
+ * has a refund_id it is terminal: no further status changes are allowed.
+ */
+router.patch('/donations/:id/status', async (req, res) => {
+  const { status, reason } = req.body;
+  if (!DONATION_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+
+  const donation = await prisma.donation.findUnique({
+    where: { id: req.params.id },
+    include: { donor: true },
+  });
+  if (!donation) return res.status(404).json({ error: 'Donation not found' });
+  if (donation.refund_id) {
+    return res
+      .status(400)
+      .json({ error: 'Donation is refunded/charged back and cannot change status' });
+  }
+  if (donation.status === status) {
+    return res.status(400).json({ error: 'Donation already has this status' });
+  }
+
+  if (status === 'REFUNDED' || status === 'CHARGEBACK') {
+    // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
+    // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
+    // Donation.status value.
+    const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
+    const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
+    const balanceAfter = donation.donor.balance_remaining - clawback;
+
+    const [, adjustment] = await prisma.$transaction([
+      prisma.donor.update({
+        where: { id: donation.donor_id },
+        data: { balance_remaining: { decrement: clawback } },
+      }),
+      prisma.balanceAdjustment.create({
+        data: {
+          donor_id: donation.donor_id,
+          amount_cents: -clawback,
+          balance_after_cents: balanceAfter,
+          type: adjustmentType,
+          reason: reason || `Donation ${status.toLowerCase()}`,
+          reference_id: donation.id,
+          created_by: 'admin',
+        },
+      }),
+    ]);
+    const updated = await prisma.donation.update({
+      where: { id: donation.id },
+      data: { status, refund_id: adjustment.id },
+      include: {
+        donor: { select: { email: true } },
+        channel: { select: { id: true, name: true } },
+      },
+    });
+    return res.json(updated);
+  }
+
+  const updated = await prisma.donation.update({
+    where: { id: donation.id },
+    data: { status },
+    include: { donor: { select: { email: true } }, channel: { select: { id: true, name: true } } },
+  });
+  res.json(updated);
 });
 
 // Claims
@@ -299,17 +394,51 @@ router.delete('/rewards/:id', async (req, res) => {
   }
 });
 
-// Simulate donation
+// Add donation (manual entry for real donations received externally, e.g.
+// HEKATHON — #62; also doubles as the dev/test "simulate donation" tool).
 router.post('/simulate-donation', async (req, res) => {
   try {
-    const { email, donor_name, amount_cents, comment, pledge_token, channel_id } = req.body;
+    const {
+      email,
+      donor_name,
+      amount_cents,
+      comment,
+      pledge_token,
+      channel_id,
+      external_id,
+      occurred_at,
+    } = req.body;
     const cents = Number(amount_cents);
     if (!email || !Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
       return res
         .status(400)
         .json({ error: `email and amount_cents (min ${MIN_SPEND_CENTS}) required` });
     }
-    const externalId = `sim-${crypto.randomUUID()}`;
+
+    let occurredAt: Date | null = null;
+    if (occurred_at) {
+      const parsed = new Date(occurred_at);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'occurred_at must be a valid date' });
+      }
+      occurredAt = parsed;
+    }
+
+    // A caller-supplied external_id lets an admin record a real donation
+    // received on another platform using that platform's own reference (for
+    // dedup/traceability) instead of an opaque auto-generated id. Falls back
+    // to a fresh sim-<uuid> for plain dev/test simulations, matching prior
+    // behavior.
+    let externalId: string;
+    if (external_id != null) {
+      externalId = String(external_id).trim();
+      if (!externalId) {
+        return res.status(400).json({ error: 'external_id must not be empty when provided' });
+      }
+    } else {
+      externalId = `sim-${crypto.randomUUID()}`;
+    }
+
     const result = await processDonation({
       externalId,
       email,
@@ -318,11 +447,12 @@ router.post('/simulate-donation', async (req, res) => {
       comment: comment || null,
       pledgeToken: pledge_token || null,
       channelId: channel_id || null,
+      occurredAt,
     });
     if ('duplicate' in result) {
-      // sim always uses a fresh externalId, so this branch is unreachable;
-      // narrow the union for TypeScript without altering behavior.
-      throw new Error('Duplicate donation');
+      return res
+        .status(409)
+        .json({ error: `A donation with external_id "${externalId}" already exists` });
     }
     res.json({
       success: true,
@@ -481,6 +611,98 @@ router.post('/donors/:id/adjust-balance', async (req, res) => {
     balance_after: balanceAfter,
     adjustment: cents,
   });
+});
+
+/**
+ * POST /admin/donors/sweep-credits
+ * Bulk credit sweep-out (#60): zeros balance_remaining for every donor
+ * matching an optional balance-range filter. Two-step confirmation:
+ *   - confirm omitted/false → dry-run PREVIEW only (donor_count, total_cents,
+ *     and a small sample) — nothing is written.
+ *   - confirm: true → actually performs the sweep.
+ * This mirrors the client's own "are you sure?" dialog with a
+ * server-enforced confirmation, so a bulk zero-out can never happen from a
+ * single accidental request.
+ *
+ * Each swept donor gets a FREEZE_ZERO BalanceAdjustment. Donor has no name
+ * field (see #57) — reason references the donor's most recent donation's
+ * self-reported donor_name (or "Anonymous") so the audit trail is
+ * human-readable instead of just a bare donor id.
+ */
+router.post('/donors/sweep-credits', async (req, res) => {
+  const { min_balance_cents, max_balance_cents, confirm } = req.body;
+
+  const where: {
+    balance_remaining: { gt: number; gte?: number; lte?: number };
+  } = { balance_remaining: { gt: 0 } };
+  if (min_balance_cents != null) {
+    const min = Number(min_balance_cents);
+    if (!Number.isInteger(min) || min < 0) {
+      return res.status(400).json({ error: 'min_balance_cents must be a non-negative integer' });
+    }
+    where.balance_remaining.gte = min;
+  }
+  if (max_balance_cents != null) {
+    const max = Number(max_balance_cents);
+    if (!Number.isInteger(max) || max < 0) {
+      return res.status(400).json({ error: 'max_balance_cents must be a non-negative integer' });
+    }
+    where.balance_remaining.lte = max;
+  }
+
+  const donors = await prisma.donor.findMany({
+    where,
+    select: {
+      id: true,
+      balance_remaining: true,
+      donations: {
+        orderBy: { created_at: 'desc' },
+        take: 1,
+        select: { donor_name: true },
+      },
+    },
+  });
+
+  const totalCents = donors.reduce((sum, d) => sum + d.balance_remaining, 0);
+
+  if (confirm !== true) {
+    return res.json({
+      preview: true,
+      donor_count: donors.length,
+      total_cents: totalCents,
+      sample: donors.slice(0, 10).map((d) => ({
+        id: d.id,
+        balance_remaining: d.balance_remaining,
+        donor_name: d.donations[0]?.donor_name ?? null,
+      })),
+    });
+  }
+
+  if (donors.length > 0) {
+    await prisma.$transaction(
+      donors.flatMap((d) => {
+        const displayName = d.donations[0]?.donor_name || 'Anonymous';
+        return [
+          prisma.donor.update({
+            where: { id: d.id },
+            data: { balance_remaining: { decrement: d.balance_remaining } },
+          }),
+          prisma.balanceAdjustment.create({
+            data: {
+              donor_id: d.id,
+              amount_cents: -d.balance_remaining,
+              balance_after_cents: 0,
+              type: 'FREEZE_ZERO',
+              reason: `Bulk credit sweep (${displayName})`,
+              created_by: 'admin',
+            },
+          }),
+        ];
+      }),
+    );
+  }
+
+  res.json({ success: true, donor_count: donors.length, total_cents: totalCents });
 });
 
 router.post('/donors/:id/reverse-spend', async (req, res) => {
@@ -1400,6 +1622,117 @@ router.post('/destinations/:id/test', async (req, res) => {
   });
 
   res.json({ success: true, seq });
+});
+
+// Feature Flags CRUD
+router.get('/feature-flags', async (req, res) => {
+  const flags = await prisma.featureFlag.findMany({
+    orderBy: { name: 'asc' },
+  });
+  res.json(flags);
+});
+
+router.get('/feature-flags/:name', async (req, res) => {
+  const flag = await prisma.featureFlag.findUnique({
+    where: { name: req.params.name },
+  });
+  if (!flag) return res.status(404).json({ error: 'Feature flag not found' });
+  res.json(flag);
+});
+
+router.post('/feature-flags', async (req, res) => {
+  const { name, description } = req.body;
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  try {
+    const flag = await prisma.featureFlag.create({
+      data: {
+        name: String(name).trim(),
+        description: description ? String(description).trim() : null,
+        is_enabled: false,
+      },
+    });
+    invalidateFlagCache();
+    res.json(flag);
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2002') {
+      return res.status(409).json({ error: 'Feature flag name already exists' });
+    }
+    throw e;
+  }
+});
+
+router.patch('/feature-flags/:name', async (req, res) => {
+  const { is_enabled, description } = req.body;
+  const updates: Record<string, unknown> = {};
+  if (is_enabled !== undefined) updates.is_enabled = Boolean(is_enabled);
+  if (description !== undefined)
+    updates.description = description ? String(description).trim() : null;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+
+  const flag = await prisma.featureFlag.update({
+    where: { name: req.params.name },
+    data: updates,
+  });
+  invalidateFlagCache();
+  res.json(flag);
+});
+
+router.delete('/feature-flags/:name', async (req, res) => {
+  try {
+    await prisma.featureFlag.delete({
+      where: { name: req.params.name },
+    });
+    invalidateFlagCache();
+    res.json({ success: true });
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2025') {
+      return res.status(404).json({ error: 'Feature flag not found' });
+    }
+    throw e;
+  }
+});
+
+// Broadcast Banner CRUD
+router.get('/broadcast', async (req, res) => {
+  const broadcast = await prisma.broadcast.findFirst();
+  res.json(broadcast || { id: null, message: '', level: null, is_active: false });
+});
+
+const BROADCAST_LEVELS = ['INFO', 'WARNING', 'CRITICAL'];
+
+router.put('/broadcast', async (req, res) => {
+  const { message, level } = req.body;
+  if (typeof message !== 'string') {
+    return res.status(400).json({ error: 'message must be a string' });
+  }
+  if (level !== undefined && level !== null && !BROADCAST_LEVELS.includes(level)) {
+    return res.status(400).json({ error: 'level must be one of INFO, WARNING, CRITICAL, or null' });
+  }
+  const normalizedLevel = level ?? null;
+  const trimmed = message.trim();
+  if (!trimmed) {
+    // Clear the broadcast
+    await prisma.broadcast.deleteMany();
+    return res.json({ id: null, message: '', level: null, is_active: false });
+  }
+  // Upsert: update if exists, create if not
+  const existing = await prisma.broadcast.findFirst();
+  const broadcast = await prisma.broadcast.upsert({
+    where: { id: existing?.id || 'default' },
+    create: { id: 'default', message: trimmed, level: normalizedLevel, is_active: true },
+    update: { message: trimmed, level: normalizedLevel, is_active: true, updated_at: new Date() },
+  });
+  res.json(broadcast);
+});
+
+router.delete('/broadcast', async (req, res) => {
+  await prisma.broadcast.deleteMany();
+  res.json({ success: true });
 });
 
 export default router;

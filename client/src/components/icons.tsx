@@ -187,3 +187,15 @@ export function InfoIcon(props: IconProps) {
     props,
   );
 }
+
+export function BroadcastIcon(props: IconProps) {
+  return base(
+    <>
+      <path d="M10 3.5A6.5 6.5 0 0 1 16.5 10" />
+      <path d="M10 6A3 3 0 0 1 13 9" />
+      <circle cx="10" cy="10" r="1.5" />
+      <path d="M10 10v6" />
+    </>,
+    props,
+  );
+}

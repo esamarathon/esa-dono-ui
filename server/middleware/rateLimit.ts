@@ -31,4 +31,13 @@ const metricsLimit = rateLimit({
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-export { spendLimit, authLimit, metricsLimit };
+// Feedback submissions are public/unauthenticated (no donor token to key on),
+// so throttle purely by IP.
+const feedbackLimit = rateLimit({
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_FEEDBACK) || 5,
+  keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ''),
+  handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
+});
+
+export { spendLimit, authLimit, metricsLimit, feedbackLimit };

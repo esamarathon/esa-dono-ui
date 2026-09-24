@@ -106,6 +106,60 @@ describe('ModeratorPolls', () => {
     expect(await screen.findByText(/No entries yet/)).toBeInTheDocument();
   });
 
+  it('approves a pending custom entry (#45)', async () => {
+    const pendingEntry = { id: 'e1', label: 'My idea', status: 'PENDING' };
+    const customPoll = { ...poll, allow_custom_entries: true, custom_entries: [pendingEntry] };
+    moderatorClient.get.mockImplementation((path: string) => {
+      if (path === '/polls') return Promise.resolve({ data: [customPoll] });
+      if (path === '/polls/p1/custom-entries') return Promise.resolve({ data: [pendingEntry] });
+      return Promise.resolve({ data: [] });
+    });
+    moderatorClient.patch.mockResolvedValue({ data: { ...pendingEntry, status: 'APPROVED' } });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorPolls />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /pending entries/ }));
+    expect(await screen.findByText('My idea')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'approve' }));
+
+    await waitFor(() =>
+      expect(moderatorClient.patch).toHaveBeenCalledWith('/polls/custom-entries/e1', {
+        status: 'APPROVED',
+      }),
+    );
+  });
+
+  it('surfaces an error instead of silently doing nothing when moderating an entry fails (#45)', async () => {
+    const pendingEntry = { id: 'e1', label: 'My idea', status: 'PENDING' };
+    const customPoll = { ...poll, allow_custom_entries: true, custom_entries: [pendingEntry] };
+    moderatorClient.get.mockImplementation((path: string) => {
+      if (path === '/polls') return Promise.resolve({ data: [customPoll] });
+      if (path === '/polls/p1/custom-entries') return Promise.resolve({ data: [pendingEntry] });
+      return Promise.resolve({ data: [] });
+    });
+    moderatorClient.patch.mockRejectedValue({
+      response: { data: { error: 'Only pending entries can be moderated' } },
+    });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorPolls />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /pending entries/ }));
+    expect(await screen.findByText('My idea')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'approve' }));
+
+    expect(await screen.findByText('Only pending entries can be moderated')).toBeInTheDocument();
+  });
+
   it('creates a poll', async () => {
     moderatorClient.get.mockResolvedValue({ data: [] });
     moderatorClient.post.mockResolvedValue({ data: { id: 'p2' } });

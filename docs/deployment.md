@@ -103,15 +103,24 @@ npm run lint
 ### 1. Build the images
 
 ```bash
-docker build -f Dockerfile.backend --target runtime -t ghcr.io/codescales/esa-dono-ui/backend:latest .
-docker build -f Dockerfile.frontend             -t ghcr.io/codescales/esa-dono-ui/frontend:latest .
+docker build -f Dockerfile.backend --target runtime -t ghcr.io/esamarathon/esa-dono-ui/backend:latest .
+docker build -f Dockerfile.frontend             -t ghcr.io/esamarathon/esa-dono-ui/frontend:latest .
 ```
 
-Or pull the CI-published multiarch images (amd64/arm64):
+Or pull the CI-published multiarch images (amd64/arm64). Every push to `main`
+or `dev` publishes images tagged with the sanitized branch name and the commit
+sha; `main` additionally gets `latest`. PRs against `main` publish `pr-<number>`
+(not scanned/smoke-tested further). `docker-compose.yml` defaults to `:latest`
+for both images; override with `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG` to run
+a specific branch or commit build instead:
 
 ```bash
-docker pull ghcr.io/codescales/esa-dono-ui/backend:latest
-docker pull ghcr.io/codescales/esa-dono-ui/frontend:latest
+docker pull ghcr.io/esamarathon/esa-dono-ui/backend:latest
+docker pull ghcr.io/esamarathon/esa-dono-ui/frontend:latest
+
+# or a specific branch/commit build:
+docker pull ghcr.io/esamarathon/esa-dono-ui/backend:dev
+BACKEND_IMAGE_TAG=dev FRONTEND_IMAGE_TAG=dev docker compose up -d
 ```
 
 ### 2. Configure environment
@@ -242,6 +251,32 @@ docker compose start dono-backend
 
 Restore: stop the backend, copy the file back into the volume, restart.
 
+### Seeding data (development / staging)
+
+To create persistent dev accounts (moderator@localhost, admin@localhost) and a
+banner displaying API keys, run the seed script.
+
+The production runtime image has no npm/npx (stripped to keep the image slim),
+so invoke `tsx` directly against `node_modules/.bin` rather than
+`npx prisma db seed` (its seed runner shells out to plain `tsx` via `$PATH`,
+which isn't set up in an `exec` session):
+
+```bash
+docker exec -w /app/server <backend-container-name> sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
+```
+
+(In local development, where npm is available, `cd server && npx prisma db seed` works directly — see CLAUDE.md.)
+
+This creates:
+
+- Moderator account (role: MODERATOR, email_verified: true)
+- Admin account (role: ADMIN, email_verified: true)
+- Broadcast banner showing current MODERATOR_API_KEY and ADMIN_API_KEY from .env
+
+The seed is idempotent — running it multiple times updates existing records
+safely. Accounts and banner survive database restarts, including staging's daily
+reset cycle. See `docs/STAGING_SEED.md` for detailed staging instructions.
+
 ### Migrations
 
 Handled automatically by the backend entrypoint (`prisma migrate deploy`). To
@@ -253,12 +288,14 @@ cd server && npx prisma migrate dev --name <name> && npx prisma generate && cd .
 
 ### Rollback
 
-Redeploy a previous image tag (CI also tags `backend:<sha>` / `frontend:<sha>`):
+Redeploy a previous image tag (CI also tags `backend:<sha>` /
+`frontend:<sha>`, plus `backend:<branch>` / `frontend:<branch>` per pushed
+branch, e.g. `:main`, `:dev`):
 
 ```bash
 docker compose pull && docker compose up -d
 # or pin a specific build:
-docker tag ghcr.io/codescales/esa-dono-ui/backend:<sha> ghcr.io/codescales/esa-dono-ui/backend:latest
+docker tag ghcr.io/esamarathon/esa-dono-ui/backend:<sha> ghcr.io/esamarathon/esa-dono-ui/backend:latest
 ```
 
 DB migrations are append-only; rolling back an image with a schema change may

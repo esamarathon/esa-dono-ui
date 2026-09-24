@@ -50,6 +50,13 @@ export const DIMENSIONS = [
   'voteAmount',
   'timing',
   'comment',
+  'profile',
+  'preference',
+  'repeatDonation',
+  'amountStyle',
+  'cart',
+  'quantity',
+  'traffic',
 ] as const;
 export type Dimension = (typeof DIMENSIONS)[number];
 

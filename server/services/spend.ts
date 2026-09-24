@@ -8,16 +8,25 @@ export async function claimRewardTx(
   donorId: string,
   rewardId: string,
   claimData?: ClaimData | null,
+  quantity = 1,
 ) {
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw Object.assign(new Error('quantity must be a positive integer'), { status: 400 });
+  }
+
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
   if (!reward || !reward.is_active)
     throw Object.assign(new Error('Reward not found'), { status: 404 });
-  if (reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total) {
+  if (
+    reward.quantity_total !== null &&
+    reward.quantity_claimed + quantity > reward.quantity_total
+  ) {
     throw Object.assign(new Error('Reward sold out'), { status: 400 });
   }
 
+  const totalCost = reward.cost_cents * quantity;
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < reward.cost_cents) {
+  if (!donor || donor.balance_remaining < totalCost) {
     throw Object.assign(new Error('Insufficient balance'), { status: 400 });
   }
 
@@ -25,22 +34,25 @@ export async function claimRewardTx(
 
   await tx.donor.update({
     where: { id: donorId },
-    data: { balance_remaining: { decrement: reward.cost_cents } },
+    data: { balance_remaining: { decrement: totalCost } },
   });
-  await tx.rewardClaim.create({
-    data: {
+  // One RewardClaim row per unit — claim_data (e.g. a shoutout message) is
+  // shared across all units in this line item; quantity > 1 is only offered
+  // client-side for fieldless reward types where that's a non-issue.
+  await tx.rewardClaim.createMany({
+    data: Array.from({ length: quantity }, () => ({
       reward_id: reward.id,
       donor_id: donorId,
       claim_data: JSON.stringify(data),
       status: 'PENDING',
-    },
+    })),
   });
   await tx.reward.update({
     where: { id: reward.id },
-    data: { quantity_claimed: { increment: 1 } },
+    data: { quantity_claimed: { increment: quantity } },
   });
 
-  return { cost: reward.cost_cents };
+  return { cost: totalCost };
 }
 
 export async function votePollTx(

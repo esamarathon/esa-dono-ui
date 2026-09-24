@@ -280,6 +280,140 @@ describe('Moderator donations', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
   });
 
+  it('surfaces human-readable pledge item labels, never a raw target_id (#58)', async () => {
+    const { token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+
+    const reward = await prisma.reward.create({
+      data: { title: 'Signed Poster', type: 'PHYSICAL', cost_cents: 500 },
+    });
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'New PC Fund', target_cents: 100000 },
+    });
+    const poll = await prisma.poll.create({
+      data: { title: 'Best Runner', is_active: true, allow_custom_entries: true },
+    });
+    const option = await prisma.pollOption.create({
+      data: { poll_id: poll.id, label: 'Runner A' },
+    });
+
+    const donation = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 2000,
+        donor_name: 'Test Donor',
+      },
+    });
+    const pledge = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: `tok-${crypto.randomUUID()}`,
+        total_cents: 2000,
+        top_up_cents: 500,
+        expires_at: new Date(Date.now() + 60_000),
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: donation.id,
+        items: {
+          create: [
+            { kind: 'REWARD', target_id: reward.id, amount_cents: 500 },
+            { kind: 'GOAL', target_id: goal.id, amount_cents: 300 },
+            {
+              kind: 'POLL_VOTE',
+              target_id: option.id,
+              poll_id: poll.id,
+              amount_cents: 400,
+            },
+            {
+              kind: 'POLL_CUSTOM',
+              target_id: poll.id,
+              poll_id: poll.id,
+              amount_cents: 300,
+              data: JSON.stringify({ label: 'Runner Z (write-in)' }),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/moderator/donations')
+      .set('Authorization', `Bearer ${modToken}`);
+
+    expect(res.status).toBe(200);
+    const found = res.body.find((d: { id: string }) => d.id === donation.id);
+    expect(found).toBeTruthy();
+    expect(found.top_up_cents).toBe(500);
+
+    const labels = found.pledge_items.map((i: { kind: string; label: string }) => ({
+      kind: i.kind,
+      label: i.label,
+    }));
+    expect(labels).toContainEqual({ kind: 'REWARD', label: 'Signed Poster' });
+    expect(labels).toContainEqual({ kind: 'GOAL', label: 'New PC Fund' });
+    expect(labels).toContainEqual({ kind: 'POLL_VOTE', label: 'Best Runner: Runner A' });
+    expect(labels).toContainEqual({
+      kind: 'POLL_CUSTOM',
+      label: 'Best Runner: "Runner Z (write-in)"',
+    });
+
+    // Never a raw id anywhere in the response.
+    const serialized = JSON.stringify(found);
+    expect(serialized).not.toContain(reward.id);
+    expect(serialized).not.toContain(goal.id);
+    expect(serialized).not.toContain(option.id);
+
+    await prisma.pendingPledge.delete({ where: { id: pledge.id } });
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.pollOption.delete({ where: { id: option.id } });
+    await prisma.poll.delete({ where: { id: poll.id } });
+    await prisma.fundGoal.delete({ where: { id: goal.id } });
+    await prisma.reward.delete({ where: { id: reward.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('prefixes a REWARD label with quantity when quantity > 1 (#50)', async () => {
+    const { token: modToken } = await makeModerator();
+    const donor = await makeDonorWithBalance(1000);
+
+    const reward = await prisma.reward.create({
+      data: { title: 'Sticker Pack', type: 'DIGITAL', cost_cents: 500 },
+    });
+    const donation = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 1500,
+        donor_name: 'Test Donor',
+      },
+    });
+    const pledge = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: `tok-${crypto.randomUUID()}`,
+        total_cents: 1500,
+        expires_at: new Date(Date.now() + 60_000),
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: donation.id,
+        items: {
+          create: [{ kind: 'REWARD', target_id: reward.id, amount_cents: 1500, quantity: 3 }],
+        },
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/moderator/donations')
+      .set('Authorization', `Bearer ${modToken}`);
+
+    const found = res.body.find((d: { id: string }) => d.id === donation.id);
+    expect(found.pledge_items).toContainEqual(
+      expect.objectContaining({ kind: 'REWARD', label: '3× Sticker Pack', quantity: 3 }),
+    );
+
+    await prisma.pendingPledge.delete({ where: { id: pledge.id } });
+    await prisma.donation.delete({ where: { id: donation.id } });
+    await prisma.reward.delete({ where: { id: reward.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
   it('marks a donation as moderated, recording who and when', async () => {
     const { donor: modDonor, token: modToken } = await makeModerator();
     const donor = await makeDonorWithBalance(1000);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getPledge } from '../api/pledge';
-import { startSession } from '../utils/authToken';
+import { isSessionActive } from '../utils/authToken';
 import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
@@ -41,10 +41,14 @@ export default function PledgeReturn() {
         setPledge(data);
 
         if (data.status === 'FULFILLED') {
-          if (data.magic_token) {
-            // Exchange the returned magic token for an httpOnly session cookie,
-            // then land on the wallet (token never persists in JS).
-            await startSession(data.magic_token).catch(() => undefined);
+          // Never auto-authenticate from a pledge return — that would let
+          // anyone gain a session by paying to someone else's email (#48).
+          // The magic link (emailed on every donation) is the only way to
+          // establish a new session. But if this browser already has an
+          // active session (a returning, logged-in donor), just take them
+          // straight to their wallet — no need to make them click the link
+          // again for their 2nd, 3rd, ... donation.
+          if (isSessionActive()) {
             navigate('/wallet');
           }
           return;

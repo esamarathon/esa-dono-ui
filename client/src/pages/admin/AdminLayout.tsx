@@ -17,6 +17,7 @@ import {
   HomeIcon,
   LogoutIcon,
   InfoIcon,
+  BroadcastIcon,
 } from '../../components/icons';
 
 const NAV: SidebarNavItem[] = [
@@ -30,8 +31,10 @@ const NAV: SidebarNavItem[] = [
   { to: '/admin/donations', label: 'donations & claims', icon: ReceiptIcon },
   { to: '/admin/pledges', label: 'pledges', icon: ClipboardIcon },
   { to: '/admin/blocked-words', label: 'blocked words', icon: BanIcon },
+  { to: '/admin/feature-flags', label: 'feature flags', icon: PlayIcon },
+  { to: '/admin/broadcast', label: 'broadcast banner', icon: BroadcastIcon },
   { to: '/admin/destinations', label: 'destinations', icon: PlayIcon },
-  { to: '/admin/simulate', label: 'simulate', icon: PlayIcon },
+  { to: '/admin/simulate', label: 'add donation', icon: PlayIcon },
   { to: '/admin/help', label: 'help', icon: InfoIcon },
 ];
 

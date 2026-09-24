@@ -6,10 +6,16 @@ import { donorAuth } from '../middleware/donorAuth.js';
 import { donorAuthOptional } from '../middleware/donorAuthOptional.js';
 import { spendLimit } from '../middleware/rateLimit.js';
 import { placeBidTx } from '../services/auction.js';
+import { isFeatureFlagEnabled } from '../services/featureFlags.js';
 
 const router = Router();
 
 router.get('/', donorAuthOptional, async (req: Request, res: Response) => {
+  const isEnabled = await isFeatureFlagEnabled('auctions');
+  if (!isEnabled) {
+    return res.status(403).json({ error: 'Auctions are not enabled' });
+  }
+
   const { channel_id } = req.query;
   const auctions = await prisma.auction.findMany({
     where: {
@@ -29,6 +35,11 @@ router.get('/', donorAuthOptional, async (req: Request, res: Response) => {
 });
 
 router.get('/:id', donorAuthOptional, async (req: Request, res: Response) => {
+  const isEnabled = await isFeatureFlagEnabled('auctions');
+  if (!isEnabled) {
+    return res.status(403).json({ error: 'Auctions are not enabled' });
+  }
+
   const auction = await prisma.auction.findUnique({
     where: { id: req.params.id },
     include: {
@@ -49,6 +60,11 @@ router.get('/:id', donorAuthOptional, async (req: Request, res: Response) => {
 });
 
 router.post('/:id/bid', spendLimit, donorAuth, async (req: Request, res: Response) => {
+  const isEnabled = await isFeatureFlagEnabled('auctions');
+  if (!isEnabled) {
+    return res.status(403).json({ error: 'Auctions are not enabled' });
+  }
+
   try {
     const cents = Number(req.body.amount_cents);
     await prisma.$transaction((tx: Prisma.TransactionClient) =>

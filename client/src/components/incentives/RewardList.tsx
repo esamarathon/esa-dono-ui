@@ -26,8 +26,17 @@ const FIELDS: Record<string, FieldDef[]> = {
 };
 
 export default function RewardList() {
-  const { rewards, loading, cart, addToCart, removeFromCart, markVisited, staleRewardIds } =
-    useCart();
+  const {
+    rewards,
+    loading,
+    cart,
+    addToCart,
+    removeFromCart,
+    incrementRewardQuantity,
+    decrementRewardQuantity,
+    markVisited,
+    staleRewardIds,
+  } = useCart();
   const [claiming, setClaiming] = useState<Reward | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -39,6 +48,8 @@ export default function RewardList() {
   if (loading) return <LoadingSpinner />;
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'REWARD' && i.target_id === id);
+  const cartQuantity = (id: string) =>
+    cart.find((i) => i.kind === 'REWARD' && i.target_id === id)?.quantity ?? 1;
 
   const fieldsFor = (reward: Reward): FieldDef[] =>
     FIELDS[reward.type] ?? [
@@ -124,12 +135,38 @@ export default function RewardList() {
                   <div className="flex items-center justify-end gap-2 mt-2">
                     <ShareLinkButton path={`/rewards?reward=${r.id}`} />
                     {inCart(r.id) ? (
-                      <button
-                        onClick={() => removeFromCart('REWARD', r.id)}
-                        className={`btrl-button btrl-button-outline text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
-                      >
-                        remove
-                      </button>
+                      fieldsFor(r).length === 0 ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => decrementRewardQuantity(r.id)}
+                            aria-label="decrease quantity"
+                            className="btrl-button btrl-button-outline text-sm w-8"
+                          >
+                            -
+                          </button>
+                          <span className="font-data text-off-white w-4 text-center">
+                            {cartQuantity(r.id)}
+                          </span>
+                          <button
+                            onClick={() => incrementRewardQuantity(r.id)}
+                            disabled={
+                              r.quantity_total !== null &&
+                              cartQuantity(r.id) >= r.quantity_total - r.quantity_claimed
+                            }
+                            aria-label="increase quantity"
+                            className={`btrl-button text-sm w-8 ${flashId === r.id ? 'animate-add-flash' : ''}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => removeFromCart('REWARD', r.id)}
+                          className={`btrl-button btrl-button-outline text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
+                        >
+                          remove
+                        </button>
+                      )
                     ) : (
                       <button
                         onClick={() => handleAddClick(r)}

@@ -16,6 +16,10 @@ interface ProcessDonationOptions {
   pledgeToken?: string | null;
   shippingCents?: number;
   channelId?: string | null;
+  /** Backdates Donation.created_at (#62) — e.g. when recording a donation
+   * actually received on an external platform on an earlier date. Defaults
+   * to now when omitted. */
+  occurredAt?: Date | null;
 }
 
 /**
@@ -51,6 +55,7 @@ export async function processDonation({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  occurredAt = null,
 }: ProcessDonationOptions) {
   return withSpan('donation.process', async () => {
     return processDonationInner({
@@ -62,6 +67,7 @@ export async function processDonation({
       pledgeToken,
       shippingCents,
       channelId,
+      occurredAt,
     });
   });
 }
@@ -75,6 +81,7 @@ async function processDonationInner({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  occurredAt = null,
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
   // Shipping is passed through to Stripe, not donated — exclude it from the
@@ -115,6 +122,7 @@ async function processDonationInner({
           donor_name: donorName,
           comment: comment ?? null,
           channel_id: channelId ?? null,
+          ...(occurredAt ? { created_at: occurredAt } : {}),
         },
       });
 
@@ -132,6 +140,7 @@ async function processDonationInner({
             data: {
               pledge: { connect: { id: pledge.id } },
               ...(pledge.comment ? { comment: pledge.comment } : {}),
+              ...(pledge.display_name ? { donor_name: pledge.display_name } : {}),
               ...(pledge.channel_id ? { channel_id: pledge.channel_id } : {}),
             },
           });

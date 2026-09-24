@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
 
@@ -125,7 +125,7 @@ jobs:
           context: .
           file: ./Dockerfile.backend
           target: runtime
-          tags: ghcr.io/codescales/esa-dono-ui/backend:latest
+          tags: ghcr.io/esamarathon/esa-dono-ui/backend:latest
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -135,7 +135,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.frontend
-          tags: ghcr.io/codescales/esa-dono-ui/frontend:latest
+          tags: ghcr.io/esamarathon/esa-dono-ui/frontend:latest
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
