@@ -47,16 +47,27 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Checks the flag before multer runs, so a disabled feature returns 404
+ * without buffering the upload (and bad uploads can't mask the 404).
+ */
+async function requireFeedbackEnabled(_req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!(await isFeatureFlagEnabled('feedback'))) {
+      return res.status(404).json({ error: 'Feedback is not enabled' });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 router.post(
   '/',
   feedbackLimit,
+  requireFeedbackEnabled,
   upload.single('screenshot'),
   async (req: Request, res: Response) => {
-    const isEnabled = await isFeatureFlagEnabled('feedback');
-    if (!isEnabled) {
-      return res.status(404).json({ error: 'Feedback is not enabled' });
-    }
-
     const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
     if (!text || text.length > MAX_TEXT_LENGTH) {
       return res.status(400).json({
@@ -91,7 +102,10 @@ router.post(
 
 // Multer error handler (file-type rejection, size exceeded, etc.)
 router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-  if (err instanceof multer.MulterError || err instanceof Error) {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err instanceof Error && err.message.startsWith('Unsupported screenshot type')) {
     return res.status(400).json({ error: err.message });
   }
   next(err);

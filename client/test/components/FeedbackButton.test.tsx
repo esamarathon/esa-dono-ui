@@ -20,6 +20,7 @@ vi.mock('html2canvas', () => ({
 
 import { getFeatureFlags } from '../../src/api/featureFlags';
 import { sendFeedback } from '../../src/api/feedback';
+import html2canvas from 'html2canvas';
 
 function renderButton() {
   return render(
@@ -46,6 +47,22 @@ describe('FeedbackButton', () => {
     vi.mocked(getFeatureFlags).mockResolvedValue({ feedback: true });
     renderButton();
     expect(await screen.findByRole('button', { name: 'Send feedback' })).toBeInTheDocument();
+  });
+
+  it('captures only the visible viewport', async () => {
+    vi.mocked(getFeatureFlags).mockResolvedValue({ feedback: true });
+    renderButton();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send feedback' }));
+    await screen.findByPlaceholderText("What's going on?");
+    expect(html2canvas).toHaveBeenCalledWith(
+      document.body,
+      expect.objectContaining({
+        x: window.scrollX,
+        y: window.scrollY,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }),
+    );
   });
 
   it('retains the text and shows a retry button when submission fails', async () => {

@@ -81,7 +81,13 @@ export default function FeedbackButton() {
     setSuccess(false);
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(document.body);
+      // Capture only the visible viewport ("current screen"), not the full page.
+      const canvas = await html2canvas(document.body, {
+        x: window.scrollX,
+        y: window.scrollY,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
       const blob = await canvasToCompressedBlob(canvas);
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
       const previewUrl = blob ? URL.createObjectURL(blob) : null;

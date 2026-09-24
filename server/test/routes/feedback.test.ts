@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import feedbackRouter from '../../routes/feedback.js';
 import { invalidateFlagCache } from '../../services/featureFlags.js';
+import sharedPrisma from '../../lib/prisma.js';
 
 const prisma = new PrismaClient();
 
@@ -40,6 +41,36 @@ describe('Feedback route', () => {
     expect(res.status).toBe(404);
   });
 
+  it('returns 404 (not 400) for an invalid upload when the flag is disabled', async () => {
+    await setFlag(false);
+    const res = await request(createApp())
+      .post('/api/feedback')
+      .field('text', 'Hello there')
+      .attach('screenshot', Buffer.from('gif'), { filename: 'x.gif', contentType: 'image/gif' });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 500 (without crashing) when the flag lookup fails', async () => {
+    const app = createApp();
+    app.use(
+      (
+        _err: unknown,
+        _req: express.Request,
+        res: express.Response,
+        _next: express.NextFunction,
+      ) => {
+        res.status(500).json({ error: 'Internal error' });
+      },
+    );
+    invalidateFlagCache();
+    const spy = vi
+      .spyOn(sharedPrisma.featureFlag, 'findMany')
+      .mockRejectedValueOnce(new Error('db down'));
+    const res = await request(app).post('/api/feedback').field('text', 'Hello there');
+    expect(res.status).toBe(500);
+    spy.mockRestore();
+  });
+
   describe('with the flag enabled', () => {
     beforeAll(async () => {
       await setFlag(true);
@@ -54,6 +85,15 @@ describe('Feedback route', () => {
     it('returns 400 when text exceeds the max length', async () => {
       process.env.DISCORD_FEEDBACK_WEBHOOK_URL = 'https://discord.com/api/webhooks/test';
       const res = await request(createApp()).post('/api/feedback').field('text', 'x'.repeat(2001));
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for an unsupported screenshot type', async () => {
+      process.env.DISCORD_FEEDBACK_WEBHOOK_URL = 'https://discord.com/api/webhooks/test';
+      const res = await request(createApp())
+        .post('/api/feedback')
+        .field('text', 'Hello there')
+        .attach('screenshot', Buffer.from('gif'), { filename: 'x.gif', contentType: 'image/gif' });
       expect(res.status).toBe(400);
     });
 
