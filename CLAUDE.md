@@ -298,7 +298,7 @@ Returns `{ success: true, token, donor }`. Use the token to build a magic link: 
 
 ### Issue tracker
 
-Issues and PRDs live as GitHub issues in `Codescales/esa-dono-ui`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues and PRDs live as GitHub issues in `esamarathon/esa-dono-ui` (`origin`; the fork `Codescales/esa-dono-ui` is a second `codescales` remote) — managed via the `gh -R esamarathon/esa-dono-ui` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
