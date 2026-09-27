@@ -15,6 +15,8 @@ import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
 import auctionsRouter from './routes/auctions.js';
+import feedbackRouter from './routes/feedback.js';
+import featureFlagsRouter from './routes/featureFlags.js';
 import { startEventDispatcher } from './services/eventDispatcher.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
@@ -89,9 +91,11 @@ app.use('/api/goals', goalsRouter);
 app.use('/api/channels', channelsRouter);
 app.use('/api/pledge', pledgeRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/feature-flags', featureFlagsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 app.use('/api/auctions', auctionsRouter);
+app.use('/api/feedback', feedbackRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

@@ -7,6 +7,7 @@ import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } fro
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
+import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
@@ -17,17 +18,20 @@ interface PledgeItemInput {
   amount_cents?: number;
   poll_id?: string | null;
   data?: unknown;
+  quantity?: number;
 }
 
 interface CreatePledgeInput {
   email?: string | null;
   comment?: string | null;
+  display_name?: string | null;
   items: PledgeItemInput[];
   top_up_cents?: number;
   channel_id?: string | null;
 }
 
 const COMMENT_MAX_LENGTH = 500;
+const DISPLAY_NAME_MAX_LENGTH = 60;
 
 /**
  * Create a pending pledge from cart items.
@@ -44,18 +48,20 @@ const COMMENT_MAX_LENGTH = 500;
 export async function createPledge({
   email,
   comment,
+  display_name,
   items,
   top_up_cents,
   channel_id,
 }: CreatePledgeInput) {
   return withSpan('pledge.create', async () => {
-    return createPledgeInner({ email, comment, items, top_up_cents, channel_id });
+    return createPledgeInner({ email, comment, display_name, items, top_up_cents, channel_id });
   });
 }
 
 async function createPledgeInner({
   email,
   comment,
+  display_name,
   items,
   top_up_cents,
   channel_id,
@@ -98,6 +104,25 @@ async function createPledgeInner({
     }
   }
 
+  // Donor-facing display name (#54) — carried through to the fulfilled
+  // Donation's donor_name. Optional: falls back to the existing sources
+  // (Stripe customer_details.name, or null for a wallet-covered checkout
+  // that never had a name to draw from at all).
+  let displayNameValue: string | null = null;
+  if (display_name != null && display_name.trim().length > 0) {
+    displayNameValue = display_name.trim();
+    if (displayNameValue.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw Object.assign(
+        new Error(`Display name exceeds maximum of ${DISPLAY_NAME_MAX_LENGTH} characters`),
+        { status: 400 },
+      );
+    }
+    const blockedError = await checkBlockedWords(displayNameValue);
+    if (blockedError) {
+      throw Object.assign(new Error(blockedError), { status: 400 });
+    }
+  }
+
   // Validate all items against live data
   let totalCents = 0;
   let requiresShipping = false;
@@ -123,18 +148,27 @@ async function createPledgeInner({
     }
 
     if (kind === 'REWARD') {
+      const quantity = item.quantity ?? 1;
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        throw Object.assign(new Error('REWARD quantity must be a positive integer'), {
+          status: 400,
+        });
+      }
       const reward = await prisma.reward.findUnique({ where: { id: target_id } });
       if (!reward || !reward.is_active) {
         throw Object.assign(new Error(`Reward not found: ${target_id}`), { status: 404 });
       }
       assertChannelMatch(reward.channel_id, `Reward "${reward.title}"`);
-      if (reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total) {
+      if (
+        reward.quantity_total !== null &&
+        reward.quantity_claimed + quantity > reward.quantity_total
+      ) {
         throw Object.assign(new Error(`Reward sold out: ${reward.title}`), { status: 400 });
       }
       if (reward.type === 'PHYSICAL') {
         requiresShipping = true;
       }
-      totalCents += reward.cost_cents;
+      totalCents += reward.cost_cents * quantity;
     } else if (kind === 'POLL_VOTE') {
       if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
         throw Object.assign(new Error(`POLL_VOTE amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -226,6 +260,7 @@ async function createPledgeInner({
       pledge_token: pledgeToken,
       donor_email: email || null,
       comment: commentValue,
+      display_name: displayNameValue,
       total_cents: totalCents + topUp,
       top_up_cents: topUp,
       requires_shipping: requiresShipping,
@@ -238,6 +273,7 @@ async function createPledgeInner({
           target_id: item.target_id,
           poll_id: item.poll_id || null,
           amount_cents: item.amount_cents || 0,
+          quantity: item.kind === 'REWARD' ? (item.quantity ?? 1) : 1,
           data: item.data ? JSON.stringify(item.data) : null,
         })),
       },
@@ -282,7 +318,7 @@ async function fulfillPledgeInner(
       let result: { cost: number } | undefined;
       if (item.kind === 'REWARD') {
         const data = item.data ? JSON.parse(item.data) : {};
-        result = await claimRewardTx(tx, donorId, item.target_id, data);
+        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity);
       } else if (item.kind === 'POLL_VOTE') {
         result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
       } else if (item.kind === 'GOAL') {
@@ -444,16 +480,45 @@ export async function createCheckoutForPledge(
           include: { items: true },
         });
 
-        await prisma.$transaction(async (tx) => {
+        // Wallet fully covers the pledge, so no Stripe/webhook event ever
+        // fires and processDonation() is never reached. Create the Donation
+        // row here (external_id = wallet-<uuid>) so this shows up in the
+        // donor's history like any other donation (#43). amount_cents is the
+        // wallet spend that fulfilled the pledge (the full total).
+        const walletExternalId = `wallet-${crypto.randomUUID()}`;
+        const donation = await prisma.$transaction(async (tx) => {
+          const created = await tx.donation.create({
+            data: {
+              external_id: walletExternalId,
+              donor_id: donor.id,
+              amount_cents: pledge.total_cents,
+              comment: fullPledge.comment ?? null,
+              donor_name: fullPledge.display_name ?? null,
+              channel_id: fullPledge.channel_id ?? null,
+            },
+          });
           await fulfillPledge(tx, fullPledge, donor.id);
           await tx.pendingPledge.update({
             where: { pledge_token: pledgeToken },
             data: {
               wallet_discount_cents: pledge.total_cents,
               status: 'FULFILLED',
+              fulfilled_by_donation_id: created.id,
             },
           });
+          return created;
         });
+
+        emitWebhookEvent(
+          'donation.created',
+          buildDonationCreatedPayload({
+            donationId: donation.id,
+            externalId: walletExternalId,
+            amountCents: pledge.total_cents,
+            channelId: fullPledge.channel_id ?? null,
+            donorRef: donor.id,
+          }),
+        );
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>
           console.error('Email error:', err),

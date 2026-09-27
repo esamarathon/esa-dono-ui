@@ -161,6 +161,37 @@ describe('PollList', () => {
     expect(screen.queryByText('add your own option')).toBeNull();
   });
 
+  it('re-hydrates and edits an already-added write-in option (#44)', async () => {
+    mocks.getPolls.mockResolvedValue([{ ...poll, allow_custom_entries: true, auto_approve: true }]);
+    render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
+    fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
+      target: { value: 'My runner' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+
+    // Now in cart, showing the read-only summary with edit/remove.
+    expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit' }));
+
+    // The modal reopens pre-filled with the existing draft, not blank.
+    expect(screen.getByText('edit your option')).toBeInTheDocument();
+    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    expect(labelInput.value).toBe('My runner');
+
+    fireEvent.change(labelInput, { target: { value: 'My edited runner' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save changes' }));
+
+    // Still a single write-in entry, now updated — not a duplicate.
+    expect(await screen.findByText(/your option: "My edited runner"/)).toBeInTheDocument();
+    expect(screen.queryByText(/your option: "My runner"/)).toBeNull();
+  });
+
   it('removes a vote from the cart', async () => {
     render(
       <Wrapper>
@@ -174,6 +205,40 @@ describe('PollList', () => {
     expect(removeBtn).toBeInTheDocument();
     // clicking remove should not throw
     fireEvent.click(removeBtn);
+  });
+
+  it('renders a donation-impact preview once the vote is in the cart (#52)', async () => {
+    mocks.getPolls.mockResolvedValue([
+      { ...poll, options: [{ ...poll.options[0], votes_cents: 100 }], total_votes_cents: 1000 },
+    ]);
+    render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Best Runner');
+    expect(document.querySelector('[data-testid="progress-preview"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'add' }));
+    await screen.findByRole('button', { name: 'remove' });
+
+    expect(document.querySelector('[data-testid="progress-preview"]')).not.toBeNull();
+  });
+
+  it('keeps the add/remove button a fixed width regardless of label (#52)', async () => {
+    render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+
+    const addBtn = await screen.findByRole('button', { name: 'add' });
+    expect(addBtn.className).toContain('w-20');
+
+    fireEvent.click(addBtn);
+    const removeBtn = await screen.findByRole('button', { name: 'remove' });
+    expect(removeBtn.className).toContain('w-20');
   });
 
   it('updates an in-cart vote amount on change and blur', async () => {
@@ -250,6 +315,22 @@ describe('GoalList', () => {
     fireEvent.click(removeBtn);
   });
 
+  it('renders a donation-impact preview once the contribution is in the cart (#52)', async () => {
+    render(
+      <Wrapper>
+        <GoalList />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Race entry');
+    expect(document.querySelector('[data-testid="progress-preview"]')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'add' }));
+    await screen.findByRole('button', { name: 'remove' });
+
+    expect(document.querySelector('[data-testid="progress-preview"]')).not.toBeNull();
+  });
+
   it('allows changing the contribution amount before adding', async () => {
     render(
       <Wrapper>
@@ -324,7 +405,28 @@ describe('RewardList', () => {
 
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    // Fieldless reward types (PHYSICAL/DIGITAL) show a quantity stepper once
+    // in the cart, not a plain "remove" button (#50).
+    expect(await screen.findByRole('button', { name: 'increase quantity' })).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it("increases and decreases a fieldless reward's quantity, removing it at zero (#50)", async () => {
+    render(
+      <Wrapper>
+        <RewardList />
+      </Wrapper>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'increase quantity' }));
+    expect(await screen.findByText('2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'decrease quantity' }));
+    expect(await screen.findByText('1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'decrease quantity' }));
+    expect(await screen.findByRole('button', { name: 'add' })).toBeInTheDocument();
   });
 
   it('shows the empty state', async () => {

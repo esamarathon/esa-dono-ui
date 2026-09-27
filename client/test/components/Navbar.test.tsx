@@ -11,6 +11,7 @@ vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
 vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 vi.mock('../../src/api/pledge', () => ({ createPledge: vi.fn(), getPledge: vi.fn() }));
+vi.mock('../../src/api/featureFlags', () => ({ getFeatureFlags: vi.fn() }));
 vi.mock('../../src/lib/tracing', () => ({
   track: vi.fn(),
   trackAsync: vi.fn((_n: string, fn: () => unknown) => fn()),
@@ -26,6 +27,7 @@ import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
 import { getChannels } from '../../src/api/channels';
+import { getFeatureFlags } from '../../src/api/featureFlags';
 
 function renderNavbar() {
   return render(
@@ -62,6 +64,7 @@ describe('Navbar', () => {
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
     vi.mocked(getChannels).mockResolvedValue([]);
+    vi.mocked(getFeatureFlags).mockResolvedValue({});
   });
 
   it('shows a plain login link when no donor token is present', async () => {
@@ -128,5 +131,17 @@ describe('Navbar', () => {
     renderNavbar();
 
     expect(await screen.findByText(/1/)).toBeDefined();
+  });
+
+  it('hides the auctions nav link when the auctions feature flag is disabled/absent', async () => {
+    renderNavbar();
+    await screen.findByText('login');
+    expect(screen.queryByText('auctions')).toBeNull();
+  });
+
+  it('shows the auctions nav link when the auctions feature flag is enabled', async () => {
+    vi.mocked(getFeatureFlags).mockResolvedValue({ auctions: true });
+    renderNavbar();
+    expect(await screen.findByText('auctions')).toBeDefined();
   });
 });

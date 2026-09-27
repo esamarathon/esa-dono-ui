@@ -87,4 +87,59 @@ describe('Rewards routes', () => {
     await prisma.reward.delete({ where: { id: reward.id } });
     await prisma.donor.delete({ where: { id: donor.id } });
   });
+
+  it('POST /:id/claim with quantity claims multiple units in one call (#50)', async () => {
+    const { donor, token } = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: {
+        title: 'Bulk Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+        quantity_total: 10,
+      },
+    });
+
+    const res = await request(createApp())
+      .post(`/api/rewards/${reward.id}/claim`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ quantity: 3 });
+
+    expect(res.status).toBe(200);
+
+    const [claims, refreshedDonor, refreshedReward] = await Promise.all([
+      prisma.rewardClaim.findMany({ where: { donor_id: donor.id } }),
+      prisma.donor.findUnique({ where: { id: donor.id } }),
+      prisma.reward.findUnique({ where: { id: reward.id } }),
+    ]);
+    expect(claims).toHaveLength(3);
+    expect(refreshedDonor!.balance_remaining).toBe(5000 - 500 * 3);
+    expect(refreshedReward!.quantity_claimed).toBe(3);
+
+    await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+    await prisma.reward.delete({ where: { id: reward.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('POST /:id/claim rejects a quantity that would exceed remaining stock', async () => {
+    const { donor, token } = await makeDonor(10000);
+    const reward = await prisma.reward.create({
+      data: {
+        title: 'Scarce Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+        quantity_total: 2,
+      },
+    });
+
+    const res = await request(createApp())
+      .post(`/api/rewards/${reward.id}/claim`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ quantity: 3 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Reward sold out');
+
+    await prisma.reward.delete({ where: { id: reward.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
 });

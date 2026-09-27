@@ -12,6 +12,7 @@ import {
 } from '../utils/authToken';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
+import ChannelPill from '../components/ChannelPill';
 import type { DonorWallet } from '../types';
 import { hasModeratorAccess } from '../types';
 
@@ -291,7 +292,10 @@ export default function MyWallet() {
           {donor.donations.map((d) => (
             <Card key={d.id} className="flex justify-between items-center">
               <div>
-                <p className="font-data font-bold text-off-white">{fmt(d.amount_cents)}</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-data font-bold text-off-white">{fmt(d.amount_cents)}</p>
+                  <ChannelPill label={d.channel?.name ?? 'shared'} />
+                </div>
                 {d.comment && <p className="font-body text-sm text-off-white/55">{d.comment}</p>}
               </div>
               <p className="font-data text-sm text-off-white/55">

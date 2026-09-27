@@ -84,4 +84,23 @@ describe('AdminChannels', () => {
     await waitFor(() => expect(adminClient.delete).toHaveBeenCalledWith('/channels/c1'));
     vi.unstubAllGlobals();
   });
+
+  it('copies a /donate?channel=<id> deep link for a channel (#49)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    Object.defineProperty(window, 'location', {
+      value: { origin: 'https://example.com' },
+      writable: true,
+    });
+
+    adminClient.get.mockResolvedValue({ data: [{ id: 'c1', name: 'Main', is_active: true }] });
+
+    render(<AdminChannels />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Share' }));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('https://example.com/donate?channel=c1'),
+    );
+  });
 });

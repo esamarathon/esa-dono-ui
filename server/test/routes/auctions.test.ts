@@ -1,9 +1,10 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import auctionsRouter from '../../routes/auctions.js';
+import { invalidateFlagCache } from '../../services/featureFlags.js';
 
 const prisma = new PrismaClient();
 
@@ -56,6 +57,15 @@ async function cleanupDonor(donorId: string) {
 }
 
 describe('Auctions routes', () => {
+  beforeAll(async () => {
+    await prisma.featureFlag.upsert({
+      where: { name: 'auctions' },
+      create: { name: 'auctions', is_enabled: true },
+      update: { is_enabled: true },
+    });
+    invalidateFlagCache();
+  });
+
   afterAll(async () => {
     await prisma.$disconnect();
   });

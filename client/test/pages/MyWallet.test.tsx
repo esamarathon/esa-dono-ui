@@ -78,6 +78,37 @@ describe('MyWallet', () => {
     expect(screen.getByText('No donations yet.')).toBeInTheDocument();
   });
 
+  it("shows each donation's channel in the donation history (#53)", async () => {
+    mocks.getDonor.mockResolvedValue({
+      ...wallet,
+      donations: [
+        {
+          id: 'don1',
+          amount_cents: 1000,
+          comment: null,
+          created_at: '2026-01-01T00:00:00Z',
+          channel: { id: 'c1', name: 'Main Marathon' },
+        },
+        {
+          id: 'don2',
+          amount_cents: 500,
+          comment: null,
+          created_at: '2026-01-02T00:00:00Z',
+          channel: null,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <MyWallet />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Main Marathon')).toBeInTheDocument();
+    expect(screen.getByText('shared')).toBeInTheDocument();
+  });
+
   it('submits a token and starts a session', async () => {
     mocks.getDonor.mockRejectedValue(new Error('no session'));
     mocks.startSession.mockResolvedValue(undefined);

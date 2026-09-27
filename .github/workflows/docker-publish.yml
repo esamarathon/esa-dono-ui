@@ -2,13 +2,16 @@ name: Build and Push Docker Images
 
 on:
   push:
-    branches: [main]
+    # Only branches whose images we actually want published & tagged.
+    # (Feature/renovate/worktree branches build via the pull_request trigger
+    # below once opened as a PR against main, tagged pr-<number>.)
+    branches: [main, dev]
   pull_request:
     branches: [main]
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/codescales/esa-dono-ui
+  IMAGE_PREFIX: ghcr.io/esamarathon/esa-dono-ui
 
 jobs:
   build-and-push:
@@ -36,19 +39,40 @@ jobs:
 
       - name: Derive image tags
         id: tags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.number }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "backend_tags=${{ env.IMAGE_PREFIX }}/backend:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
-            echo "frontend_tags=${{ env.IMAGE_PREFIX }}/frontend:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
-            echo "push_enabled=true" >> "$GITHUB_OUTPUT"
-            echo "trivy_backend_ref=${{ env.IMAGE_PREFIX }}/backend:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
-            echo "trivy_frontend_ref=${{ env.IMAGE_PREFIX }}/frontend:pr-${{ github.event.number }}" >> "$GITHUB_OUTPUT"
+          # Docker tags allow only [a-zA-Z0-9_.-]; branch names may contain
+          # slashes (e.g. renovate/foo) or other characters, so sanitize.
+          sanitize() {
+            echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g' | sed -E 's#-+#-#g; s#^-|-$##g' | cut -c1-100
+          }
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            TAG="pr-${PR_NUMBER}"
+            echo "backend_tags=${IMAGE_PREFIX}/backend:${TAG}" >> "$GITHUB_OUTPUT"
+            echo "frontend_tags=${IMAGE_PREFIX}/frontend:${TAG}" >> "$GITHUB_OUTPUT"
+            echo "scan_backend_ref=${IMAGE_PREFIX}/backend:${TAG}" >> "$GITHUB_OUTPUT"
+            echo "scan_frontend_ref=${IMAGE_PREFIX}/frontend:${TAG}" >> "$GITHUB_OUTPUT"
+            echo "run_smoke_test=false" >> "$GITHUB_OUTPUT"
           else
-            echo "backend_tags=${{ env.IMAGE_PREFIX }}/backend:latest,${{ env.IMAGE_PREFIX }}/backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-            echo "frontend_tags=${{ env.IMAGE_PREFIX }}/frontend:latest,${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-            echo "push_enabled=true" >> "$GITHUB_OUTPUT"
-            echo "trivy_backend_ref=${{ env.IMAGE_PREFIX }}/backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-            echo "trivy_frontend_ref=${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            BRANCH_TAG="$(sanitize "$REF_NAME")"
+            # The sha tag is what CI actually verifies (Trivy scan + smoke
+            # test) below, so every push always gets one regardless of branch.
+            BACKEND_TAGS="${IMAGE_PREFIX}/backend:${BRANCH_TAG},${IMAGE_PREFIX}/backend:${SHA}"
+            FRONTEND_TAGS="${IMAGE_PREFIX}/frontend:${BRANCH_TAG},${IMAGE_PREFIX}/frontend:${SHA}"
+            if [ "$REF_NAME" = "main" ]; then
+              BACKEND_TAGS="${BACKEND_TAGS},${IMAGE_PREFIX}/backend:latest"
+              FRONTEND_TAGS="${FRONTEND_TAGS},${IMAGE_PREFIX}/frontend:latest"
+            fi
+            echo "backend_tags=${BACKEND_TAGS}" >> "$GITHUB_OUTPUT"
+            echo "frontend_tags=${FRONTEND_TAGS}" >> "$GITHUB_OUTPUT"
+            echo "scan_backend_ref=${IMAGE_PREFIX}/backend:${SHA}" >> "$GITHUB_OUTPUT"
+            echo "scan_frontend_ref=${IMAGE_PREFIX}/frontend:${SHA}" >> "$GITHUB_OUTPUT"
+            echo "run_smoke_test=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push backend
@@ -58,7 +82,7 @@ jobs:
           file: Dockerfile.backend
           target: runtime
           platforms: linux/amd64,linux/arm64
-          push: ${{ steps.tags.outputs.push_enabled }}
+          push: true
           tags: ${{ steps.tags.outputs.backend_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -66,7 +90,7 @@ jobs:
       - name: Trivy scan backend image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ steps.tags.outputs.trivy_backend_ref }}
+          image-ref: ${{ steps.tags.outputs.scan_backend_ref }}
           format: table
           exit-code: 1
           severity: HIGH,CRITICAL
@@ -79,7 +103,7 @@ jobs:
           context: .
           file: Dockerfile.frontend
           platforms: linux/amd64,linux/arm64
-          push: ${{ steps.tags.outputs.push_enabled }}
+          push: true
           tags: ${{ steps.tags.outputs.frontend_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -87,7 +111,7 @@ jobs:
       - name: Trivy scan frontend image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ steps.tags.outputs.trivy_frontend_ref }}
+          image-ref: ${{ steps.tags.outputs.scan_frontend_ref }}
           format: table
           exit-code: 1
           severity: HIGH,CRITICAL
@@ -95,11 +119,16 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Smoke-test published images
-        if: github.event_name != 'pull_request'
+        if: steps.tags.outputs.run_smoke_test == 'true'
         env:
           ADMIN_API_KEY: smoke-test-key
           FRONTEND_PORT: '18080'
+          BACKEND_IMAGE_TAG: ${{ github.sha }}
+          FRONTEND_IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker pull "${IMAGE_PREFIX}/backend:latest"
-          docker pull "${IMAGE_PREFIX}/frontend:latest"
+          # Always smoke-test the sha tag just built/pushed above, not
+          # :latest — that keeps this accurate on every branch, not just main,
+          # and avoids racing a concurrent main build that just moved :latest.
+          docker pull "${IMAGE_PREFIX}/backend:${BACKEND_IMAGE_TAG}"
+          docker pull "${IMAGE_PREFIX}/frontend:${FRONTEND_IMAGE_TAG}"
           ./scripts/smoke-test.sh

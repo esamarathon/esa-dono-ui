@@ -28,6 +28,7 @@ export default function AdminDashboard() {
     { label: 'donations', value: stats.donations },
     { label: 'reward claims', value: stats.claims },
     { label: 'pledges', value: stats.pledges },
+    { label: 'unallocated credits', value: fmt(stats.unallocated_credits_cents ?? 0) },
   ];
 
   return (

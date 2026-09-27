@@ -40,6 +40,9 @@ export interface DonationRecord {
   donor_name?: string | null;
   created_at: string;
   donor?: { email?: string } | null;
+  // Which channel this donation was routed to, or null/absent for a shared
+  // (unscoped) donation (#53).
+  channel?: { id: string; name: string } | null;
 }
 
 export interface RewardSummary {
@@ -255,6 +258,10 @@ export interface CartItem {
   poll_id?: string;
   label?: string;
   data?: Record<string, string> | { label: string };
+  /** REWARD only: number of units this line claims. amount_cents is always
+   *  the line total (unit cost_cents * quantity), never the unit price.
+   *  Defaults to 1 when omitted. */
+  quantity?: number;
 }
 
 export interface PledgeItem {
@@ -264,6 +271,7 @@ export interface PledgeItem {
   amount_cents: number;
   poll_id?: string | null;
   data?: string | null;
+  quantity?: number;
 }
 
 export interface PledgeResult {
@@ -277,7 +285,6 @@ export interface Pledge {
   total_cents: number;
   top_up_cents?: number;
   expires_at: string;
-  magic_token?: string | null;
   items: PledgeItem[];
 }
 
@@ -289,6 +296,9 @@ export interface AdminStats {
   donations: number;
   claims: number;
   pledges: number;
+  // Sum of Donor.balance_remaining across all donors (#59) — credited but
+  // not yet spent on a reward/poll/goal.
+  unallocated_credits_cents?: number;
   channels?: { id: string; name: string; raised_cents: number; donations: number }[];
 }
 
@@ -296,6 +306,8 @@ export interface BlockedWord {
   id: string;
   word: string;
 }
+
+export type DonationStatus = 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'CHARGEBACK';
 
 export interface AdminDonation {
   id: string;
@@ -308,6 +320,13 @@ export interface AdminDonation {
   moderated_at?: string | null;
   moderated_by?: string | null;
   channel?: { id: string; name: string } | null;
+  status: DonationStatus;
+  refund_id?: string | null;
+  // What the donor selected/pledged toward (#58) — human-readable labels
+  // only (e.g. "Best Runner: Runner A", "T-shirt"), never a raw target_id.
+  // Only present on the moderator donations list; undefined elsewhere.
+  pledge_items?: { kind: string; label: string; amount_cents: number }[];
+  top_up_cents?: number | null;
 }
 
 export interface AdminClaim {
@@ -316,6 +335,9 @@ export interface AdminClaim {
   claim_data?: unknown;
   created_at: string;
   donor?: { email?: string } | null;
+  // Human-readable donor identity for the moderator view (#57) — sourced
+  // from the donor's most recent Donation.donor_name, never email/id.
+  donor_name?: string | null;
   reward?: {
     title?: string;
     type?: string;
@@ -355,6 +377,7 @@ export interface AdminDonorWallet {
   balance_remaining: number;
   role?: Role;
   is_frozen?: boolean;
+  donations?: DonationRecord[];
   reward_claims?: SpendRecord[];
   poll_votes?: SpendRecord[];
   fund_contributions?: SpendRecord[];

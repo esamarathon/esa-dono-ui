@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import adminClient from '../../api/admin';
 import Card from '../../components/Card';
 import { apiErrorMessage } from '../../types';
+import type { Channel } from '../../types';
 import { sanitizeMoneyInput } from '../../utils/money';
 import { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '../../config';
 
@@ -11,10 +12,26 @@ interface SimulateResult {
 }
 
 export default function AdminSimulate() {
-  const [form, setForm] = useState({ email: '', donor_name: '', amount: '10.00', comment: '' });
+  const [form, setForm] = useState({
+    email: '',
+    donor_name: '',
+    amount: '10.00',
+    comment: '',
+    channel_id: '',
+    external_id: '',
+    occurred_at: '',
+  });
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [result, setResult] = useState<SimulateResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    adminClient
+      .get('/channels')
+      .then((r) => setChannels(r.data))
+      .catch(() => undefined);
+  }, []);
 
   const handleSimulate = async () => {
     setError('');
@@ -31,10 +48,13 @@ export default function AdminSimulate() {
         donor_name: form.donor_name || undefined,
         amount_cents: cents,
         comment: form.comment || undefined,
+        channel_id: form.channel_id || undefined,
+        external_id: form.external_id.trim() || undefined,
+        occurred_at: form.occurred_at ? new Date(form.occurred_at).toISOString() : undefined,
       });
       setResult(data);
     } catch (e) {
-      setError(apiErrorMessage(e, 'Simulation failed'));
+      setError(apiErrorMessage(e, 'Failed to add donation'));
     } finally {
       setLoading(false);
     }
@@ -44,11 +64,15 @@ export default function AdminSimulate() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="font-display text-4xl uppercase mb-6">simulate donation</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">add donation</h1>
       <Card className="mb-4">
         <p className="font-body text-sm text-off-white/55 mb-4">
-          Creates a simulated donation without processing real money through Tiltify. The donor
-          receives a magic link and balance exactly as if they donated via Tiltify.
+          Credits a donor's wallet balance and sends them a magic link exactly as if they'd donated
+          via Stripe — without processing real money through this platform. Use this both for local
+          dev/test donations and to record a real donation received externally (e.g. at another
+          event or platform): set an <span className="text-off-white">external reference</span> for
+          dedup/traceability and a <span className="text-off-white">date received</span> to backdate
+          it correctly.
         </p>
 
         <div className="space-y-3">
@@ -97,6 +121,49 @@ export default function AdminSimulate() {
               onChange={(e) => setForm((f) => ({ ...f, comment: e.target.value }))}
             />
           </div>
+          <div>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">
+              channel <span className="text-off-white/40 font-normal">(optional)</span>
+            </label>
+            <select
+              className="w-full px-3 py-2 text-sm"
+              value={form.channel_id}
+              onChange={(e) => setForm((f) => ({ ...f, channel_id: e.target.value }))}
+            >
+              <option value="">shared / no channel</option>
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">
+              external reference{' '}
+              <span className="text-off-white/40 font-normal">
+                (optional — e.g. the source platform's transaction id)
+              </span>
+            </label>
+            <input
+              className="w-full px-3 py-2 text-sm"
+              placeholder="e.g. hekathon-12345"
+              value={form.external_id}
+              onChange={(e) => setForm((f) => ({ ...f, external_id: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">
+              date received{' '}
+              <span className="text-off-white/40 font-normal">(optional — defaults to now)</span>
+            </label>
+            <input
+              type="datetime-local"
+              className="w-full px-3 py-2 text-sm"
+              value={form.occurred_at}
+              onChange={(e) => setForm((f) => ({ ...f, occurred_at: e.target.value }))}
+            />
+          </div>
         </div>
 
         {error && (
@@ -106,7 +173,7 @@ export default function AdminSimulate() {
         )}
 
         <button onClick={handleSimulate} disabled={loading} className="btrl-button mt-4">
-          {loading ? 'simulating...' : 'simulate donation'}
+          {loading ? 'adding...' : 'add donation'}
         </button>
       </Card>
 

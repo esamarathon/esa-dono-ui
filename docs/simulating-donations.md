@@ -1,10 +1,10 @@
-# Simulating Donations
+# Simulating Donations / Recording a Real External Donation
 
-Three methods for testing without real money:
+Four methods for testing without real money, plus recording donations actually received outside Stripe (e.g. at an external event/platform — #62):
 
 ## Option A — Admin UI
 
-Visit `/admin/simulate`, fill in donor email + amount, click "Simulate Donation". Copy the generated magic link to access the donor wallet.
+Visit `/admin/simulate` (nav label "add donation"), fill in donor email + amount, click "Add Donation". Copy the generated magic link to access the donor wallet. To record a real donation received externally, also set an **external reference** (the source platform's own transaction id — used for dedup/traceability, must be unique) and a **date received** (backdates `Donation.created_at`; defaults to now).
 
 ## Option B — curl (direct webhook POST)
 
@@ -23,6 +23,13 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer key_admin_change-me" \
   -d '{"email":"test@example.com","amount_cents":1000}'
+
+# Recording a real donation received externally — external_id/occurred_at/
+# channel_id are all optional. external_id must be unique (409 on reuse).
+curl -X POST http://localhost:3001/api/admin/simulate-donation \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer key_admin_change-me" \
+  -d '{"email":"test@example.com","amount_cents":2500,"external_id":"hekathon-12345","occurred_at":"2026-01-15T12:00:00.000Z"}'
 ```
 
 Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet).
@@ -47,6 +54,12 @@ Key flags: `--seed` (int or string; the repro handle), `--events`/`--duration` (
 
 Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl` (observed server responses, keyed by `seq`), and `manifest.json` (seed, simVersion, args, git SHA) under `--out`.
 
+**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards remain excluded from pledges because the simulator does not complete Stripe payments. Wallet sufficiency is not guaranteed: underfunded carts and rejected spends remain useful outcomes.
+
+`--traffic phased` (default) adds seeded quiet/normal/busy periods; `--traffic steady` retains constant-rate exponential delays. The phases are normalized to preserve the expected mean waiting time specified by `--rate`. Execution remains serial, so HTTP latency adds to run duration. Changing traffic mode does not change the non-timing decisions.
+
+The same seed **and inputs/catalog** reproduce a V2 decision log. V1 logs still replay via `--replay`; regenerating an old seed with V2 intentionally produces different decisions. Transport errors, HTTP 5xx responses, and replay divergences cause a nonzero exit status.
+
 **Known limitation**: auction bids require a donor with a verified email, which no admin API can set — bids are attempted for coverage but expected to be rejected with 403 (logged as an expected note, not a failure).
 
 To reset the demo to a clean baseline before/after simulation runs: `DEMO_RESET_ALLOWED=1 ./scripts/reset-demo.sh` (destroys and recreates the DB volume, then re-seeds via `seed-dev.sh`). Falls back to seeding via a throwaway container on the backend's own Docker network when the backend has no host port mapping (e.g. behind a reverse proxy with no published ports).
@@ -55,7 +68,7 @@ To reset the demo to a clean baseline before/after simulation runs: `DEMO_RESET_
 
 For a container deployment where the backend has Node + `tsx` baked in (the standard runtime image does) but no host access, three pieces run the simulator on a recurring schedule:
 
-- **`server/scripts/run-sim.sh`** — runs _inside_ the backend container. Sane defaults (`SEED` auto-generated from a UTC timestamp, `EVENTS=150`, `DONORS=45` — with the real-data donation amounts, enough distinct donors to fund the ~145 spend events per run so most succeed, `RATE=0.06/s` — spreads 150 events across ~42 min so an hourly run covers most of the hour, writes to `/data/sim-runs/<seed>` so output survives container restarts), all overridable via env vars, and prunes runs older than `KEEP_DAYS` (default 14).
+- **`server/scripts/run-sim.sh`** — runs _inside_ the backend container. Sane defaults (`SEED` auto-generated from a UTC timestamp, `EVENTS=150`, `DONORS=45` — the pool size, not a guaranteed count of active donors, `REPEAT_DONATION_CHANCE=0.3`, `TRAFFIC=phased`, `RATE=0.06/s` — spreads 150 events across ~42 min so an hourly run covers most of the hour, writes to `/data/sim-runs/<seed>` so output survives container restarts), all overridable via env vars, and prunes runs older than `KEEP_DAYS` (default 14).
 - **`scripts/run-simulator.sh`** — host-side wrapper that `docker exec`s into the running backend container to invoke `run-sim.sh`, forwarding any of the env overrides that are set.
 - **`scripts/reset-demo.sh`** — host-side nightly reset: `docker compose down -v` (drops the DB volume), brings the stack back up, waits for health, and re-seeds the deterministic baseline. Gated on `DEMO_RESET_ALLOWED=1` so it can never wipe a non-demo stack by accident.
 - **`scripts/systemd/`** — three systemd units, all `Persistent=true`, installed/enabled by `install-systemd-timers.sh` (`sudo scripts/systemd/install-systemd-timers.sh`; idempotent and safe to re-run after editing unit files):

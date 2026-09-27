@@ -27,12 +27,6 @@ export default function ModeratorClaims() {
     return channels.find((e) => e.id === c.reward?.channel_id)?.name ?? 'unknown channel';
   };
 
-  const toggleStatus = async (id: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'PENDING' ? 'FULFILLED' : 'PENDING';
-    await moderatorClient.patch(`/claims/${id}`, { status: newStatus });
-    await reload();
-  };
-
   const filteredClaims = claims.filter(
     (c) =>
       !selectedChannelId ||
@@ -61,33 +55,17 @@ export default function ModeratorClaims() {
                     <ChannelPill label={channelName(c)} />
                   </div>
                   <p className="font-data text-xs text-off-white/55">type: {c.reward?.type}</p>
-                  {name && <p className="font-data text-xs text-off-white/55">donor: {name}</p>}
+                  <p className="font-data text-xs text-off-white/55">
+                    donor: {c.donor_name || 'Anonymous'}
+                  </p>
+                  {name && (
+                    <p className="font-data text-xs text-off-white/55">entered name: {name}</p>
+                  )}
                   {message && (
                     <p className="font-body text-sm text-off-white/55 mt-1">
                       &ldquo;{message}&rdquo;
                     </p>
                   )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
-                    style={{
-                      background:
-                        c.status === 'FULFILLED' ? 'rgba(92,189,125,.16)' : 'rgba(208,152,70,.16)',
-                      color: c.status === 'FULFILLED' ? 'var(--green)' : 'var(--d-yellow)',
-                    }}
-                  >
-                    {c.status}
-                  </span>
-                  <button
-                    onClick={() => toggleStatus(c.id, c.status)}
-                    className="btrl-button text-xs"
-                    style={{
-                      background: c.status === 'PENDING' ? 'var(--green)' : 'var(--d-yellow)',
-                    }}
-                  >
-                    {c.status === 'PENDING' ? 'mark fulfilled' : 'mark pending'}
-                  </button>
                 </div>
               </div>
             </Card>

@@ -4,6 +4,7 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
+import ShareLinkButton from '../../components/ShareLinkButton';
 import { apiErrorMessage, type Channel } from '../../types';
 
 interface EventForm {
@@ -85,7 +86,8 @@ export default function AdminChannels() {
                   <StatusBadge active={s.is_active} />
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <ShareLinkButton path={`/donate?channel=${s.id}`} />
                 <button
                   onClick={() => openEdit(s)}
                   className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"

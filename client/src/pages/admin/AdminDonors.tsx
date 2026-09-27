@@ -9,6 +9,8 @@ import {
   adjustDonorBalance,
   reverseDonorSpend,
   setDonorRole,
+  sweepCredits,
+  type SweepCreditsResult,
 } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
@@ -30,6 +32,11 @@ export default function AdminDonors() {
   const [walletLoading, setWalletLoading] = useState(false);
   const [modal, setModal] = useState<{ type: string; token?: string; email?: string } | null>(null);
   const [error, setError] = useState('');
+  const [sweepMin, setSweepMin] = useState('');
+  const [sweepMax, setSweepMax] = useState('');
+  const [sweepPreview, setSweepPreview] = useState<SweepCreditsResult | null>(null);
+  const [sweepBusy, setSweepBusy] = useState(false);
+  const [sweepResult, setSweepResult] = useState<SweepCreditsResult | null>(null);
 
   const loadDonors = async (q = '') => {
     setLoading(true);
@@ -89,6 +96,59 @@ export default function AdminDonors() {
     openWallet({ id: selected!.id });
   };
 
+  const parseFilterDollars = (value: string): number | undefined => {
+    if (!value.trim()) return undefined;
+    const cents = Math.round(parseFloat(value) * 100);
+    return Number.isFinite(cents) && cents >= 0 ? cents : undefined;
+  };
+
+  const openSweep = () => {
+    setSweepMin('');
+    setSweepMax('');
+    setSweepPreview(null);
+    setSweepResult(null);
+    setError('');
+    setModal({ type: 'sweep' });
+  };
+
+  const previewSweep = async () => {
+    setSweepBusy(true);
+    setError('');
+    try {
+      const result = await sweepCredits(
+        {
+          min_balance_cents: parseFilterDollars(sweepMin),
+          max_balance_cents: parseFilterDollars(sweepMax),
+        },
+        false,
+      );
+      setSweepPreview(result);
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to preview sweep'));
+    }
+    setSweepBusy(false);
+  };
+
+  const confirmSweep = async () => {
+    setSweepBusy(true);
+    setError('');
+    try {
+      const result = await sweepCredits(
+        {
+          min_balance_cents: parseFilterDollars(sweepMin),
+          max_balance_cents: parseFilterDollars(sweepMax),
+        },
+        true,
+      );
+      setSweepResult(result);
+      setSweepPreview(null);
+      await loadDonors(search);
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to sweep credits'));
+    }
+    setSweepBusy(false);
+  };
+
   const handleCreateDonor = async (email: string, role: 'USER' | 'MODERATOR' | 'ADMIN') => {
     const donor = await createDonor(email, role);
     setModal(null);
@@ -114,7 +174,7 @@ export default function AdminDonors() {
   };
 
   return (
-    <div>
+    <div className="h-full flex flex-col">
       <h1 className="font-display text-4xl uppercase mb-6">donors</h1>
 
       {error && (
@@ -148,13 +208,24 @@ export default function AdminDonors() {
         <button onClick={() => setModal({ type: 'create' })} className="btrl-button">
           add donor
         </button>
+        <button onClick={openSweep} className="btrl-button btrl-button-outline">
+          sweep credits
+        </button>
       </div>
 
       {loading ? (
         <LoadingSpinner />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className={`${selected ? 'hidden lg:block' : ''} lg:col-span-1`}>
+        // Independent scroll (#64): the donor list and the detail panel are
+        // each their own scroll container within the remaining vertical
+        // space (flex-1 min-h-0 on the grid, h-full min-h-0 overflow-y-auto
+        // on each column) — previously this grid had no height/overflow
+        // constraints, so both columns just grew together and shared the
+        // page-level scroll.
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0">
+          <div
+            className={`${selected ? 'hidden lg:block' : ''} lg:col-span-1 h-full min-h-0 overflow-y-auto`}
+          >
             <div className="space-y-2">
               {donors.length === 0 && (
                 <p className="font-body text-sm text-off-white/55">No donors found.</p>
@@ -185,7 +256,7 @@ export default function AdminDonors() {
           </div>
 
           {selected && (
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 h-full min-h-0 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-display text-3xl uppercase">{wallet?.email || 'Loading...'}</h2>
                 <button
@@ -249,6 +320,36 @@ export default function AdminDonors() {
                     >
                       adjust balance
                     </button>
+                  </div>
+
+                  <div>
+                    <h3 className="font-display text-2xl uppercase mt-6 mb-3">donation history</h3>
+                    {(wallet.donations?.length ?? 0) > 0 ? (
+                      <div className="space-y-2">
+                        {wallet.donations!.map((d) => (
+                          <div
+                            key={d.id}
+                            className="btrl-panel p-3 flex justify-between items-center text-sm"
+                          >
+                            <div>
+                              <span className="font-data font-bold text-off-white">
+                                {fmt(d.amount_cents)}
+                              </span>
+                              {d.comment && (
+                                <span className="ml-2 font-body text-off-white/55">
+                                  &mdash; {d.comment}
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-mono text-xs text-off-white/55">
+                              {new Date(d.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="font-body text-sm text-off-white/55">No donation history.</p>
+                    )}
                   </div>
 
                   <div>
@@ -466,6 +567,109 @@ export default function AdminDonors() {
               <button onClick={() => setModal(null)} className="btrl-button">
                 done
               </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'sweep' && (
+        <Modal title="bulk credit sweep" onClose={() => setModal(null)}>
+          <div className="space-y-3 text-sm">
+            <p className="font-body text-off-white/70">
+              Zeros the wallet balance for every donor with a positive balance, optionally limited
+              to a balance range. Preview first — nothing is written until you confirm.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-data font-bold text-xs mb-1 text-off-white">
+                  min balance <span className="text-off-white/40 font-normal">(optional)</span>
+                </label>
+                <input
+                  className="w-full px-3 py-2 text-sm"
+                  placeholder="e.g. 0.00"
+                  value={sweepMin}
+                  onChange={(e) => {
+                    setSweepMin(sanitizeMoneyInput(e.target.value));
+                    setSweepPreview(null);
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block font-data font-bold text-xs mb-1 text-off-white">
+                  max balance <span className="text-off-white/40 font-normal">(optional)</span>
+                </label>
+                <input
+                  className="w-full px-3 py-2 text-sm"
+                  placeholder="e.g. 1.00"
+                  value={sweepMax}
+                  onChange={(e) => {
+                    setSweepMax(sanitizeMoneyInput(e.target.value));
+                    setSweepPreview(null);
+                  }}
+                />
+              </div>
+            </div>
+
+            {sweepResult ? (
+              <div className="btrl-panel p-3" style={{ background: 'rgba(92,189,125,.16)' }}>
+                <p className="font-data font-bold" style={{ color: 'var(--green)' }}>
+                  Swept {sweepResult.donor_count} donor{sweepResult.donor_count !== 1 ? 's' : ''} —{' '}
+                  {fmt(sweepResult.total_cents)} zeroed.
+                </p>
+              </div>
+            ) : sweepPreview ? (
+              <div className="btrl-panel p-3">
+                <p className="font-data text-off-white mb-2">
+                  This will zero{' '}
+                  <span className="font-bold text-d-yellow">
+                    {sweepPreview.donor_count} donor{sweepPreview.donor_count !== 1 ? 's' : ''}
+                  </span>{' '}
+                  totaling{' '}
+                  <span className="font-bold text-d-yellow">{fmt(sweepPreview.total_cents)}</span>.
+                </p>
+                {sweepPreview.sample && sweepPreview.sample.length > 0 && (
+                  <div className="space-y-1 mb-2">
+                    {sweepPreview.sample.map((s) => (
+                      <div
+                        key={s.id}
+                        className="flex justify-between font-data text-xs text-off-white/55"
+                      >
+                        <span>{s.donor_name || 'Anonymous'}</span>
+                        <span>{fmt(s.balance_remaining)}</span>
+                      </div>
+                    ))}
+                    {sweepPreview.donor_count > sweepPreview.sample.length && (
+                      <p className="font-body text-xs text-off-white/40">
+                        + {sweepPreview.donor_count - sweepPreview.sample.length} more
+                      </p>
+                    )}
+                  </div>
+                )}
+                <p className="font-body text-xs" style={{ color: 'var(--d-yellow)' }}>
+                  This cannot be undone. Confirm to proceed.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setModal(null)} className="btrl-button btrl-button-outline">
+                close
+              </button>
+              {!sweepResult && (
+                <button onClick={previewSweep} disabled={sweepBusy} className="btrl-button">
+                  preview
+                </button>
+              )}
+              {sweepPreview && !sweepResult && (
+                <button
+                  onClick={confirmSweep}
+                  disabled={sweepBusy}
+                  className="btrl-button"
+                  style={{ background: 'var(--red)' }}
+                >
+                  confirm sweep
+                </button>
+              )}
             </div>
           </div>
         </Modal>

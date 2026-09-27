@@ -48,6 +48,7 @@ export default function ModeratorPolls() {
   const [error, setError] = useState('');
   const [entriesPanel, setEntriesPanel] = useState<string | null>(null);
   const [entries, setEntries] = useState<CustomEntry[]>([]);
+  const [entriesError, setEntriesError] = useState('');
   const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/polls').then((r) => setPolls(r.data));
@@ -101,20 +102,32 @@ export default function ModeratorPolls() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete poll?')) return;
-    await moderatorClient.delete(`/polls/${id}`);
-    await reload();
+    try {
+      await moderatorClient.delete(`/polls/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Delete failed'));
+    }
   };
 
   const addOption = async (pollId: string) => {
     if (!newOption.trim()) return;
-    await moderatorClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
-    setNewOption('');
-    await reload();
+    try {
+      await moderatorClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
+      setNewOption('');
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to add option'));
+    }
   };
 
   const deleteOption = async (id: string) => {
-    await moderatorClient.delete(`/polls/options/${id}`);
-    await reload();
+    try {
+      await moderatorClient.delete(`/polls/options/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to delete option'));
+    }
   };
 
   const startEditOption = (opt: { id: string; label: string }) => {
@@ -124,23 +137,37 @@ export default function ModeratorPolls() {
 
   const saveOption = async (id: string) => {
     if (!optionDraft.trim()) return;
-    await moderatorClient.patch(`/polls/options/${id}`, { label: optionDraft.trim() });
-    setEditingOptionId(null);
-    await reload();
+    try {
+      await moderatorClient.patch(`/polls/options/${id}`, { label: optionDraft.trim() });
+      setEditingOptionId(null);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to save option'));
+    }
   };
 
   const loadEntries = async (pollId: string) => {
-    const { data } = await moderatorClient.get(`/polls/${pollId}/custom-entries`);
-    setEntries(data);
-    setEntriesPanel(pollId);
+    setEntriesError('');
+    try {
+      const { data } = await moderatorClient.get(`/polls/${pollId}/custom-entries`);
+      setEntries(data);
+      setEntriesPanel(pollId);
+    } catch (e) {
+      setEntriesError(apiErrorMessage(e, 'Failed to load custom entries'));
+    }
   };
 
   const handleApproveReject = async (entryId: string, status: string) => {
-    await moderatorClient.patch(`/polls/custom-entries/${entryId}`, { status });
-    await reload();
-    if (entriesPanel) {
-      const { data } = await moderatorClient.get(`/polls/${entriesPanel}/custom-entries`);
-      setEntries(data);
+    setEntriesError('');
+    try {
+      await moderatorClient.patch(`/polls/custom-entries/${entryId}`, { status });
+      await reload();
+      if (entriesPanel) {
+        const { data } = await moderatorClient.get(`/polls/${entriesPanel}/custom-entries`);
+        setEntries(data);
+      }
+    } catch (e) {
+      setEntriesError(apiErrorMessage(e, 'Failed to moderate entry'));
     }
   };
 
@@ -157,6 +184,12 @@ export default function ModeratorPolls() {
           + new poll
         </button>
       </div>
+
+      {!modal && error && (
+        <p className="font-body text-sm mb-4" style={{ color: 'var(--red)' }}>
+          {error}
+        </p>
+      )}
 
       <div className="space-y-4">
         {filteredPolls.map((poll) => (
@@ -288,6 +321,11 @@ export default function ModeratorPolls() {
                   <h4 className="font-data font-bold text-sm text-off-white">custom entries</h4>
                   <ChannelPill label={channelName(poll.channel_id)} />
                 </div>
+                {entriesError && (
+                  <p className="font-body text-xs mb-2" style={{ color: 'var(--red)' }}>
+                    {entriesError}
+                  </p>
+                )}
                 {entries.length === 0 ? (
                   <p className="font-body text-xs text-off-white/55">No entries yet.</p>
                 ) : (

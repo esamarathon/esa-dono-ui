@@ -35,9 +35,18 @@ export default function SidebarLayout({
   };
 
   return (
-    <div className="flex min-h-screen">
+    // App-shell layout (#64): the outer container is pinned to exactly one
+    // viewport height and never scrolls itself. The sidebar and the main
+    // content area are each their own independent scroll container
+    // (overflow-y-auto), so a long nav list or a long page of content can
+    // each scroll on their own without moving the other — previously this
+    // was `min-h-screen` with a `sticky` sidebar, which meant the whole
+    // *document* scrolled as one long page and any page-level two-column
+    // layout (e.g. AdminDonors' donor list + detail panel) shared that same
+    // single scroll, growing the page instead of scrolling internally.
+    <div className="flex h-screen overflow-hidden">
       <aside
-        className={`sticky top-0 self-start flex flex-col p-4 transition-[width] duration-150 ${collapsed ? 'w-16' : 'w-52'}`}
+        className={`flex flex-col p-4 overflow-y-auto transition-[width] duration-150 ${collapsed ? 'w-16' : 'w-52'}`}
         style={{ background: 'var(--dark-gray)', borderRight: '1px solid rgba(239,238,236,.08)' }}
       >
         <div
@@ -78,7 +87,7 @@ export default function SidebarLayout({
         </button>
         {footer?.(collapsed)}
       </aside>
-      <main className="flex-1 p-8 overflow-auto">
+      <main className="flex-1 p-8 overflow-y-auto">
         {header}
         <Outlet />
       </main>

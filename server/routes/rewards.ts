@@ -17,8 +17,10 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.post('/:id/claim', spendLimit, donorAuth, async (req: Request, res: Response) => {
   try {
+    const quantity =
+      Number.isInteger(req.body.quantity) && req.body.quantity > 0 ? req.body.quantity : 1;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await claimRewardTx(tx, req.donor!.id, req.params.id!, req.body.claim_data);
+      await claimRewardTx(tx, req.donor!.id, req.params.id!, req.body.claim_data, quantity);
     });
     res.json({ success: true });
   } catch (err) {

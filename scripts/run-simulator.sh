@@ -12,7 +12,8 @@
 #                or $SIM_CONTAINER)
 #
 # Env overrides forwarded into the container (all optional — see run-sim.sh
-# for defaults): SEED, EVENTS, DONORS, RATE, BASE_URL, OUT_DIR, KEEP_DAYS.
+# for defaults): SEED, EVENTS, DONORS, RATE, REPEAT_DONATION_CHANCE, TRAFFIC,
+# BASE_URL, OUT_DIR, KEEP_DAYS.
 set -euo pipefail
 
 CONTAINER="${1:-${SIM_CONTAINER:-esa-dono-ui-dono-backend-1}}"
@@ -25,7 +26,7 @@ fi
 # Forward only the env vars that are actually set, so run-sim.sh's own
 # defaults apply otherwise.
 env_args=()
-for var in SEED EVENTS DONORS RATE BASE_URL OUT_DIR KEEP_DAYS; do
+for var in SEED EVENTS DONORS RATE REPEAT_DONATION_CHANCE TRAFFIC BASE_URL OUT_DIR KEEP_DAYS; do
   if [ -n "${!var:-}" ]; then
     env_args+=("-e" "$var=${!var}")
   fi

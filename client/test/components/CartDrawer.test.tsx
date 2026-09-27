@@ -64,6 +64,7 @@ describe('CartDrawer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
@@ -104,7 +105,11 @@ describe('CartDrawer', () => {
     renderDrawer([{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }]);
 
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
-    expect(screen.getByText('$10.00')).toBeInTheDocument();
+    // With a single item and no additional contribution, the item price and
+    // the cart total are numerically identical ($10.00 each) — both
+    // legitimately render, so assert there are exactly the two expected
+    // occurrences rather than a single ambiguous match.
+    expect(screen.getAllByText('$10.00')).toHaveLength(2);
 
     // The per-item remove button uses &times; (×) not the word "remove"
     const removeBtns = screen.getAllByRole('button', { name: '×' });
@@ -122,9 +127,20 @@ describe('CartDrawer', () => {
   });
 
   it('shows a checkout error on missing email', async () => {
-    renderDrawer([{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }]);
+    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    // Top-up-only cart: no incentive item to revalidate against the catalog
+    // and no incentive category to nudge about, so the click reaches
+    // checkout()'s own validation directly. The checkout button is disabled
+    // without a selected channel (production behavior, not just test setup),
+    // so seed one via the same sessionStorage pattern the tests below use.
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({ cart: [], topUp: '10', comment: '', channelId: 'c1' }),
+    );
+
+    renderDrawer([]);
     fireEvent.click(await screen.findByRole('button', { name: /^contribute/i }));
-    expect(await screen.findByText(/email/i)).toBeInTheDocument();
+    expect(await screen.findByText('Please enter your email address')).toBeInTheDocument();
   });
 
   it('shows the nudge panel when unvisited categories exist', async () => {
@@ -190,5 +206,13 @@ describe('CartDrawer', () => {
     );
     fireEvent.change(commentArea, { target: { value: 'great work!' } });
     expect(commentArea).toHaveValue('great work!');
+  });
+
+  it('allows entering a display name (#54)', async () => {
+    renderDrawer([]);
+
+    const nameInput = await screen.findByPlaceholderText('Your name');
+    fireEvent.change(nameInput, { target: { value: 'Jane Donor' } });
+    expect(nameInput).toHaveValue('Jane Donor');
   });
 });

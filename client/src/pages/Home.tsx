@@ -1,36 +1,14 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getCampaign } from '../api/campaign';
+import { useCampaign } from '../context/CampaignContext';
 import ProgressBar from '../components/ProgressBar';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { CAMPAIGN_POLL_MS } from '../config';
-import type { Campaign } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 }
 
 export default function Home() {
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      getCampaign()
-        .then((c) => {
-          if (!cancelled) setCampaign(c);
-        })
-        .catch(() => {
-          if (!cancelled) setError('Failed to load campaign data.');
-        });
-    load();
-    const timer = setInterval(load, CAMPAIGN_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
+  const { campaign, raisedCents, goalCents, error } = useCampaign();
 
   if (error)
     return (
@@ -39,17 +17,6 @@ export default function Home() {
       </div>
     );
   if (!campaign) return <LoadingSpinner />;
-
-  const raised = campaign.amount_raised?.value
-    ? Math.round(parseFloat(campaign.amount_raised.value) * 100)
-    : campaign.total_amount_raised?.value
-      ? Math.round(parseFloat(campaign.total_amount_raised.value) * 100)
-      : 0;
-  const goal = campaign.goal?.value
-    ? Math.round(parseFloat(campaign.goal.value) * 100)
-    : campaign.fundraising_goal?.value
-      ? Math.round(parseFloat(campaign.fundraising_goal.value) * 100)
-      : 0;
 
   return (
     <div className="max-w-3xl mx-auto p-8">
@@ -73,12 +40,12 @@ export default function Home() {
         <div className="flex justify-between mb-2">
           <span className="font-data font-bold text-sm text-off-white/55">raised</span>
           <span className="font-data font-bold text-sm text-d-yellow">
-            {fmt(raised)} / {fmt(goal)}
+            {fmt(raisedCents)} / {fmt(goalCents)}
           </span>
         </div>
-        <ProgressBar value={raised} max={goal} />
+        <ProgressBar value={raisedCents} max={goalCents} />
         <p className="text-center font-data text-sm text-off-white/55 mt-2">
-          {goal > 0 ? `${Math.round((raised / goal) * 100)}% of goal` : ''}
+          {goalCents > 0 ? `${Math.round((raisedCents / goalCents) * 100)}% of goal` : ''}
         </p>
 
         {/* Primary CTA — incentive cart wizard */}

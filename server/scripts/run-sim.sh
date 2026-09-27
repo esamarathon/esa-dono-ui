@@ -11,11 +11,11 @@
 # Env overrides (all optional):
 #   SEED        seed string (default: sim-<UTC timestamp>)
 #   EVENTS      event count (default: 150)
-#   DONORS      distinct synthetic donors (default: 45 — with the real-data
-#               donation amounts, enough wallets to fund the ~145 spend events
-#               per run so most succeed)
+#   DONORS      synthetic donor pool size (default: 45; activity varies by profile)
 #   RATE        mean arrival rate (default: 0.06/s — spreads 150 events across
 #               ~42 min, so an hourly run covers most of the hour)
+#   REPEAT_DONATION_CHANCE  chance of donating again on a return visit (default: 0.3)
+#   TRAFFIC     phased (seeded quiet/busy periods, default) or steady
 #   BASE_URL    API base (default: http://localhost:3001)
 #   OUT_DIR     output dir (default: /data/sim-runs/<seed>)
 #   KEEP_DAYS   prune sim-runs older than this many days (default: 14; 0 = never prune)
@@ -25,6 +25,8 @@ SEED="${SEED:-sim-$(date -u +%Y%m%dT%H%M%SZ)}"
 EVENTS="${EVENTS:-150}"
 DONORS="${DONORS:-45}"
 RATE="${RATE:-0.06/s}"
+REPEAT_DONATION_CHANCE="${REPEAT_DONATION_CHANCE:-0.3}"
+TRAFFIC="${TRAFFIC:-phased}"
 BASE_URL="${BASE_URL:-http://localhost:3001}"
 OUT_DIR="${OUT_DIR:-/data/sim-runs/$SEED}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
@@ -39,15 +41,17 @@ cd /app
 echo "==> [$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting simulation run"
 echo "    seed=$SEED events=$EVENTS rate=$RATE base_url=$BASE_URL out=$OUT_DIR"
 
+status=0
 node_modules/.bin/tsx server/scripts/simulate.ts \
   --seed "$SEED" \
   --events "$EVENTS" \
   --donors "$DONORS" \
   --rate "$RATE" \
+  --repeat-donation-chance "$REPEAT_DONATION_CHANCE" \
+  --traffic "$TRAFFIC" \
   --base-url "$BASE_URL" \
   --admin-key "$ADMIN_API_KEY" \
-  --out "$OUT_DIR"
-status=$?
+  --out "$OUT_DIR" || status=$?
 
 echo "==> [$(date -u +%Y-%m-%dT%H:%M:%SZ)] Simulation run finished (exit $status)"
 
