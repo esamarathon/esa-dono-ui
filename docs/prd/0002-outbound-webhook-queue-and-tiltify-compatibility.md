@@ -374,9 +374,18 @@ migration is open at any time. Issue 6 is design-first: its issue specifies resp
 shapes before any code, and it lands after Issue 5 because it shares `server/index.ts`
 route mounting and `server/openapi.yaml`.
 
-External: esamarathon/kollekt#35 — accept arrays or scalars for polls/targets;
-esamarathon/esa-observability#1 — deploy §M4 rules; esamarathon/esa-layouts-v2#5 —
-explicit removal field and alert suppression by age.
+External (consumer and ops repositories):
+
+| Repository        | Issue                           | Change                                                                                                                | Kind                 |
+| ----------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| kollekt           | esamarathon/kollekt#36          | Migration checklist: `Rabbit:Enabled`/`Url`, `TiltifyBridge:Url` → #117 (hard dependency), dead-letter recommendation | Config + recommended |
+| kollekt           | esamarathon/kollekt#35          | Accept `poll_votes` / `target_contributions` arrays or scalars                                                        | Code                 |
+| esa-layouts-v2    | esamarathon/esa-layouts-v2#6    | Migration checklist: `teamCampaign` = Event, `campaigns[]` = Channels, `rabbitmq.url`, `tiltify.api.url` → #117       | Config               |
+| esa-layouts-v2    | esamarathon/esa-layouts-v2#5    | Explicit removal field; alert suppression by age                                                                      | Code (discussion)    |
+| esa-observability | esamarathon/esa-observability#1 | Deploy §M4 alert rules                                                                                                | Ops                  |
+
+Switch order for consumers: deploy #117, then point each consumer's REST base URL at it, then
+its RabbitMQ URL. Switching RabbitMQ first makes kollekt drop every donation.
 
 Every issue carries its own documentation acceptance criteria (see the owner column
 below). Issue 8 is the final consistency review.
@@ -416,6 +425,14 @@ Issue 8 reviews the whole set for consistency but writes only what is listed for
 - Contradicts **ADR-0005** on two points: it states the queue stalls on a failing head and
   that emits are atomic. Neither is true of the current code. ADR-0007 supersedes those
   sections; ADR-0005 gets a "Superseded in part by" note, not an in-place rewrite.
+
+## Open Questions
+
+- **Refunds and chargebacks on the donation message.** §T7 publishes only lower totals on a
+  refund. The donation is not republished, so it stays readable in kollekt and stays on the
+  esa-layouts-v2 donation bar. Decide whether a refund also republishes the donation (for
+  example, as a hide on `TILTIFY` and a `donation.refunded` on `NATIVE`). Recorded in
+  esamarathon/kollekt#36 and esamarathon/esa-layouts-v2#6. Must be decided before #116.
 
 ## Out of Scope
 
