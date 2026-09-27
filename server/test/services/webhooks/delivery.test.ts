@@ -33,6 +33,8 @@ import {
   buildIncentiveDisabledPayload,
   buildIncentiveValueChangedPayload,
   emitWebhookMessage,
+  isWebhookMessageType,
+  WEBHOOK_MESSAGE_TYPES,
 } from '../../../services/webhooks/delivery.js';
 
 const FORBIDDEN_KEYS = ['email', 'donor_name', 'donor_email', 'comment', 'moderated_by'];
@@ -58,6 +60,18 @@ describe('signPayload', () => {
     const sig = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
     const result = signPayload(secret, timestamp, body);
     expect(result).toBe(`t=${timestamp},v1=${sig}`);
+  });
+});
+
+describe('isWebhookMessageType', () => {
+  it('accepts every known message type', () => {
+    expect(WEBHOOK_MESSAGE_TYPES.every(isWebhookMessageType)).toBe(true);
+  });
+
+  it('rejects unknown values and non-strings', () => {
+    expect(isWebhookMessageType('donation.bogus')).toBe(false);
+    expect(isWebhookMessageType('ping')).toBe(false);
+    expect(isWebhookMessageType(42)).toBe(false);
   });
 });
 

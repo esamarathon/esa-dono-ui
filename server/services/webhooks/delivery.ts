@@ -12,6 +12,10 @@ export const WEBHOOK_MESSAGE_TYPES = [
 
 export type WebhookMessageType = (typeof WEBHOOK_MESSAGE_TYPES)[number];
 
+export function isWebhookMessageType(value: unknown): value is WebhookMessageType {
+  return (WEBHOOK_MESSAGE_TYPES as readonly unknown[]).includes(value);
+}
+
 export type WebhookPayloadDonationCreated = {
   id: string;
   type: 'donation.created';

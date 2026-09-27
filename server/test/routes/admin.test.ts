@@ -62,7 +62,8 @@ vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
 }));
 
-vi.mock('../../services/webhooks/delivery.js', () => ({
+vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/webhooks/delivery.js')>()),
   emitWebhookMessage: vi.fn(),
   buildIncentiveCreatedPayload: vi.fn(() => ({
     id: 'x',

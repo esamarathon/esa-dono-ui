@@ -17,6 +17,7 @@ import { invalidateFlagCache } from '../services/featureFlags.js';
 import { TOKEN_TTL_MS } from '../config.js';
 import {
   emitWebhookMessage,
+  isWebhookMessageType,
   buildIncentiveCreatedPayload,
   buildIncentiveEnabledPayload,
   buildIncentiveDisabledPayload,
@@ -1393,15 +1394,6 @@ router.get('/auction-wins', async (req, res) => {
 });
 
 // Webhook endpoints
-const WEBHOOK_MESSAGE_TYPE_KEYS: string[] = [
-  'donation.created',
-  'donation.moderated',
-  'incentive.created',
-  'incentive.enabled',
-  'incentive.disabled',
-  'incentive.value_changed',
-];
-
 router.get('/destinations', async (req, res) => {
   const endpoints = await prisma.webhookDestination.findMany({
     orderBy: { created_at: 'desc' },
@@ -1458,10 +1450,7 @@ router.post('/destinations', async (req, res) => {
   if (event_types && !Array.isArray(event_types)) {
     return res.status(400).json({ error: 'event_types must be an array' });
   }
-  if (
-    event_types &&
-    !event_types.every((t: unknown) => WEBHOOK_MESSAGE_TYPE_KEYS.includes(t as string))
-  ) {
+  if (event_types && !event_types.every(isWebhookMessageType)) {
     return res.status(400).json({ error: 'event_types contains invalid event type' });
   }
 
@@ -1528,7 +1517,7 @@ router.put('/destinations/:id', async (req, res) => {
     if (!Array.isArray(event_types)) {
       return res.status(400).json({ error: 'event_types must be an array' });
     }
-    if (!event_types.every((t: unknown) => WEBHOOK_MESSAGE_TYPE_KEYS.includes(t as string))) {
+    if (!event_types.every(isWebhookMessageType)) {
       return res.status(400).json({ error: 'event_types contains invalid event type' });
     }
   }
