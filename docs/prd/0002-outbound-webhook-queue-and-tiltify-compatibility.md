@@ -375,29 +375,43 @@ route mounting and `server/openapi.yaml`.
 External: kollekt — accept arrays or scalars for polls/targets; esa-observability —
 deploy §M4 rules; esa-layouts-v2#5 — explicit removal field and alert suppression by age.
 
-Every issue carries its own documentation acceptance criteria. Issue 8 covers what spans
-issues.
+Every issue carries its own documentation acceptance criteria (see the owner column
+below). Issue 8 is the final consistency review.
 
 ## Documentation Requirements
 
-| Audience           | Document                                | Change                                                                                                                                               |
-| ------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agents             | `CONTEXT.md` (new)                      | Glossary and Tiltify mapping above                                                                                                                   |
-| Agents             | `CLAUDE.md`                             | Rewrite the stale "Events" section (describes a model deleted in `45e74f5`); webhook section to new names and semantics; "avoid" vocabulary guidance |
-| Agents + humans    | `docs/adr/0006-…`                       | Queue delivery semantics (supersedes the FIFO and atomicity claims in ADR-0005)                                                                      |
-| Agents + humans    | `docs/adr/0007-…`                       | Tiltify-compatible outbound format                                                                                                                   |
-| Agents + humans    | `docs/adr/0008-…`                       | Event as parent of Channel, UUID ids, slugs, vocabulary split                                                                                        |
-| Humans (operators) | `docs/outbound-events.md`               | Runbook: failure classes, requeue, retention, metrics, alert thresholds, recovery flush, "unrecoverable past retention" statement                    |
-| Humans (operators) | `docs/outbound-events.md`               | Consumer setup: kollekt and esa-layouts-v2 configuration (slugs, ids, REST base URL)                                                                 |
-| Humans (staff)     | `client/src/pages/shared/StaffHelp.tsx` | Destinations, requeue, hide-from-overlay, Events and Channels                                                                                        |
-| Humans (admins)    | Admin UI inline help                    | Next to requeue, hide/un-hide, slug fields                                                                                                           |
-| API                | `server/openapi.yaml`                   | Every new or changed route; enforced by `openapi-coverage.test.ts`                                                                                   |
-| API consumers      | `docs/outbound-events.md`               | Both payload formats, routing keys, message identity, delivery guarantees                                                                            |
+Each document has **one owning issue**, so two changes never write the same section.
+Issue 8 reviews the whole set for consistency but writes only what is listed for it.
+
+| Audience           | Document                                             | Section / change                                                                                               | Owner   |
+| ------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------- |
+| Agents             | `CONTEXT.md` (new)                                   | Create: glossary (Event, Channel, Webhook message, Destination, Delivery) and "avoid" column                   | 1       |
+| Agents             | `CONTEXT.md`                                         | Add: Slug, Primary channel                                                                                     | 3       |
+| Agents             | `CONTEXT.md`                                         | Add: Tiltify mapping table                                                                                     | 5       |
+| Agents             | `CLAUDE.md`                                          | Webhook bullets → new names; "avoid" vocabulary guidance for agents                                            | 1       |
+| Agents             | `CLAUDE.md`                                          | Queue semantics, requeue, retention, metrics                                                                   | 2       |
+| Agents             | `CLAUDE.md`                                          | Rewrite stale "Events" section (describes a model deleted in `45e74f5`); UUIDs; slugs                          | 3       |
+| Agents             | `CLAUDE.md`                                          | Event API, routing, URLs, env/metrics tables                                                                   | 4       |
+| Agents             | `CLAUDE.md`                                          | Payload formats                                                                                                | 5       |
+| Agents + humans    | `docs/adr/0006-webhook-vocabulary.md`                | Why Event ≠ webhook message                                                                                    | 1       |
+| Agents + humans    | `docs/adr/0007-webhook-delivery-semantics.md`        | FIFO, failure classes, outbox, retention; add "Superseded in part by ADR-0007" to ADR-0005                     | 2       |
+| Agents + humans    | `docs/adr/0008-event-channel-identity.md`            | Event → Channel, UUID ids, slugs, primary channel                                                              | 3       |
+| Agents + humans    | `docs/adr/0009-tiltify-compatible-messages.md`       | Tiltify format, consumer contract                                                                              | 5       |
+| Humans (operators) | `docs/outbound-events.md` § Runbook                  | Failure classes, requeue, retention, metrics, alert thresholds, recovery flush, "unrecoverable past retention" | 2       |
+| API consumers      | `docs/outbound-events.md` § Formats                  | Both formats, routing keys, message identity, delivery guarantees                                              | 5       |
+| Humans (operators) | `docs/outbound-events.md` § Consumer setup           | kollekt and esa-layouts-v2 config: slugs, uuids, exchange, REST base URL                                       | 6       |
+| Humans             | `docs/simulating-donations.md`, `docs/deployment.md` | `simulate-donation` with `channel_id`/`event_id`; seed Event/Channel                                           | 3       |
+| Humans (staff)     | `client/src/pages/shared/StaffHelp.tsx`              | Destinations: requeue, stalls                                                                                  | 2       |
+| Humans (staff)     | `client/src/pages/shared/StaffHelp.tsx`              | Events, Channels, slugs, primary channel, unassigned donations                                                 | 4       |
+| Humans (staff)     | `client/src/pages/shared/StaffHelp.tsx`              | Hide from overlay, payload format                                                                              | 5       |
+| Humans (admins)    | Admin UI inline help                                 | Requeue (2); slug fields, primary channel (4); hide / un-hide warning, payload format (5)                      | 2, 4, 5 |
+| API                | `server/openapi.yaml`                                | Every route each issue adds or changes, enforced by `openapi-coverage.test.ts`                                 | each    |
+| All                | Consistency review                                   | Every row above agrees with the shipped code; no stale "Event" meaning webhook                                 | 8       |
 
 ## ADR Conflicts
 
 - Contradicts **ADR-0005** on two points: it states the queue stalls on a failing head and
-  that emits are atomic. Neither is true of the current code. ADR-0006 supersedes those
+  that emits are atomic. Neither is true of the current code. ADR-0007 supersedes those
   sections; ADR-0005 gets a "Superseded in part by" note, not an in-place rewrite.
 
 ## Out of Scope
