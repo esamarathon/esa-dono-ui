@@ -355,16 +355,18 @@ cannot consume our messages**: an unknown campaign id makes it throw and drop th
 
 ## Work Breakdown
 
-| #   | Issue                                                           | Depends on                   |
-| --- | --------------------------------------------------------------- | ---------------------------- |
-| 1   | Vocabulary split (§V)                                           | —                            |
-| 2   | Queue correctness — #109 (§Q, §M1, §M4)                         | 1                            |
-| 3   | UUIDs, Event model, slugs, primary channel (§S)                 | 2                            |
-| 4   | Event API, routing, friendly URLs, labelled metrics (§E, §M2–3) | 3                            |
-| 5   | Tiltify message format and native additions (§T, §N)            | 4                            |
-| 6   | Tiltify-compatible REST API (§R)                                | 5 (design can start after 3) |
-| 7   | Reconciliation read endpoint (deferred)                         | 3                            |
-| 8   | Documentation and operations (all audiences)                    | 1–6                          |
+| #   | Issue                                                           | GitHub | Depends on                         |
+| --- | --------------------------------------------------------------- | ------ | ---------------------------------- |
+| 1   | Vocabulary split (§V)                                           | #113   | —                                  |
+| 2   | Queue correctness (§Q, §M1, §M4)                                | #109   | #113                               |
+| 3   | UUIDs, Event model, slugs, primary channel (§S)                 | #114   | #109                               |
+| 4   | Event API, routing, friendly URLs, labelled metrics (§E, §M2–3) | #115   | #114                               |
+| 5   | Tiltify message format and native additions (§T, §N)            | #116   | #115                               |
+| 6   | Tiltify-compatible REST API (§R)                                | #117   | #116 (design may start after #114) |
+| 7   | Reconciliation read endpoint (deferred)                         | #118   | #114                               |
+| 8   | Documentation consistency review                                | #119   | #113–#117                          |
+
+Epic: #112.
 
 **Conflict rule.** Issues 1–5 edit `schema.prisma`, the webhook services, or both, so
 they land **one at a time, in order**, each rebased on the previous merge. Only one
@@ -372,8 +374,9 @@ migration is open at any time. Issue 6 is design-first: its issue specifies resp
 shapes before any code, and it lands after Issue 5 because it shares `server/index.ts`
 route mounting and `server/openapi.yaml`.
 
-External: kollekt — accept arrays or scalars for polls/targets; esa-observability —
-deploy §M4 rules; esa-layouts-v2#5 — explicit removal field and alert suppression by age.
+External: esamarathon/kollekt#35 — accept arrays or scalars for polls/targets;
+esamarathon/esa-observability#1 — deploy §M4 rules; esamarathon/esa-layouts-v2#5 —
+explicit removal field and alert suppression by age.
 
 Every issue carries its own documentation acceptance criteria (see the owner column
 below). Issue 8 is the final consistency review.
