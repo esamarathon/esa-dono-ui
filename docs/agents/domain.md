@@ -17,13 +17,14 @@ Single-context repo (most repos):
 
 ```
 /
-├── CONTEXT.md          ← not yet created; created lazily by /grill-with-docs
+├── CONTEXT.md          ← domain glossary (Event, Channel, Webhook message, …)
 ├── docs/adr/
 │   ├── 0001-typescript-for-frontend-and-backend.md
 │   ├── 0002-migrate-payments-tiltify-to-stripe.md
 │   ├── 0003-unify-auth-on-donor-token-and-role.md
 │   ├── 0004-bearer-token-transport-and-credential-holding.md
-│   └── 0005-outbound-webhooks.md
+│   ├── 0005-outbound-webhooks.md
+│   └── 0006-webhook-vocabulary.md
 └── ...
 ```
 

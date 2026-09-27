@@ -36,4 +36,20 @@ export default [
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // PRD-0002 §V5: "Event" means the charity event. Webhook code says "message".
+    // Warn only — this must never fail CI.
+    files: ['services/webhooks/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'warn',
+        {
+          selector:
+            ':matches(FunctionDeclaration, VariableDeclarator, TSTypeAliasDeclaration, TSInterfaceDeclaration, ClassDeclaration) > Identifier[name=/Event/]',
+          message:
+            'Avoid "Event" in webhook identifiers; use "Message" (see CONTEXT.md). Wire strings like X-Webhook-Event are fine.',
+        },
+      ],
+    },
+  },
 ];

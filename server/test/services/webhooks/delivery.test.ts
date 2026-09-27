@@ -1,29 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 
-vi.mock('../../lib/prisma.js', () => ({
+vi.mock('../../../lib/prisma.js', () => ({
   default: {
-    eventDestination: {
+    webhookDestination: {
       findMany: vi.fn(),
     },
-    eventDestinationSeq: {
+    webhookDestinationSeq: {
       upsert: vi.fn(),
     },
-    eventDelivery: {
+    webhookDelivery: {
       create: vi.fn(),
     },
     $transaction: vi.fn((cb: (tx: unknown) => Promise<unknown>) =>
       cb({
-        eventDestinationSeq: {
+        webhookDestinationSeq: {
           upsert: vi.fn().mockResolvedValue({ destination_id: 'ep-1', seq: 1 }),
         },
-        eventDelivery: { create: vi.fn().mockResolvedValue({}) },
+        webhookDelivery: { create: vi.fn().mockResolvedValue({}) },
       }),
     ),
   },
 }));
 
-import prisma from '../../lib/prisma.js';
+import prisma from '../../../lib/prisma.js';
 import {
   signPayload,
   buildDonationCreatedPayload,
@@ -32,8 +32,8 @@ import {
   buildIncentiveEnabledPayload,
   buildIncentiveDisabledPayload,
   buildIncentiveValueChangedPayload,
-  emitWebhookEvent,
-} from '../../services/eventDelivery.js';
+  emitWebhookMessage,
+} from '../../../services/webhooks/delivery.js';
 
 const FORBIDDEN_KEYS = ['email', 'donor_name', 'donor_email', 'comment', 'moderated_by'];
 
@@ -180,13 +180,13 @@ describe('PII allowlist — incentive payloads', () => {
   });
 });
 
-describe('emitWebhookEvent', () => {
+describe('emitWebhookMessage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('does nothing when no endpoints are registered', async () => {
-    vi.mocked(prisma.eventDestination.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([]);
     const payload = buildDonationCreatedPayload({
       donationId: 'dn-1',
       externalId: 'ext-1',
@@ -194,8 +194,8 @@ describe('emitWebhookEvent', () => {
       channelId: null,
       donorRef: 'donor-ref-1',
     });
-    await emitWebhookEvent('donation.created', payload);
-    expect(prisma.eventDelivery.create).not.toHaveBeenCalled();
+    await emitWebhookMessage('donation.created', payload);
+    expect(prisma.webhookDelivery.create).not.toHaveBeenCalled();
   });
 
   it('creates delivery rows for subscribed endpoints only', async () => {
@@ -213,12 +213,12 @@ describe('emitWebhookEvent', () => {
       event_types: JSON.stringify(['incentive.created']),
       is_active: true,
     };
-    vi.mocked(prisma.eventDestination.findMany).mockResolvedValue([ep1, ep2 as any]);
-    vi.mocked(prisma.eventDestinationSeq.upsert).mockResolvedValue({
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([ep1, ep2 as any]);
+    vi.mocked(prisma.webhookDestinationSeq.upsert).mockResolvedValue({
       destination_id: 'ep-1',
       seq: 1,
     });
-    vi.mocked(prisma.eventDelivery.create).mockResolvedValue({} as any);
+    vi.mocked(prisma.webhookDelivery.create).mockResolvedValue({} as any);
 
     const payload = buildDonationCreatedPayload({
       donationId: 'dn-1',
@@ -227,20 +227,20 @@ describe('emitWebhookEvent', () => {
       channelId: null,
       donorRef: 'donor-ref-1',
     });
-    await emitWebhookEvent('donation.created', payload);
+    await emitWebhookMessage('donation.created', payload);
 
-    expect(prisma.eventDelivery.create).toHaveBeenCalledTimes(1);
-    expect(prisma.eventDelivery.create).toHaveBeenCalledWith({
+    expect(prisma.webhookDelivery.create).toHaveBeenCalledTimes(1);
+    expect(prisma.webhookDelivery.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         destination_id: 'ep-1',
-        event_type: 'donation.created',
+        message_type: 'donation.created',
         status: 'PENDING',
       }),
     });
   });
 
   it('ignores inactive endpoints', async () => {
-    const findManyMock = vi.mocked(prisma.eventDestination.findMany);
+    const findManyMock = vi.mocked(prisma.webhookDestination.findMany);
     findManyMock.mockResolvedValueOnce([]);
 
     const payload = buildDonationCreatedPayload({
@@ -250,13 +250,13 @@ describe('emitWebhookEvent', () => {
       channelId: null,
       donorRef: 'donor-ref-1',
     });
-    await emitWebhookEvent('donation.created', payload);
+    await emitWebhookMessage('donation.created', payload);
 
     expect(findManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { is_active: true },
       }),
     );
-    expect(prisma.eventDelivery.create).not.toHaveBeenCalled();
+    expect(prisma.webhookDelivery.create).not.toHaveBeenCalled();
   });
 });

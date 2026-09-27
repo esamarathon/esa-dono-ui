@@ -1,8 +1,8 @@
-import type { EventDelivery, EventDestination } from '@prisma/client';
+import type { WebhookDelivery, WebhookDestination } from '@prisma/client';
 import http from 'http';
 import https from 'https';
-import prisma from '../lib/prisma.js';
-import { signPayload } from './eventDelivery.js';
+import prisma from '../../lib/prisma.js';
+import { signPayload } from './delivery.js';
 
 const TICK_INTERVAL_MS = 15_000;
 const BASE_BACKOFF_MIN = 1;
@@ -25,7 +25,7 @@ async function httpPost(
   secret: string,
   verifySsl: boolean,
   deliveryId: string,
-  eventType: string,
+  messageType: string,
 ): Promise<DeliveryResult> {
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = signPayload(secret, timestamp, body);
@@ -47,7 +47,7 @@ async function httpPost(
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
         'X-Webhook-Signature': signature,
-        'X-Webhook-Event': eventType,
+        'X-Webhook-Event': messageType,
         'X-Webhook-Delivery': deliveryId,
       },
       ...(isHttps && !verifySsl ? { rejectUnauthorized: false } : {}),
@@ -75,9 +75,9 @@ const amqpCache = new Map<
 >();
 
 async function amqpPublish(
-  dest: EventDestination,
+  dest: WebhookDestination,
   deliveryId: string,
-  eventType: string,
+  messageType: string,
   body: string,
 ): Promise<DeliveryResult> {
   const url = dest.amqp_url!;
@@ -97,7 +97,7 @@ async function amqpPublish(
     const { channel } = cached;
 
     const headers: Record<string, string> = {
-      'x-webhook-event': eventType,
+      'x-webhook-event': messageType,
       'x-webhook-delivery': deliveryId,
     };
 
@@ -110,7 +110,7 @@ async function amqpPublish(
           persistent: true,
           contentType: 'application/json',
           messageId: deliveryId,
-          type: eventType,
+          type: messageType,
           headers,
         },
         (err: Error | null) => {
@@ -128,13 +128,13 @@ async function amqpPublish(
 }
 
 async function deliver(
-  delivery: EventDelivery & { destination: EventDestination },
+  delivery: WebhookDelivery & { destination: WebhookDestination },
 ): Promise<DeliveryResult> {
   if (delivery.destination.destination_type === 'RABBITMQ') {
     if (!delivery.destination.amqp_url || !delivery.destination.amqp_routing_key) {
       return { statusCode: 0, error: 'RabbitMQ destination missing amqp_url or amqp_routing_key' };
     }
-    return amqpPublish(delivery.destination, delivery.id, delivery.event_type, delivery.payload);
+    return amqpPublish(delivery.destination, delivery.id, delivery.message_type, delivery.payload);
   }
 
   return httpPost(
@@ -143,12 +143,12 @@ async function deliver(
     delivery.destination.secret,
     delivery.destination.verify_ssl,
     delivery.id,
-    delivery.event_type,
+    delivery.message_type,
   );
 }
 
 export async function processDestination(destinationId: string): Promise<void> {
-  const head = await prisma.eventDelivery.findFirst({
+  const head = await prisma.webhookDelivery.findFirst({
     where: {
       destination_id: destinationId,
       status: 'PENDING',
@@ -160,11 +160,11 @@ export async function processDestination(destinationId: string): Promise<void> {
 
   if (!head) return;
 
-  const delivery = head as EventDelivery & { destination: EventDestination };
+  const delivery = head as WebhookDelivery & { destination: WebhookDestination };
   const result = await deliver(delivery);
 
   if (result.statusCode >= 200 && result.statusCode < 300) {
-    await prisma.eventDelivery.update({
+    await prisma.webhookDelivery.update({
       where: { id: delivery.id },
       data: {
         status: 'SUCCESS',
@@ -177,7 +177,7 @@ export async function processDestination(destinationId: string): Promise<void> {
 
   const newAttempts = delivery.attempts + 1;
   if (newAttempts >= delivery.max_attempts) {
-    await prisma.eventDelivery.update({
+    await prisma.webhookDelivery.update({
       where: { id: delivery.id },
       data: {
         status: 'FAILED',
@@ -190,7 +190,7 @@ export async function processDestination(destinationId: string): Promise<void> {
   }
 
   const backoffMin = backoffMinutes(newAttempts);
-  await prisma.eventDelivery.update({
+  await prisma.webhookDelivery.update({
     where: { id: delivery.id },
     data: {
       attempts: newAttempts,
@@ -201,12 +201,12 @@ export async function processDestination(destinationId: string): Promise<void> {
   });
 }
 
-export function startEventDispatcher(): NodeJS.Timeout {
+export function startWebhookDispatcher(): NodeJS.Timeout {
   if (process.env.NODE_ENV === 'test') return { unref: () => {} } as NodeJS.Timeout;
 
   return setInterval(async () => {
     try {
-      const activeDestinations = await prisma.eventDestination.findMany({
+      const activeDestinations = await prisma.webhookDestination.findMany({
         where: { is_active: true },
         select: { id: true },
       });

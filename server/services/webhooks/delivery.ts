@@ -1,7 +1,7 @@
 import crypto from 'crypto';
-import prisma from '../lib/prisma.js';
+import prisma from '../../lib/prisma.js';
 
-export const WEBHOOK_EVENT_TYPES = [
+export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
   'donation.moderated',
   'incentive.created',
@@ -10,7 +10,7 @@ export const WEBHOOK_EVENT_TYPES = [
   'incentive.value_changed',
 ] as const;
 
-export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+export type WebhookMessageType = (typeof WEBHOOK_MESSAGE_TYPES)[number];
 
 export type WebhookPayloadDonationCreated = {
   id: string;
@@ -117,7 +117,7 @@ export type WebhookPayload =
 
 function nextSeq(endpointId: string): Promise<number> {
   return prisma.$transaction(async (tx) => {
-    const row = await tx.eventDestinationSeq.upsert({
+    const row = await tx.webhookDestinationSeq.upsert({
       where: { destination_id: endpointId },
       create: { destination_id: endpointId, seq: 1 },
       update: { seq: { increment: 1 } },
@@ -133,18 +133,18 @@ export function signPayload(secret: string, timestamp: number, body: string): st
 
 async function insertDeliveries(
   endpointIds: string[],
-  eventType: WebhookEventType,
+  messageType: WebhookMessageType,
   payload: object,
 ): Promise<void> {
   const body = JSON.stringify(payload);
   await Promise.all(
     endpointIds.map(async (endpointId) => {
       const seq = await nextSeq(endpointId);
-      await prisma.eventDelivery.create({
+      await prisma.webhookDelivery.create({
         data: {
           destination_id: endpointId,
           seq,
-          event_type: eventType,
+          message_type: messageType,
           payload: body,
           status: 'PENDING',
           next_attempt_at: new Date(),
@@ -154,8 +154,8 @@ async function insertDeliveries(
   );
 }
 
-export async function emitWebhookEvent(
-  eventType: WebhookEventType,
+export async function emitWebhookMessage(
+  messageType: WebhookMessageType,
   payload:
     | WebhookPayloadDonationCreated
     | WebhookPayloadDonationModerated
@@ -165,7 +165,7 @@ export async function emitWebhookEvent(
     | WebhookPayloadIncentiveValueChanged,
 ): Promise<void> {
   try {
-    const endpoints = await prisma.eventDestination.findMany({
+    const endpoints = await prisma.webhookDestination.findMany({
       where: {
         is_active: true,
       },
@@ -174,7 +174,7 @@ export async function emitWebhookEvent(
     const subscribed = endpoints.filter((ep) => {
       try {
         const types: string[] = JSON.parse(ep.event_types);
-        return types.includes(eventType);
+        return types.includes(messageType);
       } catch {
         return false;
       }
@@ -184,7 +184,7 @@ export async function emitWebhookEvent(
 
     await insertDeliveries(
       subscribed.map((ep) => ep.id),
-      eventType,
+      messageType,
       payload,
     );
   } catch (err) {

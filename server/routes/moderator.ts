@@ -578,9 +578,9 @@ router.patch('/donations/:id', async (req, res) => {
     include: { donor: { select: { id: true } } },
   });
 
-  const { emitWebhookEvent, buildDonationModeratedPayload } =
-    await import('../services/eventDelivery.js');
-  emitWebhookEvent(
+  const { emitWebhookMessage, buildDonationModeratedPayload } =
+    await import('../services/webhooks/delivery.js');
+  emitWebhookMessage(
     'donation.moderated',
     buildDonationModeratedPayload({
       donationId: donation.id,

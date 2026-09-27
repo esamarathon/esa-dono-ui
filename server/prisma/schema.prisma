@@ -328,7 +328,7 @@ model AuctionWin {
   donor               Donor     @relation(fields: [donor_id], references: [id])
 }
 
-model EventDestination {
+model WebhookDestination {
   id               String          @id @default(cuid())
   url              String
   secret           String
@@ -338,8 +338,8 @@ model EventDestination {
   description      String?
   created_at       DateTime        @default(now())
   updated_at       DateTime        @updatedAt
-  deliveries       EventDelivery[]
-  seq              EventDestinationSeq?
+  deliveries       WebhookDelivery[]
+  seq              WebhookDestinationSeq?
   destination_type String          @default("HTTP") // HTTP | RABBITMQ
   amqp_url         String?
   amqp_exchange    String          @default("")
@@ -348,19 +348,19 @@ model EventDestination {
   @@map("WebhookEndpoint")
 }
 
-model EventDestinationSeq {
+model WebhookDestinationSeq {
   destination_id String           @id
   seq            Int              @default(0)
-  destination    EventDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+  destination    WebhookDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
 
   @@map("WebhookEndpointSeq")
 }
 
-model EventDelivery {
+model WebhookDelivery {
   id               String          @id @default(cuid())
   seq              Int             @default(0)
   destination_id   String
-  event_type       String
+  message_type     String             @map("event_type")
   payload          String
   status           String          @default("PENDING") // PENDING | SUCCESS | FAILED
   attempts         Int             @default(0)
@@ -370,7 +370,7 @@ model EventDelivery {
   last_error       String?
   created_at       DateTime        @default(now())
   updated_at       DateTime        @updatedAt
-  destination      EventDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+  destination      WebhookDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
 
   @@unique([destination_id, seq])
   @@map("WebhookDelivery")

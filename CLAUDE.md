@@ -116,6 +116,16 @@ To re-run the seed (e.g., after clearing the DB or updating env keys):
 cd server && npx prisma db seed
 ```
 
+## Vocabulary
+
+Read `CONTEXT.md` before naming anything. **Event** means the charity event (a marathon or
+a one-day stream event). A notification sent to a Destination is a **webhook message** —
+not an "event". Webhook code under `server/services/webhooks/` uses "message"
+(`WebhookDestination`, `WebhookDelivery`, `message_type`, `emitWebhookMessage`); an ESLint
+warning flags new `Event`-named identifiers there. The wire keeps "event" where it is an
+external contract (`X-Webhook-Event`, `x-webhook-event`, admin API `event_types`,
+delivery-log `event_type`). See `docs/adr/0006-webhook-vocabulary.md`.
+
 ## Architecture
 
 npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.js`).
@@ -129,6 +139,7 @@ npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React
 - `server/services/spend.ts` — Reusable `tx`-aware spend helpers (`claimRewardTx`, `votePollTx`, `contributeGoalTx`) shared between HTTP routes and pledge fulfillment.
 - `server/services/pledge.ts` — Pledge lifecycle: `createPledge()` (validates items + optional comment ≤500 chars via `checkBlockedWords`, requires a valid active `event_id` and rejects items whose incentive belongs to a different event, persists `PendingPledge`), `resolvePledge()` (by token or email fallback), `fulfillPledge()` (executes items inside a donation transaction), `createCheckoutForPledge()` (creates a Stripe Checkout Session for deterministic linkage).
 - `server/services/email.ts` — Nodemailer magic link sender; called fire-and-forget from the webhook handler.
+- `server/services/webhooks/delivery.ts` — Outbound webhook messages: `emitWebhookMessage()` queues one `WebhookDelivery` per subscribed active `WebhookDestination` (per-destination `seq`), plus the payload builders and `signPayload()`. `server/services/webhooks/dispatcher.ts` — `startWebhookDispatcher()` delivers queued rows over HTTP or RabbitMQ. Prisma models `WebhookDestination`/`WebhookDestinationSeq`/`WebhookDelivery` map to tables `WebhookEndpoint`/`WebhookEndpointSeq`/`WebhookDelivery`; `message_type` maps to column `event_type`.
 - `server/middleware/adminAuth.ts` — Checks the `Authorization: Bearer key_admin_<key>` credential against `ADMIN_API_KEY` env var (ADR 0004).
 - `server/middleware/donorAuth.ts` — Resolves the donor magic token from the `dono_session` httpOnly cookie (browser) or `Authorization: Bearer <token>` (API) to a `Donor` record; sets `req.donor`. The legacy `?token=` query param was removed.
 - `server/lib/session.ts` — httpOnly `dono_session` cookie helpers (set/clear/read); the cookie value is the donor magic token, so revocation is unchanged.

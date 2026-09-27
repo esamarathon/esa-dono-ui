@@ -2881,7 +2881,7 @@ components:
       name: X-Admin-Key
       description: Admin API key matching `ADMIN_API_KEY` env var
   schemas:
-    EventDestination:
+    WebhookDestination:
       type: object
       properties:
         id: { type: string }
@@ -2922,7 +2922,7 @@ components:
           { type: string, nullable: true, description: 'Required for RabbitMQ endpoints' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-    EventDelivery:
+    WebhookDelivery:
       type: object
       properties:
         id: { type: string }

@@ -45,10 +45,10 @@ vi.mock('../../lib/prisma.js', () => ({
     balanceAdjustment: {
       create: vi.fn(),
     },
-    eventDestination: {
+    webhookDestination: {
       findMany: vi.fn().mockResolvedValue([]),
     },
-    eventDelivery: {
+    webhookDelivery: {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
@@ -63,7 +63,7 @@ vi.mock('../../services/donation.js', () => ({
 }));
 
 vi.mock('../../services/webhooks.js', () => ({
-  emitWebhookEvent: vi.fn(),
+  emitWebhookMessage: vi.fn(),
   buildIncentiveCreatedPayload: vi.fn(() => ({
     id: 'x',
     type: 'incentive.created',

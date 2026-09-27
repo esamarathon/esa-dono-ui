@@ -29,11 +29,11 @@ describe('Admin CRUD routes', () => {
 
   afterAll(async () => {
     await prisma.broadcast.deleteMany();
-    await prisma.eventDelivery.deleteMany({ where: { destination_id: { in: destinationIds } } });
-    await prisma.eventDestinationSeq.deleteMany({
+    await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinationIds } } });
+    await prisma.webhookDestinationSeq.deleteMany({
       where: { destination_id: { in: destinationIds } },
     });
-    await prisma.eventDestination.deleteMany({ where: { id: { in: destinationIds } } });
+    await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
     await prisma.blockedWord.deleteMany({ where: { id: { in: blockedWordIds } } });
     await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
     await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
@@ -595,6 +595,15 @@ describe('Admin CRUD routes', () => {
         .set(AUTH);
       expect(testRes.status).toBe(200);
       expect(testRes.body.success).toBe(true);
+
+      // Wire contract (PRD-0002 §V4): the delivery log still says `event_type`,
+      // even though the Prisma field is now `message_type`.
+      const logRes = await request(createApp())
+        .get(`/api/admin/destinations/${createRes.body.id}/deliveries`)
+        .set(AUTH);
+      expect(logRes.status).toBe(200);
+      expect(logRes.body.deliveries[0]).toMatchObject({ event_type: 'ping' });
+      expect(logRes.body.deliveries[0]).not.toHaveProperty('message_type');
 
       const delRes = await request(createApp())
         .delete(`/api/admin/destinations/${createRes.body.id}`)
