@@ -384,7 +384,7 @@ export interface AdminDonorWallet {
   balance_adjustments?: BalanceAdjustment[];
 }
 
-export type WebhookEventType =
+export type WebhookMessageType =
   | 'donation.created'
   | 'donation.moderated'
   | 'incentive.created'

@@ -213,7 +213,7 @@ export function startWebhookDispatcher(): NodeJS.Timeout {
 
       await Promise.all(activeDestinations.map((d) => processDestination(d.id)));
     } catch (err) {
-      console.error('[eventDispatcher] tick error:', err);
+      console.error('[webhookDispatcher] tick error:', err);
     }
   }, TICK_INTERVAL_MS);
 }

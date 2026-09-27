@@ -15,23 +15,23 @@ import {
   apiErrorMessage,
   type WebhookDelivery,
   type WebhookEndpoint,
-  type WebhookEventType,
+  type WebhookMessageType,
 } from '../../types';
 
-const WEBHOOK_EVENT_TYPES = [
+const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
   'donation.moderated',
   'incentive.created',
   'incentive.enabled',
   'incentive.disabled',
   'incentive.value_changed',
-] as const satisfies readonly WebhookEventType[];
+] as const satisfies readonly WebhookMessageType[];
 
 interface WebhookForm {
   destination_type: 'HTTP' | 'RABBITMQ';
   url: string;
   secret: string;
-  event_types: WebhookEventType[];
+  event_types: WebhookMessageType[];
   verify_ssl: boolean;
   description: string;
   amqp_url: string;
@@ -90,7 +90,7 @@ export default function AdminWebhooks() {
       destination_type: ep.destination_type,
       url: ep.url,
       secret: ep.secret,
-      event_types: ep.event_types as WebhookEventType[],
+      event_types: ep.event_types as WebhookMessageType[],
       verify_ssl: ep.verify_ssl,
       description: ep.description ?? '',
       amqp_url: ep.amqp_url ?? '',
@@ -102,7 +102,7 @@ export default function AdminWebhooks() {
     setModal(ep);
   };
 
-  const toggleEventType = (t: WebhookEventType) => {
+  const toggleMessageType = (t: WebhookMessageType) => {
     setForm((f) => ({
       ...f,
       event_types: f.event_types.includes(t)
@@ -499,7 +499,7 @@ export default function AdminWebhooks() {
               Event types *
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {WEBHOOK_EVENT_TYPES.map((t) => (
+              {WEBHOOK_MESSAGE_TYPES.map((t) => (
                 <label
                   key={t}
                   className="flex items-center gap-2 font-data text-sm text-off-white cursor-pointer"
@@ -507,7 +507,7 @@ export default function AdminWebhooks() {
                   <input
                     type="checkbox"
                     checked={form.event_types.includes(t)}
-                    onChange={() => toggleEventType(t)}
+                    onChange={() => toggleMessageType(t)}
                   />
                   {t}
                 </label>

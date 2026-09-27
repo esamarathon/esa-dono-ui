@@ -22,7 +22,7 @@ function close(server: http.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
-describe('eventDispatcher', () => {
+describe('webhook dispatcher', () => {
   const destinationIds: string[] = [];
   const deliveryIds: string[] = [];
 

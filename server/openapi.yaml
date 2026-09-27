@@ -1650,7 +1650,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/WebhookEndpoint'
+                  $ref: '#/components/schemas/WebhookDestination'
     post:
       tags: [Admin]
       summary: Create an event destination
@@ -1696,7 +1696,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEndpoint'
+                $ref: '#/components/schemas/WebhookDestination'
         '400':
           description: Validation error
 
@@ -1777,7 +1777,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEndpoint'
+                $ref: '#/components/schemas/WebhookDestination'
         '404':
           description: Endpoint not found
 

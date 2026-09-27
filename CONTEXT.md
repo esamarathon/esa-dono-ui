@@ -6,13 +6,13 @@ guess which concept is meant.
 
 ## Glossary
 
-| Term                | Means                                                                                 | Avoid                        |
-| ------------------- | ------------------------------------------------------------------------------------- | ---------------------------- |
-| **Event**           | A charity event: a marathon, or a one-day stream event. Parent of Channels.           | occasion, campaign, marathon |
-| **Channel**         | One stream within an Event.                                                           | stream, campaign             |
-| **Webhook message** | One outbound notification that something happened (for example, a donation was made). | event, webhook event         |
-| **Destination**     | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                  | endpoint, event destination  |
-| **Delivery**        | One queued attempt to send one webhook message to one Destination.                    | job, event delivery          |
+| Term                | Means                                                                                 | Avoid                             |
+| ------------------- | ------------------------------------------------------------------------------------- | --------------------------------- |
+| **Event**           | A charity event: a marathon, or a one-day stream event. Parent of Channels.           | occasion, campaign, team campaign |
+| **Channel**         | One stream within an Event.                                                           | stream, campaign                  |
+| **Webhook message** | One outbound notification that something happened (for example, a donation was made). | event, webhook event              |
+| **Destination**     | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                  | endpoint, event destination       |
+| **Delivery**        | One queued attempt to send one webhook message to one Destination.                    | job, event delivery               |
 
 ## "Event" versus "webhook message"
 
