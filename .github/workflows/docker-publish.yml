@@ -4,10 +4,14 @@ on:
   push:
     # Only branches whose images we actually want published & tagged.
     # (Feature/renovate/worktree branches build via the pull_request trigger
-    # below once opened as a PR against main, tagged pr-<number>.)
+    # below once opened as a PR against main or dev, tagged pr-<number>.)
     branches: [main, dev]
+    # Release tags (semver, no "v" prefix, e.g. 0.1.0). These do NOT rebuild:
+    # the promote-release job re-tags the image CI already built, scanned and
+    # smoke-tested for the tagged commit.
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   REGISTRY: ghcr.io
@@ -15,6 +19,7 @@ env:
 
 jobs:
   build-and-push:
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -132,3 +137,57 @@ jobs:
           docker pull "${IMAGE_PREFIX}/backend:${BACKEND_IMAGE_TAG}"
           docker pull "${IMAGE_PREFIX}/frontend:${FRONTEND_IMAGE_TAG}"
           ./scripts/smoke-test.sh
+
+  # Release images are immutable: :X.Y.Z is created once, from the exact
+  # :<sha> image that passed Trivy and the smoke test, and never overwritten.
+  # The git tag itself is immutable through the release-tags-immutable ruleset.
+  promote-release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: promote-release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote :<sha> to :<version> (never overwrite)
+        env:
+          VERSION: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for img in backend frontend; do
+            src="${IMAGE_PREFIX}/${img}:${SHA}"
+            dst="${IMAGE_PREFIX}/${img}:${VERSION}"
+            if docker buildx imagetools inspect "$dst" >/dev/null 2>&1; then
+              echo "::error::$dst already exists. Release images are immutable; refusing to overwrite."
+              exit 1
+            fi
+            if ! docker buildx imagetools inspect "$src" >/dev/null 2>&1; then
+              echo "::error::$src not found. Tag a commit that CI built on main or dev (normally the release merge commit)."
+              exit 1
+            fi
+          done
+          for img in backend frontend; do
+            src="${IMAGE_PREFIX}/${img}:${SHA}"
+            dst="${IMAGE_PREFIX}/${img}:${VERSION}"
+            docker buildx imagetools create --tag "$dst" "$src"
+            a=$(docker buildx imagetools inspect "$src" --format '{{json .Manifest.Digest}}')
+            b=$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest.Digest}}')
+            if [ "$a" != "$b" ]; then
+              echo "::error::$dst digest $b differs from $src digest $a"
+              exit 1
+            fi
+            echo "$dst -> $b"
+          done
