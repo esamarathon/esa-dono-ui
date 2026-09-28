@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import adminClient, { uploadRewardImage } from '../../api/admin';
+import { getFeatureFlags } from '../../api/featureFlags';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -89,13 +90,30 @@ export default function AdminAuctions() {
   const [offers, setOffers] = useState<AuctionOffer[]>([]);
   const [bidsFor, setBidsFor] = useState<Auction | null>(null);
   const [bids, setBids] = useState<AuctionBid[]>([]);
+  const [isEnabled, setIsEnabled] = useState(true);
 
   const reload = () => adminClient.get('/auctions').then((r) => setAuctions(r.data));
   useEffect(() => {
+    const checkFlag = async () => {
+      try {
+        const flags = await getFeatureFlags();
+        setIsEnabled(flags.auctions ?? false);
+      } catch (e) {
+        console.error('Failed to fetch feature flags:', e);
+      }
+    };
+    checkFlag();
+  }, []);
+
+  useEffect(() => {
+    if (!isEnabled) {
+      setLoading(false);
+      return;
+    }
     Promise.all([reload(), adminClient.get('/events').then((r) => setChannels(r.data))]).finally(
       () => setLoading(false),
     );
-  }, []);
+  }, [isEnabled]);
 
   const channelName = (id: string | null | undefined) =>
     id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
@@ -201,6 +219,15 @@ export default function AdminAuctions() {
   };
 
   if (loading) return <LoadingSpinner />;
+
+  if (!isEnabled) {
+    return (
+      <div>
+        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <p className="font-body text-sm text-off-white/55">Auctions are not currently enabled.</p>
+      </div>
+    );
+  }
 
   return (
     <div>

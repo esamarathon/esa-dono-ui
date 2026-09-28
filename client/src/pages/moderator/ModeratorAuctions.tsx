@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import moderatorClient from '../../api/moderator';
+import { getFeatureFlags } from '../../api/featureFlags';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -84,11 +85,28 @@ export default function ModeratorAuctions() {
   const [bidsFor, setBidsFor] = useState<Auction | null>(null);
   const [bids, setBids] = useState<AuctionBid[]>([]);
   const { channels, selectedChannelId } = useModeratorChannelFilter();
+  const [isEnabled, setIsEnabled] = useState(true);
 
   const reload = () => moderatorClient.get('/auctions').then((r) => setAuctions(r.data));
   useEffect(() => {
-    reload().finally(() => setLoading(false));
+    const checkFlag = async () => {
+      try {
+        const flags = await getFeatureFlags();
+        setIsEnabled(flags.auctions ?? false);
+      } catch (e) {
+        console.error('Failed to fetch feature flags:', e);
+      }
+    };
+    checkFlag();
   }, []);
+
+  useEffect(() => {
+    if (!isEnabled) {
+      setLoading(false);
+      return;
+    }
+    reload().finally(() => setLoading(false));
+  }, [isEnabled]);
 
   const channelName = (id: string | null | undefined) =>
     id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
@@ -192,6 +210,15 @@ export default function ModeratorAuctions() {
   };
 
   if (loading) return <LoadingSpinner />;
+
+  if (!isEnabled) {
+    return (
+      <div>
+        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <p className="font-body text-sm text-off-white/55">Auctions are not currently enabled.</p>
+      </div>
+    );
+  }
 
   return (
     <div>
