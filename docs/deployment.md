@@ -272,6 +272,7 @@ This creates:
 - Moderator account (role: MODERATOR, email_verified: true)
 - Admin account (role: ADMIN, email_verified: true)
 - Broadcast banner showing current MODERATOR_API_KEY and ADMIN_API_KEY from .env
+- One **active Event** with an active **primary Channel**. The seed reuses the first Event (the migration creates `default-event`) and its earliest active Channel, or creates "Main Channel". This is why donations route without any setup (ADR-0008)
 
 The seed is idempotent — running it multiple times updates existing records
 safely. Accounts and banner survive database restarts, including staging's daily
@@ -285,6 +286,17 @@ create a new migration during development:
 ```bash
 cd server && npx prisma migrate dev --name <name> && npx prisma generate && cd ..
 ```
+
+**Migrations that need a reset.** `20260928211407_event_channel_identity` (#114)
+switches ids to UUIDs and adds Event, slugs and a primary Channel. It applies to an
+existing database: existing Channels are attached to a default Event and get
+`channel-<id>` slugs. But only new rows get UUIDs. Reset dev and staging so that
+every id is a UUID:
+
+- **Local:** `cd server && npx prisma migrate reset`. This drops the database,
+  reapplies every migration and runs the seed.
+- **Staging:** `scripts/reset-demo.sh`. This drops the volume, migrates, runs
+  `seed-dev.sh`, then `prisma/seed.ts`.
 
 ### Rollback
 
