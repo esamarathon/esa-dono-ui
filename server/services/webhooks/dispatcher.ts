@@ -21,6 +21,9 @@ export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** AMQP connection-establishment timeout (TCP connect + handshake). */
+const AMQP_CONNECT_TIMEOUT_MS = 10_000;
+
 type DeliveryWithDestination = WebhookDelivery & { destination: WebhookDestination };
 
 /** Result of one delivery attempt; `ok` distinguishes success from endpoint failure. */
@@ -137,7 +140,9 @@ async function amqpPublish(
   try {
     if (!cached) {
       const { connect } = await import('amqplib');
-      const connection = await connect(url);
+      // Without a connect timeout, an unreachable broker host hangs until the OS
+      // TCP timeout (~2 min) while holding this destination's drain.
+      const connection = await connect(url, { timeout: AMQP_CONNECT_TIMEOUT_MS });
       const channel = await connection.createConfirmChannel();
       cached = { connection, channel };
       amqpCache.set(dest.id, cached);

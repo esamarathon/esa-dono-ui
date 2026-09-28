@@ -19,6 +19,17 @@
 #     BASE       backend base URL (default http://localhost:3001)
 #     CLIENT     frontend base URL for magic links (default http://localhost:5173)
 #     ADMIN_KEY  admin API key (default $ADMIN_API_KEY or "change-me")
+#
+# Optional: a RabbitMQ Destination, so the demo also publishes webhook messages
+# (staging points it at its RabbitMQ container). Created only when set:
+#   SEED_RABBITMQ_URL          amqp://user:pass@host:5672 (never printed)
+#   SEED_RABBITMQ_EXCHANGE     default "tiltify"
+#   SEED_RABBITMQ_ROUTING_KEY  default "dono-platform.donation"
+#   SEED_RABBITMQ_DESCRIPTION  default "MQ Server"
+#
+# Secrets are not printed: output often lands in logs (the nightly reset runs
+# under systemd, so it goes to the journal). The admin key is masked, and the
+# demo wallet magic links are shown only on an interactive terminal.
 set -e
 
 BASE=${1:-http://localhost:3001}
@@ -27,7 +38,9 @@ KEY=${3:-${ADMIN_API_KEY:-change-me}}
 
 AUTH="Authorization: Bearer key_admin_$KEY"
 
-echo "==> Seeding $BASE (admin key: $KEY)"
+# Never print a secret: show only enough to tell keys apart.
+mask() { printf '%s…' "${1:0:4}"; }
+echo "==> Seeding $BASE (admin key: $(mask "$KEY"))"
 
 # Wait for server to be ready
 echo -n "Waiting for server..."
@@ -201,6 +214,24 @@ G3=$(curl -sf -X POST $BASE/api/admin/goals \
 
 echo "   Goals: $G1 $G2 $G3"
 
+# --- Webhook destination (optional) ---
+# Before the donations below, so they are published to it.
+if [ -n "${SEED_RABBITMQ_URL:-}" ]; then
+  echo "==> Creating RabbitMQ destination..."
+  MQ_BODY=$(jq -n \
+    --arg url "$SEED_RABBITMQ_URL" \
+    --arg exchange "${SEED_RABBITMQ_EXCHANGE:-tiltify}" \
+    --arg key "${SEED_RABBITMQ_ROUTING_KEY:-dono-platform.donation}" \
+    --arg description "${SEED_RABBITMQ_DESCRIPTION:-MQ Server}" \
+    '{destination_type:"RABBITMQ", url:"", amqp_url:$url, amqp_exchange:$exchange,
+      amqp_routing_key:$key, description:$description,
+      event_types:["donation.created","donation.moderated","incentive.created",
+                   "incentive.enabled","incentive.disabled","incentive.value_changed"]}')
+  D_MQ=$(curl -sf -X POST $BASE/api/admin/destinations \
+    -H "Content-Type: application/json" -H "$AUTH" -d "$MQ_BODY" | jq -r .id)
+  echo "   Destination: $D_MQ (${SEED_RABBITMQ_DESCRIPTION:-MQ Server} -> ${SEED_RABBITMQ_EXCHANGE:-tiltify} / ${SEED_RABBITMQ_ROUTING_KEY:-dono-platform.donation})"
+fi
+
 # --- Donations (creates donors) ---
 # Uses /api/admin/simulate-donation (rather than a raw webhook payload) so
 # each donation can carry a channel_id, giving the admin dashboard's
@@ -279,6 +310,12 @@ echo "Rewards:      $R_THANKS (shared), $R_DISC (shared), $R_SHIRT (Main), $R_GA
 echo "Auctions:     $A_SHARED (shared), $A_STREAM (Bonus) — all with test images, no bids (needs verified-email donor)"
 echo "Polls:        $P1 (Main), $P2 (Bonus), $P3 (shared)"
 echo "Goals:        $G1 (Bonus), $G2 (shared), $G3 (shared)"
-echo "Alice wallet: $CLIENT/api/auth/magic?token=$ALICE"
-echo "Dave wallet:  $CLIENT/api/auth/magic?token=$DAVE"
-echo "Admin panel:  $CLIENT/admin  (key: $KEY)"
+if [ -n "${D_MQ:-}" ]; then echo "Destination:  $D_MQ (RabbitMQ)"; fi
+# Magic links are session credentials: only show them to a person at a terminal.
+if [ -t 1 ]; then
+  echo "Alice wallet: $CLIENT/api/auth/magic?token=$ALICE"
+  echo "Dave wallet:  $CLIENT/api/auth/magic?token=$DAVE"
+else
+  echo "Wallets:      Alice and Dave (magic links hidden: not a terminal)"
+fi
+echo "Admin panel:  $CLIENT/admin  (key: $(mask "$KEY"))"

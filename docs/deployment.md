@@ -76,10 +76,13 @@ npm run dev
 BASE=http://localhost:3001 ./seed-dev.sh
 ```
 
-> **Note:** `seed-dev.sh` predates the current auth transport and uses the
-> deprecated `?token=` query param for some spend calls, so those steps may
-> fail. Use the admin UI (`/admin/simulate`) or the curl commands below
-> instead. It is retained for reference only.
+`seed-dev.sh` creates two Channels (`main-marathon`, `bonus-stream`), incentives,
+donations, claims, votes and contributions over the admin and donor APIs
+(bearer auth). Set `SEED_RABBITMQ_URL` (and optionally `SEED_RABBITMQ_EXCHANGE`,
+`SEED_RABBITMQ_ROUTING_KEY`, `SEED_RABBITMQ_DESCRIPTION`) to also create a
+RabbitMQ Destination before the donations, so they are published. The script
+does not print secrets: the admin key is masked, the AMQP URL is never
+shown, and the demo wallet magic links appear only on an interactive terminal.
 
 ### 6. Tests / typecheck / lint
 
