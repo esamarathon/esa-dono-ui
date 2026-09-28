@@ -6,6 +6,8 @@ import {
   backoffSeconds,
   drainDestination,
   sweepRetention,
+  wakeDispatcher,
+  startWebhookDispatcher,
 } from '../../../services/webhooks/dispatcher.js';
 
 const amqpMocks = vi.hoisted(() => ({ connect: vi.fn() }));
@@ -430,5 +432,86 @@ describe('webhook dispatcher', () => {
     const remainingAfterDay = afterDay.map((r) => r.id);
     expect(remainingAfterDay).not.toContain(failed.id);
     expect(remainingAfterDay).toContain(pending.id);
+  });
+
+  it('wakeDispatcher() with no argument drains every active destination', async () => {
+    const capture = await startCaptureServer(200);
+    const a = await createDestination({ url: capture.url });
+    const b = await createDestination({ url: capture.url });
+    const paused = await createDestination({ url: capture.url, is_active: false });
+    const rows = [
+      await createDelivery(a.id, 1, { payload: JSON.stringify({ d: 'a' }) }),
+      await createDelivery(b.id, 1, { payload: JSON.stringify({ d: 'b' }) }),
+    ];
+    const pausedRow = await createDelivery(paused.id, 1, { payload: JSON.stringify({ d: 'p' }) });
+
+    wakeDispatcher();
+
+    const deadline = Date.now() + 5_000;
+    let statuses: string[] = [];
+    while (Date.now() < deadline) {
+      statuses = (
+        await prisma.webhookDelivery.findMany({ where: { id: { in: rows.map((r) => r.id) } } })
+      ).map((r) => r.status);
+      if (statuses.every((s) => s === 'SUCCESS')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(statuses).toEqual(['SUCCESS', 'SUCCESS']);
+    expect(capture.bodies).not.toContain(JSON.stringify({ d: 'p' }));
+    expect((await prisma.webhookDelivery.findUnique({ where: { id: pausedRow.id } }))!.status).toBe(
+      'PENDING',
+    );
+
+    await close(capture.server);
+  });
+
+  it('startWebhookDispatcher starts the safety tick and retention sweep, and stop() clears them', () => {
+    const env = process.env.NODE_ENV;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      expect(startWebhookDispatcher()).toBeDefined(); // no-op under NODE_ENV=test
+      expect(vi.getTimerCount()).toBe(0);
+
+      process.env.NODE_ENV = 'development';
+      const dispatcher = startWebhookDispatcher();
+      expect(vi.getTimerCount()).toBe(2);
+      dispatcher.stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      process.env.NODE_ENV = env;
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconnects after the cached AMQP connection closes', async () => {
+    const handlers: Record<string, () => void> = {};
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockImplementation(async () => ({
+      on: (event: string, fn: () => void) => (handlers[event] = fn),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    }));
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+
+    await createDelivery(dest.id, 1);
+    await drainDestination(dest.id);
+    await createDelivery(dest.id, 2);
+    await drainDestination(dest.id);
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(1); // connection reused
+
+    handlers.close!(); // broker drops the connection
+    await createDelivery(dest.id, 3);
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(3);
   });
 });
