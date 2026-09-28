@@ -62,9 +62,17 @@ vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
 }));
 
+// The outbox runs the route's change against the mocked prisma client; emits are
+// recorded but queue nothing. Delivery itself is covered in services/webhooks tests.
+const outbox = vi.hoisted(() => ({ emit: vi.fn() }));
+vi.mock('../../services/webhooks/outbox.js', async () => {
+  const { default: db } = await import('../../lib/prisma.js');
+  return { withWebhooks: vi.fn(async (fn: any) => fn(db, outbox.emit)) };
+});
+vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
+
 vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/webhooks/delivery.js')>()),
-  emitWebhookMessage: vi.fn(),
   buildIncentiveCreatedPayload: vi.fn(() => ({
     id: 'x',
     type: 'incentive.created',

@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
-import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
-import { emitWebhookMessage, buildDonationCreatedPayload } from './webhooks/delivery.js';
+import { buildDonationCreatedPayload } from './webhooks/delivery.js';
+import { withWebhooks } from './webhooks/outbox.js';
 import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
@@ -94,7 +94,7 @@ async function processDonationInner({
     pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
   } | null = null;
   try {
-    result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
@@ -127,12 +127,17 @@ async function processDonationInner({
       });
 
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
+      // The donation's channel: a fulfilled pledge's channel wins (see update below).
+      let routedChannelId: string | null = channelId ?? null;
       try {
-        const pledge = await resolvePledge({
-          pledgeToken,
-          email: normalizedEmail,
-          amountCents,
-        });
+        const pledge = await resolvePledge(
+          {
+            pledgeToken,
+            email: normalizedEmail,
+            amountCents,
+          },
+          tx,
+        );
         if (pledge) {
           pledgeResult = await fulfillPledge(tx, pledge, donor.id);
           await tx.donation.update({
@@ -144,10 +149,21 @@ async function processDonationInner({
               ...(pledge.channel_id ? { channel_id: pledge.channel_id } : {}),
             },
           });
+          if (pledge.channel_id) routedChannelId = pledge.channel_id;
         }
       } catch (pledgeErr) {
         console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
       }
+
+      await emit('donation.created', () =>
+        buildDonationCreatedPayload({
+          donationId: donation.id,
+          externalId,
+          amountCents,
+          channelId: routedChannelId,
+          donorRef: donor.id,
+        }),
+      );
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
         console.error('Email error:', err),
@@ -161,17 +177,6 @@ async function processDonationInner({
     }
     throw err;
   }
-
-  emitWebhookMessage(
-    'donation.created',
-    buildDonationCreatedPayload({
-      donationId: result!.donation.id,
-      externalId,
-      amountCents,
-      channelId: channelId ?? null,
-      donorRef: result!.donor.id,
-    }),
-  );
 
   return {
     donor: result!.donor,

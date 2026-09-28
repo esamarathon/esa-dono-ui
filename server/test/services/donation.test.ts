@@ -2,7 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockTxDonor = { upsert: vi.fn() };
 const mockTxDonation = { create: vi.fn() };
-const mockTx = { donor: mockTxDonor, donation: mockTxDonation };
+// No webhook destinations: the donation.created emit inside the transaction queues nothing.
+const mockTxWebhookDestination = { findMany: vi.fn().mockResolvedValue([]) };
+// Pledge resolution runs on the transaction client: no matching pledge by default.
+const mockTxPendingPledge = {
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+};
+const mockTx = {
+  donor: mockTxDonor,
+  donation: mockTxDonation,
+  pendingPledge: mockTxPendingPledge,
+  webhookDestination: mockTxWebhookDestination,
+};
 
 vi.mock('../../lib/prisma.js', () => ({
   default: {
@@ -29,10 +41,9 @@ describe('processDonation', () => {
     vi.clearAllMocks();
     vi.resetModules();
     process.env.MODERATOR_EMAILS = '';
-    // Make pledge resolution return null (no pledge) by default
-    const prisma = (await import('../../lib/prisma.js')).default;
-    vi.mocked(prisma.pendingPledge.findUnique).mockResolvedValue(null);
-    vi.mocked(prisma.pendingPledge.findFirst).mockResolvedValue(null);
+    mockTxPendingPledge.findUnique.mockResolvedValue(null);
+    mockTxPendingPledge.findFirst.mockResolvedValue(null);
+    mockTxWebhookDestination.findMany.mockResolvedValue([]);
   });
 
   it('creates donor and donation for first-time donor', async () => {

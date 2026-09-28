@@ -190,7 +190,10 @@ async function amqpPublish(
       clearTimeout(timer);
     }
   } catch (err) {
-    amqpCache.delete(dest.id);
+    // A failed connect/publish/confirm leaves the connection unusable: drop and
+    // close it so the next attempt reconnects instead of leaking a socket.
+    if (cached && amqpCache.get(dest.id) === cached) amqpCache.delete(dest.id);
+    await cached?.connection.close().catch(() => {});
     return { ok: false, statusCode: 0, error: (err as Error).message };
   }
 }
@@ -269,6 +272,7 @@ async function drainOnce(destinationId: string): Promise<void> {
         where: { id: delivery.id },
         data: {
           status: 'SUCCESS',
+          attempts: delivery.attempts + 1,
           last_status_code: result.statusCode,
           last_error: null,
         },

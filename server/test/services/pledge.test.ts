@@ -599,6 +599,50 @@ describe('Pledge Service', () => {
       await prisma.reward.delete({ where: { id: reward.id } });
     }, 10000);
 
+    it("queues donation.created in the same transaction, with the pledge's channel", async () => {
+      // The emit used to run after commit with the caller's channelId (null for a
+      // Stripe webhook), so pledge-routed donations were published with no channel.
+      const dest = await prisma.webhookDestination.create({
+        data: {
+          url: 'http://127.0.0.1:1/hook',
+          secret: 's',
+          event_types: JSON.stringify(['donation.created']),
+        },
+      });
+      const { pledge_token } = await createPledge({
+        email: 'outbox-channel@example.com',
+        items: [],
+        top_up_cents: 500,
+        channel_id: channelId,
+      });
+
+      await processDonation({
+        externalId: `test-${crypto.randomUUID()}`,
+        email: 'outbox-channel@example.com',
+        donorName: 'Test',
+        amountCents: 500,
+        pledgeToken: pledge_token,
+      });
+
+      const donor = await prisma.donor.findUnique({
+        where: { email: 'outbox-channel@example.com' },
+      });
+      const donation = await prisma.donation.findFirstOrThrow({ where: { donor_id: donor!.id } });
+      const rows = await prisma.webhookDelivery.findMany({ where: { destination_id: dest.id } });
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row!.status).toBe('PENDING');
+      const payload = JSON.parse(row!.payload);
+      expect(row!.message_id).toBe(payload.id);
+      expect(payload.data).toMatchObject({ donation_id: donation.id, channel_id: channelId });
+
+      await prisma.webhookDelivery.deleteMany({ where: { destination_id: dest.id } });
+      await prisma.webhookDestinationSeq.deleteMany({ where: { destination_id: dest.id } });
+      await prisma.webhookDestination.delete({ where: { id: dest.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
+    }, 10000);
+
     it('fulfills a reward pledge with quantity > 1, creating one RewardClaim per unit and charging cost_cents * quantity (#50)', async () => {
       const reward = await prisma.reward.create({
         data: { title: 'Bulk Reward', type: 'DIGITAL', cost_cents: 500, quantity_total: 10 },

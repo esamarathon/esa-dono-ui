@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import prisma from '../../lib/prisma.js';
+import type { Prisma } from '@prisma/client';
 
 export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
@@ -119,81 +119,78 @@ export type WebhookPayload =
   | WebhookPayloadIncentiveDisabled
   | WebhookPayloadIncentiveValueChanged;
 
-function nextSeq(endpointId: string): Promise<number> {
-  return prisma.$transaction(async (tx) => {
-    const row = await tx.webhookDestinationSeq.upsert({
-      where: { destination_id: endpointId },
-      create: { destination_id: endpointId, seq: 1 },
-      update: { seq: { increment: 1 } },
-    });
-    return row.seq;
-  });
-}
-
 export function signPayload(secret: string, timestamp: number, body: string): string {
   const sig = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
   return `t=${timestamp},v1=${sig}`;
 }
 
-async function insertDeliveries(
-  endpointIds: string[],
-  messageType: WebhookMessageType,
-  payload: object,
-): Promise<void> {
-  const body = JSON.stringify(payload);
-  await Promise.all(
-    endpointIds.map(async (endpointId) => {
-      const seq = await nextSeq(endpointId);
-      await prisma.webhookDelivery.create({
-        data: {
-          destination_id: endpointId,
-          seq,
-          message_type: messageType,
-          payload: body,
-          status: 'PENDING',
-          next_attempt_at: new Date(),
-        },
-      });
-    }),
-  );
-}
+/** A Prisma client or interactive-transaction client. Emits must use the caller's `tx`. */
+export type WebhookTx = Prisma.TransactionClient;
 
+/**
+ * Queue one webhook message for every active Destination subscribed to
+ * `messageType`, inside the caller's transaction (PRD-0002 §Q7): the delivery rows
+ * and their per-Destination `seq` commit or roll back with the change that caused
+ * them, so `seq` follows commit order.
+ *
+ * `build` produces the payload. If it throws, the rows are still written, as
+ * FAILED with an empty payload and the error in `last_error`, instead of throwing
+ * into (and rolling back) the caller's transaction (§Q2). Database errors do
+ * propagate: they are part of the transaction.
+ *
+ * Returns the ids of the Destinations that received a row, so the caller can wake
+ * them after commit. Prefer `withWebhooks()` from `./outbox.js`, which does that.
+ */
 export async function emitWebhookMessage(
+  tx: WebhookTx,
   messageType: WebhookMessageType,
-  payload:
-    | WebhookPayloadDonationCreated
-    | WebhookPayloadDonationModerated
-    | WebhookPayloadIncentiveCreated
-    | WebhookPayloadIncentiveEnabled
-    | WebhookPayloadIncentiveDisabled
-    | WebhookPayloadIncentiveValueChanged,
-): Promise<void> {
+  build: () => WebhookPayload,
+): Promise<string[]> {
+  const destinations = await tx.webhookDestination.findMany({
+    where: { is_active: true },
+    select: { id: true, event_types: true },
+  });
+  const subscribed = destinations.filter((d) => {
+    try {
+      return (JSON.parse(d.event_types) as unknown[]).includes(messageType);
+    } catch {
+      return false;
+    }
+  });
+  if (subscribed.length === 0) return [];
+
+  let body = '';
+  let messageId: string = crypto.randomUUID();
+  let buildError: string | null = null;
   try {
-    const endpoints = await prisma.webhookDestination.findMany({
-      where: {
-        is_active: true,
+    const payload = build();
+    body = JSON.stringify(payload);
+    messageId = payload.id;
+  } catch (err) {
+    buildError = `payload build failed: ${(err as Error).message}`;
+    console.error(`[webhooks] ${messageType} ${buildError}`);
+  }
+
+  for (const { id } of subscribed) {
+    const { seq } = await tx.webhookDestinationSeq.upsert({
+      where: { destination_id: id },
+      create: { destination_id: id, seq: 1 },
+      update: { seq: { increment: 1 } },
+    });
+    await tx.webhookDelivery.create({
+      data: {
+        destination_id: id,
+        seq,
+        message_id: messageId,
+        message_type: messageType,
+        payload: body,
+        status: buildError ? 'FAILED' : 'PENDING',
+        last_error: buildError,
+        next_attempt_at: new Date(),
       },
     });
-
-    const subscribed = endpoints.filter((ep) => {
-      try {
-        const types: string[] = JSON.parse(ep.event_types);
-        return types.includes(messageType);
-      } catch {
-        return false;
-      }
-    });
-
-    if (subscribed.length === 0) return;
-
-    await insertDeliveries(
-      subscribed.map((ep) => ep.id),
-      messageType,
-      payload,
-    );
-  } catch (err) {
-    console.error('[webhooks] emit error:', err);
   }
+  return subscribed.map((d) => d.id);
 }
 
 export function buildDonationCreatedPayload(opts: {
