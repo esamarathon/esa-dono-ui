@@ -359,12 +359,14 @@ model WebhookDestinationSeq {
 model WebhookDelivery {
   id               String          @id @default(cuid())
   seq              Int             @default(0)
+  // One id per webhook message, shared by every Destination's row for that
+  // message and stable across retries. Sent as the AMQP messageId (PRD-0002 §Q9).
+  message_id       String          @default(uuid())
   destination_id   String
   message_type     String             @map("event_type")
   payload          String
   status           String          @default("PENDING") // PENDING | SUCCESS | FAILED
   attempts         Int             @default(0)
-  max_attempts     Int             @default(5)
   next_attempt_at  DateTime        @default(now())
   last_status_code Int?
   last_error       String?
@@ -373,6 +375,7 @@ model WebhookDelivery {
   destination      WebhookDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
 
   @@unique([destination_id, seq])
+  @@index([status, updated_at])
   @@map("WebhookDelivery")
 }
 

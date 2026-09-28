@@ -8,6 +8,9 @@ const TICK_INTERVAL_MS = 15_000;
 const BASE_BACKOFF_MIN = 1;
 const MAX_BACKOFF_MIN = 60;
 const REQUEST_TIMEOUT_MS = 10_000;
+// Temporary: WebhookDelivery.max_attempts was dropped; the retry policy is
+// replaced in the #109 dispatcher rewrite.
+const MAX_ATTEMPTS = 5;
 
 type DeliveryResult = { statusCode: number; error?: string };
 
@@ -176,7 +179,7 @@ export async function processDestination(destinationId: string): Promise<void> {
   }
 
   const newAttempts = delivery.attempts + 1;
-  if (newAttempts >= delivery.max_attempts) {
+  if (newAttempts >= MAX_ATTEMPTS) {
     await prisma.webhookDelivery.update({
       where: { id: delivery.id },
       data: {

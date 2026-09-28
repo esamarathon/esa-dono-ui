@@ -171,7 +171,7 @@ describe('webhook dispatcher', () => {
         message_type: 'donation.created',
         payload: '{}',
         status: 'PENDING',
-        max_attempts: 1,
+        attempts: 4,
         next_attempt_at: new Date(),
       },
     });
