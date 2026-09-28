@@ -1811,6 +1811,57 @@ paths:
                       $ref: '#/components/schemas/WebhookDelivery'
                   total: { type: integer }
 
+  /admin/destinations/{id}/deliveries/{deliveryId}/requeue:
+    post:
+      tags: [Admin]
+      summary: Requeue a single FAILED delivery
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: deliveryId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Delivery requeued at its original queue position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDelivery'
+        '404':
+          description: Delivery not found
+        '409':
+          description: Delivery is not FAILED, or was never built
+
+  /admin/destinations/{id}/requeue-failed:
+    post:
+      tags: [Admin]
+      summary: Requeue every retained FAILED delivery for an endpoint
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Number of deliveries requeued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requeued: { type: integer }
+                  skipped_unbuilt:
+                    type: integer
+                    description: FAILED rows whose payload was never built; they stay FAILED
+        '404':
+          description: Endpoint not found
+
   /admin/destinations/{id}/test:
     post:
       tags: [Admin]
@@ -2927,14 +2978,14 @@ components:
       properties:
         id: { type: string }
         seq: { type: integer }
-        endpoint_id: { type: string }
+        message_id: { type: string }
+        destination_id: { type: string }
         event_type: { type: string }
         payload: { type: string }
         status:
           type: string
           enum: [PENDING, SUCCESS, FAILED]
         attempts: { type: integer }
-        max_attempts: { type: integer }
         next_attempt_at: { type: string, format: date-time }
         last_status_code: { type: integer, nullable: true }
         last_error: { type: string, nullable: true }

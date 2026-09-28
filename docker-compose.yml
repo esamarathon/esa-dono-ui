@@ -32,6 +32,8 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Outbound webhooks: RabbitMQ publisher-confirm timeout (ms). Default 10000.
+      - WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS=${WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS:-10000}
       # OAuth sign-in (Google / Discord / Twitch). Leave empty to disable.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}

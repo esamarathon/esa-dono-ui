@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   deleteDestination: vi.fn(),
   getDestinationDeliveries: vi.fn(),
   testDestination: vi.fn(),
+  requeueDelivery: vi.fn(),
+  requeueFailedDeliveries: vi.fn(),
 }));
 
 vi.mock('../../src/api/admin', () => mocks);
@@ -30,6 +32,20 @@ const endpoint = {
   amqp_url: null,
   amqp_exchange: '',
   amqp_routing_key: null,
+};
+
+const failedDelivery = {
+  id: 'del-failed',
+  seq: 2,
+  message_id: 'msg-2',
+  event_type: 'donation.created',
+  status: 'FAILED',
+  attempts: 3,
+  next_attempt_at: '2026-01-01T00:01:00Z',
+  last_status_code: 500,
+  last_error: 'boom',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:01:00Z',
 };
 
 describe('AdminDestinations', () => {
@@ -210,6 +226,80 @@ describe('AdminDestinations', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'delete' }));
 
     await waitFor(() => expect(mocks.deleteDestination).toHaveBeenCalledWith('ep-1'));
+    vi.unstubAllGlobals();
+  });
+
+  it('requeues a single FAILED delivery', async () => {
+    vi.stubGlobal('alert', vi.fn());
+    mocks.getDestinations.mockResolvedValue([endpoint]);
+    mocks.getDestinationDeliveries.mockResolvedValue({
+      deliveries: [failedDelivery],
+      total: 1,
+    });
+    mocks.requeueDelivery.mockResolvedValue({ ...failedDelivery, status: 'PENDING', attempts: 0 });
+
+    render(
+      <MemoryRouter>
+        <AdminDestinations />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'log' }));
+    const requeue = await screen.findByTitle('Re-send at its original queue position');
+    fireEvent.click(requeue);
+
+    await waitFor(() => expect(mocks.requeueDelivery).toHaveBeenCalledWith('ep-1', 'del-failed'));
+    vi.unstubAllGlobals();
+  });
+
+  it('shows requeue all failed only when a FAILED delivery exists', async () => {
+    vi.stubGlobal('alert', vi.fn());
+    mocks.getDestinations.mockResolvedValue([endpoint]);
+    mocks.getDestinationDeliveries.mockResolvedValue({
+      deliveries: [
+        {
+          ...failedDelivery,
+          id: 'del-success',
+          seq: 1,
+          status: 'SUCCESS',
+          attempts: 1,
+        },
+      ],
+      total: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <AdminDestinations />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'log' }));
+    expect(await screen.findByText('SUCCESS')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'requeue all failed' })).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('requeues all failed deliveries', async () => {
+    vi.stubGlobal('alert', vi.fn());
+    mocks.getDestinations.mockResolvedValue([endpoint]);
+    mocks.getDestinationDeliveries.mockResolvedValue({
+      deliveries: [failedDelivery],
+      total: 1,
+    });
+    mocks.requeueFailedDeliveries.mockResolvedValue({ requeued: 1, skipped_unbuilt: 0 });
+
+    render(
+      <MemoryRouter>
+        <AdminDestinations />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'log' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'requeue all failed' }));
+
+    await waitFor(() => expect(mocks.requeueFailedDeliveries).toHaveBeenCalledWith('ep-1'));
     vi.unstubAllGlobals();
   });
 });

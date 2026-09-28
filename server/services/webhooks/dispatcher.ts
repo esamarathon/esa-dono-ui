@@ -4,19 +4,33 @@ import https from 'https';
 import prisma from '../../lib/prisma.js';
 import { signPayload } from './delivery.js';
 
-const TICK_INTERVAL_MS = 15_000;
-const BASE_BACKOFF_MIN = 1;
-const MAX_BACKOFF_MIN = 60;
+/** Retry delays in seconds, indexed by attempt count after the failure (1-based). */
+export const BACKOFF_SECONDS = [5, 15, 60, 180] as const;
+
+/** Safety-net wake interval for destinations missed by an explicit wake. */
+export const SAFETY_TICK_MS = 5_000;
+
+/** Retention sweep interval. */
+export const RETENTION_SWEEP_MS = 60_000;
+
+/** SUCCESS rows are deleted after this age (PRD-0002 §Q10). */
+export const SUCCESS_RETENTION_MS = 2 * 60 * 60 * 1000;
+
+/** FAILED rows are deleted after this age (PRD-0002 §Q10). */
+export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 const REQUEST_TIMEOUT_MS = 10_000;
 
-type DeliveryResult = { statusCode: number; error?: string };
+type DeliveryWithDestination = WebhookDelivery & { destination: WebhookDestination };
 
-export function backoffMinutes(attempts: number): number {
-  return Math.min(BASE_BACKOFF_MIN * Math.pow(2, attempts), MAX_BACKOFF_MIN);
-}
+/** Result of one delivery attempt; `ok` distinguishes success from endpoint failure. */
+type AttemptResult = { ok: boolean; statusCode: number; error?: string };
 
-function now(): Date {
-  return new Date();
+/** Delay before retry number `attempts` (attempts counted AFTER the failure: 1 = first failure). */
+export function backoffSeconds(attempts: number): number {
+  if (attempts <= 0) return 5;
+  const index = Math.min(attempts, BACKOFF_SECONDS.length) - 1;
+  return BACKOFF_SECONDS[index] ?? 180;
 }
 
 async function httpPost(
@@ -26,7 +40,7 @@ async function httpPost(
   verifySsl: boolean,
   deliveryId: string,
   messageType: string,
-): Promise<DeliveryResult> {
+): Promise<AttemptResult> {
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = signPayload(secret, timestamp, body);
 
@@ -56,12 +70,13 @@ async function httpPost(
 
     const req = mod.request(options, (res) => {
       clearTimeout(timeout);
-      resolve({ statusCode: res.statusCode ?? 0 });
+      const statusCode = res.statusCode ?? 0;
+      resolve({ ok: statusCode >= 200 && statusCode < 300, statusCode });
     });
 
     req.on('error', (err) => {
       clearTimeout(timeout);
-      resolve({ statusCode: 0, error: err.message });
+      resolve({ ok: false, statusCode: 0, error: err.message });
     });
 
     req.write(body);
@@ -69,19 +84,53 @@ async function httpPost(
   });
 }
 
-const amqpCache = new Map<
-  string,
-  { connection: import('amqplib').ChannelModel; channel: import('amqplib').ConfirmChannel }
->();
+type AmqpEntry = {
+  connection: import('amqplib').ChannelModel;
+  channel: import('amqplib').ConfirmChannel;
+};
+
+const amqpCache = new Map<string, AmqpEntry>();
+
+/** Publisher-confirm timeout in milliseconds, read at call time so tests can override it. */
+function amqpConfirmTimeoutMs(): number {
+  return Number(process.env.WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS) || 10_000;
+}
+
+/** Add the 30 s heartbeat query parameter unless the URL already sets one. */
+function withHeartbeat(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has('heartbeat')) parsed.searchParams.set('heartbeat', '30');
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** Evict the cached AMQP entry when its connection or channel errors or closes. */
+function registerAmqpEviction(destinationId: string, entry: AmqpEntry): void {
+  const evict = (): void => {
+    if (amqpCache.get(destinationId) === entry) amqpCache.delete(destinationId);
+  };
+  const onError = (err: unknown): void => {
+    console.error('[webhookDispatcher] AMQP error:', err);
+    evict();
+  };
+  entry.connection.on('error', onError);
+  entry.connection.on('close', evict);
+  entry.channel.on('error', onError);
+  entry.channel.on('close', evict);
+}
 
 async function amqpPublish(
   dest: WebhookDestination,
   deliveryId: string,
+  messageId: string,
   messageType: string,
   body: string,
-): Promise<DeliveryResult> {
-  const url = dest.amqp_url!;
-  const routingKey = dest.amqp_routing_key ?? '';
+): Promise<AttemptResult> {
+  const url = withHeartbeat(dest.amqp_url!);
+  const routingKey = dest.amqp_routing_key!;
 
   let cached = amqpCache.get(dest.id);
 
@@ -92,6 +141,7 @@ async function amqpPublish(
       const channel = await connection.createConfirmChannel();
       cached = { connection, channel };
       amqpCache.set(dest.id, cached);
+      registerAmqpEviction(dest.id, cached);
     }
 
     const { channel } = cached;
@@ -101,40 +151,69 @@ async function amqpPublish(
       'x-webhook-delivery': deliveryId,
     };
 
-    await new Promise<void>((resolve, reject) => {
-      channel.publish(
-        dest.amqp_exchange || '',
-        routingKey,
-        Buffer.from(body),
-        {
-          persistent: true,
-          contentType: 'application/json',
-          messageId: deliveryId,
-          type: messageType,
-          headers,
-        },
-        (err: Error | null) => {
-          if (err) reject(err);
-          else resolve();
-        },
-      );
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), amqpConfirmTimeoutMs());
     });
 
-    return { statusCode: 200 };
+    try {
+      const outcome = await Promise.race([
+        new Promise<'confirmed'>((resolve, reject) => {
+          channel.publish(
+            dest.amqp_exchange || '',
+            routingKey,
+            Buffer.from(body),
+            {
+              persistent: true,
+              contentType: 'application/json',
+              messageId,
+              type: messageType,
+              headers,
+            },
+            (err: Error | null) => {
+              if (err) reject(err);
+              else resolve('confirmed');
+            },
+          );
+        }),
+        timeout,
+      ]);
+
+      if (outcome === 'timeout') {
+        amqpCache.delete(dest.id);
+        await cached.connection.close().catch(() => {});
+        return { ok: false, statusCode: 0, error: 'AMQP publish confirm timed out' };
+      }
+
+      return { ok: true, statusCode: 200 };
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (err) {
-    amqpCache.delete(dest.id);
-    return { statusCode: 0, error: (err as Error).message };
+    // A failed connect/publish/confirm leaves the connection unusable: drop and
+    // close it so the next attempt reconnects instead of leaking a socket.
+    if (cached && amqpCache.get(dest.id) === cached) amqpCache.delete(dest.id);
+    await cached?.connection.close().catch(() => {});
+    return { ok: false, statusCode: 0, error: (err as Error).message };
   }
 }
 
-async function deliver(
-  delivery: WebhookDelivery & { destination: WebhookDestination },
-): Promise<DeliveryResult> {
+async function deliver(delivery: DeliveryWithDestination): Promise<AttemptResult> {
   if (delivery.destination.destination_type === 'RABBITMQ') {
     if (!delivery.destination.amqp_url || !delivery.destination.amqp_routing_key) {
-      return { statusCode: 0, error: 'RabbitMQ destination missing amqp_url or amqp_routing_key' };
+      return {
+        ok: false,
+        statusCode: 0,
+        error: 'RabbitMQ destination missing amqp_url or amqp_routing_key',
+      };
     }
-    return amqpPublish(delivery.destination, delivery.id, delivery.message_type, delivery.payload);
+    return amqpPublish(
+      delivery.destination,
+      delivery.id,
+      delivery.message_id,
+      delivery.message_type,
+      delivery.payload,
+    );
   }
 
   return httpPost(
@@ -147,73 +226,157 @@ async function deliver(
   );
 }
 
-export async function processDestination(destinationId: string): Promise<void> {
-  const head = await prisma.webhookDelivery.findFirst({
-    where: {
-      destination_id: destinationId,
-      status: 'PENDING',
-      next_attempt_at: { lte: now() },
-    },
-    orderBy: { seq: 'asc' },
-    include: { destination: true },
-  });
-
-  if (!head) return;
-
-  const delivery = head as WebhookDelivery & { destination: WebhookDestination };
-  const result = await deliver(delivery);
-
-  if (result.statusCode >= 200 && result.statusCode < 300) {
-    await prisma.webhookDelivery.update({
-      where: { id: delivery.id },
-      data: {
-        status: 'SUCCESS',
-        last_status_code: result.statusCode,
-        last_error: null,
-      },
-    });
-    return;
+/** Detect a message-class failure without contacting the endpoint (PRD-0002 §Q2). */
+function messageFailureReason(payload: string): string | null {
+  if (payload === '') return 'payload is empty (never built)';
+  try {
+    JSON.parse(payload);
+    return null;
+  } catch {
+    return 'payload is not valid JSON';
   }
-
-  const newAttempts = delivery.attempts + 1;
-  if (newAttempts >= delivery.max_attempts) {
-    await prisma.webhookDelivery.update({
-      where: { id: delivery.id },
-      data: {
-        status: 'FAILED',
-        attempts: newAttempts,
-        last_status_code: result.statusCode,
-        last_error: result.error ?? null,
-      },
-    });
-    return;
-  }
-
-  const backoffMin = backoffMinutes(newAttempts);
-  await prisma.webhookDelivery.update({
-    where: { id: delivery.id },
-    data: {
-      attempts: newAttempts,
-      last_status_code: result.statusCode,
-      last_error: result.error ?? null,
-      next_attempt_at: new Date(Date.now() + backoffMin * 60 * 1000),
-    },
-  });
 }
 
-export function startWebhookDispatcher(): NodeJS.Timeout {
-  if (process.env.NODE_ENV === 'test') return { unref: () => {} } as NodeJS.Timeout;
+/** Send due heads for one destination in `seq` order until the queue stalls or empties. */
+async function drainOnce(destinationId: string): Promise<void> {
+  for (;;) {
+    const head = await prisma.webhookDelivery.findFirst({
+      where: { destination_id: destinationId, status: 'PENDING' },
+      orderBy: { seq: 'asc' },
+      include: { destination: true },
+    });
 
-  return setInterval(async () => {
-    try {
-      const activeDestinations = await prisma.webhookDestination.findMany({
-        where: { is_active: true },
-        select: { id: true },
+    if (!head) return;
+
+    const delivery: DeliveryWithDestination = head;
+    if (!delivery.destination.is_active) return;
+    if (delivery.next_attempt_at.getTime() > Date.now()) return;
+
+    const reason = messageFailureReason(delivery.payload);
+    if (reason) {
+      await prisma.webhookDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          status: 'FAILED',
+          attempts: delivery.attempts + 1,
+          last_status_code: null,
+          last_error: reason,
+        },
       });
-
-      await Promise.all(activeDestinations.map((d) => processDestination(d.id)));
-    } catch (err) {
-      console.error('[webhookDispatcher] tick error:', err);
+      continue;
     }
-  }, TICK_INTERVAL_MS);
+
+    const result = await deliver(delivery);
+    if (result.ok) {
+      await prisma.webhookDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          status: 'SUCCESS',
+          attempts: delivery.attempts + 1,
+          last_status_code: result.statusCode,
+          last_error: null,
+        },
+      });
+      continue;
+    }
+
+    const attempts = delivery.attempts + 1;
+    await prisma.webhookDelivery.update({
+      where: { id: delivery.id },
+      data: {
+        status: 'PENDING',
+        attempts,
+        last_status_code: result.statusCode,
+        last_error: result.error ?? null,
+        next_attempt_at: new Date(Date.now() + backoffSeconds(attempts) * 1000),
+      },
+    });
+    return;
+  }
+}
+
+const inflight = new Map<string, Promise<void>>();
+const rerun = new Set<string>();
+
+/** Drain one destination, single-flight; a wake during a drain schedules one more pass. */
+export function drainDestination(destinationId: string): Promise<void> {
+  const existing = inflight.get(destinationId);
+  if (existing) {
+    rerun.add(destinationId);
+    return existing;
+  }
+
+  const p = (async () => {
+    try {
+      do {
+        rerun.delete(destinationId);
+        await drainOnce(destinationId);
+      } while (rerun.has(destinationId));
+    } finally {
+      inflight.delete(destinationId);
+    }
+  })();
+
+  inflight.set(destinationId, p);
+  return p;
+}
+
+function logDrainError(err: unknown): void {
+  console.error('[webhookDispatcher] drain error:', err);
+}
+
+/** Wake one destination, or every active destination, without awaiting or throwing. */
+export function wakeDispatcher(destinationId?: string): void {
+  if (destinationId) {
+    drainDestination(destinationId).catch(logDrainError);
+    return;
+  }
+
+  prisma.webhookDestination
+    .findMany({ where: { is_active: true }, select: { id: true } })
+    .then((destinations) => {
+      for (const destination of destinations) wakeDispatcher(destination.id);
+    })
+    .catch(logDrainError);
+}
+
+/** Delete delivered rows past retention. `PENDING` rows are never deleted. */
+export async function sweepRetention(
+  now = new Date(),
+): Promise<{ success: number; failed: number }> {
+  const success = await prisma.webhookDelivery.deleteMany({
+    where: {
+      status: 'SUCCESS',
+      updated_at: { lt: new Date(now.getTime() - SUCCESS_RETENTION_MS) },
+    },
+  });
+  const failed = await prisma.webhookDelivery.deleteMany({
+    where: {
+      status: 'FAILED',
+      updated_at: { lt: new Date(now.getTime() - FAILED_RETENTION_MS) },
+    },
+  });
+  return { success: success.count, failed: failed.count };
+}
+
+/** Start the safety-net wake interval and the retention sweep; returns a stop handle. */
+export function startWebhookDispatcher(): { stop(): void } {
+  if (process.env.NODE_ENV === 'test') return { stop() {} };
+
+  wakeDispatcher();
+
+  const safety = setInterval(() => wakeDispatcher(), SAFETY_TICK_MS);
+  safety.unref();
+
+  const retention = setInterval(() => {
+    sweepRetention().catch((err) => console.error('[webhookDispatcher] retention error:', err));
+  }, RETENTION_SWEEP_MS);
+  retention.unref();
+
+  return {
+    stop(): void {
+      clearInterval(safety);
+      clearInterval(retention);
+    },
+  };
 }

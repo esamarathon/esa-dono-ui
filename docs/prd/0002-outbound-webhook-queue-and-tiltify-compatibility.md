@@ -189,7 +189,7 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
 - **M1.** New gauges, labelled `destination_id` and `destination_type`, refreshed on the
   existing `METRICS_REFRESH_MS` (45 s) cycle, sourced from the database:
   `dono_webhook_queue_depth`, `dono_webhook_queue_oldest_pending_age_seconds`,
-  `dono_webhook_queue_failed`, `dono_webhook_destination_last_success_timestamp_seconds`.
+  `dono_webhook_queue_failed`, `dono_webhook_destination_last_success_timestamp_seconds`, and `dono_webhook_destination_active` (0/1, so the stall alert ignores paused Destinations).
 - **M2.** `dono_donations_unassigned` (see §E6).
 - **M3.** Business gauges `dono_donated_cents_total`, `dono_donations_total`,
   `dono_reward_claims_total`, `dono_poll_votes_total` gain `event` and `channel` labels
@@ -199,7 +199,10 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
 
   ```yaml
   - alert: WebhookQueueStalled
-    expr: dono_webhook_queue_depth > 0 and dono_webhook_queue_oldest_pending_age_seconds > 300
+    expr: >
+      dono_webhook_queue_depth > 0
+      and dono_webhook_queue_oldest_pending_age_seconds > 300
+      and on (destination_id) dono_webhook_destination_active == 1
     for: 1m
   - alert: WebhookMessageFailed
     expr: dono_webhook_queue_failed > 0

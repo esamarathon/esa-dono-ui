@@ -7,6 +7,8 @@ import {
   deleteDestination,
   getDestinationDeliveries,
   testDestination,
+  requeueDelivery,
+  requeueFailedDeliveries,
 } from '../../api/admin';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -178,11 +180,37 @@ export default function AdminWebhooks() {
     setTestLoading(true);
     try {
       await testDestination(id);
-      alert('Test ping queued. Check the delivery log in a few seconds.');
+      alert('Test ping queued. It is delivered within a few seconds; check the delivery log.');
     } catch (e) {
       alert(apiErrorMessage(e, 'Test failed'));
     } finally {
       setTestLoading(false);
+    }
+  };
+
+  const handleRequeue = async (deliveryId: string) => {
+    if (!expandedId) return;
+    try {
+      await requeueDelivery(expandedId, deliveryId);
+      await loadDeliveries(expandedId);
+    } catch (e) {
+      alert(apiErrorMessage(e, 'Requeue failed'));
+    }
+  };
+
+  const handleRequeueFailed = async () => {
+    if (!expandedId) return;
+    try {
+      const r = await requeueFailedDeliveries(expandedId);
+      alert(
+        `Requeued ${r.requeued} deliveries.` +
+          (r.skipped_unbuilt
+            ? ` ${r.skipped_unbuilt} FAILED row(s) were never built and cannot be resent.`
+            : ''),
+      );
+      await loadDeliveries(expandedId);
+    } catch (e) {
+      alert(apiErrorMessage(e, 'Requeue failed'));
     }
   };
 
@@ -304,64 +332,97 @@ export default function AdminWebhooks() {
                       ) : deliveries.length === 0 ? (
                         <p className="text-off-white/55 text-sm font-data">No deliveries yet.</p>
                       ) : (
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr>
-                              {[
-                                'seq',
-                                'event',
-                                'status',
-                                'attempts',
-                                'last code',
-                                'last error',
-                              ].map((h) => (
-                                <th
-                                  key={h}
-                                  className="text-left px-2 py-1 font-mono text-off-white/55 uppercase"
-                                >
-                                  {h}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {deliveries.map((d) => (
-                              <tr
-                                key={d.id}
-                                style={{ borderTop: '1px solid rgba(239,238,236,.05)' }}
+                        <>
+                          {deliveries.some((d) => d.status === 'FAILED') && (
+                            <div className="flex items-center gap-3 mb-2">
+                              <button
+                                onClick={handleRequeueFailed}
+                                className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
                               >
-                                <td className="px-2 py-1 font-data text-off-white">{d.seq}</td>
-                                <td className="px-2 py-1 font-mono text-off-white/55">
-                                  {d.event_type}
-                                </td>
-                                <td className="px-2 py-1">
-                                  <span
-                                    className="font-mono text-[10px] uppercase"
-                                    style={{
-                                      color:
-                                        d.status === 'SUCCESS'
-                                          ? 'var(--green)'
-                                          : d.status === 'FAILED'
-                                            ? 'var(--red)'
-                                            : 'var(--off-white)',
-                                    }}
+                                requeue all failed
+                              </button>
+                              <span className="text-off-white/55 text-xs font-data">
+                                Requeued messages are re-sent at their original queue position.
+                              </span>
+                            </div>
+                          )}
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr>
+                                {[
+                                  'seq',
+                                  'event',
+                                  'status',
+                                  'attempts',
+                                  'next attempt',
+                                  'last code',
+                                  'last error',
+                                  '',
+                                ].map((h) => (
+                                  <th
+                                    key={h}
+                                    className="text-left px-2 py-1 font-mono text-off-white/55 uppercase"
                                   >
-                                    {d.status}
-                                  </span>
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55">
-                                  {d.attempts}/{d.max_attempts}
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55">
-                                  {d.last_status_code ?? '—'}
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55 max-w-xs truncate">
-                                  {d.last_error ?? '—'}
-                                </td>
+                                    {h}
+                                  </th>
+                                ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {deliveries.map((d) => (
+                                <tr
+                                  key={d.id}
+                                  style={{ borderTop: '1px solid rgba(239,238,236,.05)' }}
+                                >
+                                  <td className="px-2 py-1 font-data text-off-white">{d.seq}</td>
+                                  <td className="px-2 py-1 font-mono text-off-white/55">
+                                    {d.event_type}
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    <span
+                                      className="font-mono text-[10px] uppercase"
+                                      style={{
+                                        color:
+                                          d.status === 'SUCCESS'
+                                            ? 'var(--green)'
+                                            : d.status === 'FAILED'
+                                              ? 'var(--red)'
+                                              : 'var(--off-white)',
+                                      }}
+                                    >
+                                      {d.status}
+                                    </span>
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.attempts}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.status === 'PENDING'
+                                      ? new Date(d.next_attempt_at).toLocaleTimeString()
+                                      : '—'}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.last_status_code ?? '—'}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55 max-w-xs truncate">
+                                    {d.last_error ?? '—'}
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    {d.status === 'FAILED' && (
+                                      <button
+                                        onClick={() => handleRequeue(d.id)}
+                                        title="Re-send at its original queue position"
+                                        className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                                      >
+                                        requeue
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </>
                       )}
                     </td>
                   </tr>

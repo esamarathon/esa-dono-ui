@@ -62,9 +62,21 @@ vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
 }));
 
+// The outbox runs the route's change against the mocked prisma client; emits are
+// recorded but queue nothing. Delivery itself is covered in services/webhooks tests.
+const outbox = vi.hoisted(() => ({
+  emit: vi.fn(async (_type: string, build: () => unknown) => {
+    build();
+  }),
+}));
+vi.mock('../../services/webhooks/outbox.js', async () => {
+  const { default: db } = await import('../../lib/prisma.js');
+  return { withWebhooks: vi.fn(async (fn: any) => fn(db, outbox.emit)) };
+});
+vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
+
 vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/webhooks/delivery.js')>()),
-  emitWebhookMessage: vi.fn(),
   buildIncentiveCreatedPayload: vi.fn(() => ({
     id: 'x',
     type: 'incentive.created',
@@ -403,7 +415,13 @@ describe('Admin donor management', () => {
   });
 
   it('DELETE /goals/:id refunds allocated funds and deactivates the goal', async () => {
-    px.fundGoal.findUnique.mockResolvedValue({ id: 'g1', current_cents: 400, target_cents: 1000 });
+    px.fundGoal.findUnique.mockResolvedValue({
+      id: 'g1',
+      title: 'Goal',
+      is_active: true,
+      current_cents: 400,
+      target_cents: 1000,
+    });
     px.fundContribution.findMany.mockResolvedValue([
       { id: 'c1', donor_id: 'd1', amount_cents: 400, created_at: new Date() },
     ]);
@@ -423,6 +441,7 @@ describe('Admin donor management', () => {
       data: { is_active: false },
     });
     expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(1);
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 
   it('DELETE /rewards/:id deletes an unclaimed reward', async () => {
@@ -446,7 +465,8 @@ describe('Admin donor management', () => {
   });
 
   it('PUT /goals/:id disabling a goal does not refund contributions', async () => {
-    px.fundGoal.update.mockResolvedValue({ id: 'g1', is_active: false });
+    px.fundGoal.findUnique.mockResolvedValue({ id: 'g1', is_active: true, target_cents: 1000 });
+    px.fundGoal.update.mockResolvedValue({ id: 'g1', is_active: false, target_cents: 1000 });
 
     const res = await request(createApp())
       .put('/api/admin/goals/g1')
@@ -467,10 +487,13 @@ describe('Admin donor management', () => {
         channel_id: null,
       },
     });
+    // Queued inside the same transaction as the update (withWebhooks).
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 
   it('PUT /polls/:id closing a poll does not refund votes', async () => {
-    px.poll.update.mockResolvedValue({ id: 'p1', is_active: false });
+    px.poll.findUnique.mockResolvedValue({ id: 'p1', is_active: true, ends_at: null });
+    px.poll.update.mockResolvedValue({ id: 'p1', is_active: false, ends_at: null });
 
     const res = await request(createApp())
       .put('/api/admin/polls/p1')
@@ -494,6 +517,7 @@ describe('Admin donor management', () => {
       },
       include: { options: true },
     });
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 
   it('rejects non-admin requests', async () => {

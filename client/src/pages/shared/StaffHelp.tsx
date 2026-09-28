@@ -471,8 +471,9 @@ export default function StaffHelp({ role }: { role: Role }) {
         <Section title="destinations (webhooks & rabbitmq)">
           <p>
             <Term>Destinations</Term> are outbound event delivery targets. Every significant
-            platform event (incentive created, donation processed, pledge fulfilled, etc.) is
-            delivered to all enabled destinations.
+            platform change (donation created, donation moderated, incentive created, enabled,
+            disabled or changed) is sent as a webhook message to every active destination subscribed
+            to it, in order.
           </p>
           <Table
             headers={['type', 'notes']}
@@ -498,11 +499,23 @@ export default function StaffHelp({ role }: { role: Role }) {
               before rotating to avoid a delivery gap.
             </li>
             <li>
-              <Term>Delivery log</Term> — paginated history of deliveries for a destination (status,
-              timestamp, event type). Use to diagnose missed events.
+              <Term>Delivery log</Term> — recent deliveries for a destination (status, attempts,
+              next attempt, last error). Successful rows are kept 2 hours, failed rows 24 hours;
+              waiting rows are never removed.
             </li>
             <li>
               <Term>Test ping</Term> — queues a <Code>ping</Code> delivery to verify connectivity.
+            </li>
+            <li>
+              <Term>Stalls</Term> — If a destination is down or answers with an error (including 4xx
+              such as 429), its messages wait and are retried every few seconds up to every 3
+              minutes, in order. Nothing is skipped. Fix the destination and delivery resumes by
+              itself. Set it inactive to pause it.
+            </li>
+            <li>
+              <Term>Requeue</Term> — A delivery shows FAILED only when the message itself was
+              malformed (a bug). After the fix, use requeue on the row or requeue all failed; it is
+              re-sent at its original position.
             </li>
           </ul>
         </Section>

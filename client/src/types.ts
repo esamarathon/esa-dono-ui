@@ -411,10 +411,11 @@ export interface WebhookEndpoint {
 export interface WebhookDelivery {
   id: string;
   seq: number;
+  message_id: string;
   event_type: string;
   status: string;
   attempts: number;
-  max_attempts: number;
+  next_attempt_at: string;
   last_status_code: number | null;
   last_error: string | null;
   created_at: string;

@@ -570,26 +570,27 @@ router.patch('/donations/:id', async (req, res) => {
   }
   const moderatorEmail = req.donor?.email || 'moderator';
 
-  const donation = await prisma.donation.update({
-    where: { id: req.params.id },
-    data: moderated
-      ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
-      : { moderated: false, moderated_at: null, moderated_by: null },
-    include: { donor: { select: { id: true } } },
+  const { buildDonationModeratedPayload } = await import('../services/webhooks/delivery.js');
+  const { withWebhooks } = await import('../services/webhooks/outbox.js');
+  const donation = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.donation.update({
+      where: { id: req.params.id },
+      data: moderated
+        ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
+        : { moderated: false, moderated_at: null, moderated_by: null },
+      include: { donor: { select: { id: true } } },
+    });
+    await emit('donation.moderated', () =>
+      buildDonationModeratedPayload({
+        donationId: updated.id,
+        externalId: updated.external_id,
+        donorRef: updated.donor.id,
+        moderated,
+        moderatedAt: updated.moderated_at,
+      }),
+    );
+    return updated;
   });
-
-  const { emitWebhookMessage, buildDonationModeratedPayload } =
-    await import('../services/webhooks/delivery.js');
-  emitWebhookMessage(
-    'donation.moderated',
-    buildDonationModeratedPayload({
-      donationId: donation.id,
-      externalId: donation.external_id,
-      donorRef: donation.donor.id,
-      moderated,
-      moderatedAt: donation.moderated_at,
-    }),
-  );
 
   res.json(donation);
 });

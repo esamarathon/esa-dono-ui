@@ -15,8 +15,9 @@ import {
 } from '../services/auction.js';
 import { invalidateFlagCache } from '../services/featureFlags.js';
 import { TOKEN_TTL_MS } from '../config.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
+import { wakeDispatcher } from '../services/webhooks/dispatcher.js';
 import {
-  emitWebhookMessage,
   isWebhookMessageType,
   buildIncentiveCreatedPayload,
   buildIncentiveEnabledPayload,
@@ -271,29 +272,31 @@ router.post('/rewards', async (req, res) => {
     image_url,
     channel_id,
   } = req.body;
-  const reward = await prisma.reward.create({
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active: is_active ?? true,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await withWebhooks(async (tx, emit) => {
+    const created = await tx.reward.create({
+      data: {
+        title,
+        description,
+        type,
+        cost_cents,
+        quantity_total: quantity_total ?? null,
+        is_active: is_active ?? true,
+        custom_type_label,
+        image_url: image_url || null,
+        channel_id: channel_id || null,
+      },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'REWARD',
+        incentiveId: created.id,
+        title: created.title,
+        isActive: created.is_active,
+        costCents: created.cost_cents,
+      }),
+    );
+    return created;
   });
-  emitWebhookMessage(
-    'incentive.created',
-    buildIncentiveCreatedPayload({
-      incentiveKind: 'REWARD',
-      incentiveId: reward.id,
-      title: reward.title,
-      isActive: reward.is_active,
-      costCents: reward.cost_cents,
-    }),
-  );
   res.json(reward);
 });
 
@@ -315,56 +318,55 @@ router.put('/rewards/:id', async (req, res) => {
   if (prior.image_url !== (image_url || null)) {
     await deleteUploadByUrl(prior.image_url);
   }
-  const reward = await prisma.reward.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.reward.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        type,
+        cost_cents,
+        quantity_total: quantity_total ?? null,
+        is_active,
+        custom_type_label,
+        image_url: image_url || null,
+        channel_id: channel_id || null,
+      },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    if (prior.cost_cents !== updated.cost_cents) {
+      const changedFields = ['cost_cents'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          title: updated.title,
+          changedFields,
+          oldCostCents: prior.cost_cents,
+          newCostCents: updated.cost_cents,
+        }),
+      );
+    }
+    return updated;
   });
-
-  if (!prior.is_active && reward.is_active) {
-    emitWebhookMessage(
-      'incentive.enabled',
-      buildIncentiveEnabledPayload({
-        incentiveKind: 'REWARD',
-        incentiveId: reward.id,
-        title: reward.title,
-      }),
-    );
-  } else if (prior.is_active && !reward.is_active) {
-    emitWebhookMessage(
-      'incentive.disabled',
-      buildIncentiveDisabledPayload({
-        incentiveKind: 'REWARD',
-        incentiveId: reward.id,
-        title: reward.title,
-      }),
-    );
-  }
-
-  if (prior.cost_cents !== reward.cost_cents) {
-    const changedFields = ['cost_cents'];
-    emitWebhookMessage(
-      'incentive.value_changed',
-      buildIncentiveValueChangedPayload({
-        incentiveKind: 'REWARD',
-        incentiveId: reward.id,
-        title: reward.title,
-        changedFields,
-        oldCostCents: prior.cost_cents,
-        newCostCents: reward.cost_cents,
-      }),
-    );
-  }
-
   res.json(reward);
 });
 
@@ -884,32 +886,34 @@ router.post('/polls', async (req, res) => {
     auto_approve,
     channel_id,
   } = req.body;
-  const poll = await prisma.poll.create({
-    data: {
-      title,
-      description,
-      is_active: is_active ?? true,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-      options: options?.length
-        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
-        : undefined,
-    },
-    include: { options: true },
+  const poll = await withWebhooks(async (tx, emit) => {
+    const created = await tx.poll.create({
+      data: {
+        title,
+        description,
+        is_active: is_active ?? true,
+        ends_at: ends_at ? new Date(ends_at) : null,
+        allow_custom_entries: allow_custom_entries ?? false,
+        max_entry_chars: max_entry_chars ?? null,
+        auto_approve: auto_approve ?? true,
+        channel_id: channel_id || null,
+        options: options?.length
+          ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+          : undefined,
+      },
+      include: { options: true },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'POLL',
+        incentiveId: created.id,
+        title: created.title,
+        isActive: created.is_active,
+        endsAt: created.ends_at,
+      }),
+    );
+    return created;
   });
-  emitWebhookMessage(
-    'incentive.created',
-    buildIncentiveCreatedPayload({
-      incentiveKind: 'POLL',
-      incentiveId: poll.id,
-      title: poll.title,
-      isActive: poll.is_active,
-      endsAt: poll.ends_at,
-    }),
-  );
   res.json(poll);
 });
 
@@ -928,60 +932,59 @@ router.put('/polls/:id', async (req, res) => {
   const prior = await prisma.poll.findUnique({ where: { id: req.params.id } });
   if (!prior) return res.status(404).json({ error: 'Poll not found' });
 
-  const poll = await prisma.poll.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      is_active,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-    },
-    include: { options: true },
+  const poll = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.poll.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        is_active,
+        ends_at: ends_at ? new Date(ends_at) : null,
+        allow_custom_entries: allow_custom_entries ?? false,
+        max_entry_chars: max_entry_chars ?? null,
+        auto_approve: auto_approve ?? true,
+        channel_id: channel_id || null,
+      },
+      include: { options: true },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    const oldEndsAt = prior.ends_at ? new Date(prior.ends_at) : null;
+    const newEndsAt = updated.ends_at ? new Date(updated.ends_at) : null;
+    const oldEndsMs = oldEndsAt ? oldEndsAt.getTime() : null;
+    const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
+    if (oldEndsMs !== newEndsMs) {
+      const changedFields = ['ends_at'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          title: updated.title,
+          changedFields,
+          oldEndsAt,
+          newEndsAt,
+        }),
+      );
+    }
+    return updated;
   });
-
-  if (!prior.is_active && poll.is_active) {
-    emitWebhookMessage(
-      'incentive.enabled',
-      buildIncentiveEnabledPayload({
-        incentiveKind: 'POLL',
-        incentiveId: poll.id,
-        title: poll.title,
-      }),
-    );
-  } else if (prior.is_active && !poll.is_active) {
-    emitWebhookMessage(
-      'incentive.disabled',
-      buildIncentiveDisabledPayload({
-        incentiveKind: 'POLL',
-        incentiveId: poll.id,
-        title: poll.title,
-      }),
-    );
-  }
-
-  const oldEndsAt = prior.ends_at ? new Date(prior.ends_at) : null;
-  const newEndsAt = poll.ends_at ? new Date(poll.ends_at) : null;
-  const oldEndsMs = oldEndsAt ? oldEndsAt.getTime() : null;
-  const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
-  if (oldEndsMs !== newEndsMs) {
-    const changedFields = ['ends_at'];
-    emitWebhookMessage(
-      'incentive.value_changed',
-      buildIncentiveValueChangedPayload({
-        incentiveKind: 'POLL',
-        incentiveId: poll.id,
-        title: poll.title,
-        changedFields,
-        oldEndsAt,
-        newEndsAt,
-      }),
-    );
-  }
-
   res.json(poll);
 });
 
@@ -1080,25 +1083,27 @@ router.get('/goals', async (req, res) => {
 
 router.post('/goals', async (req, res) => {
   const { title, description, target_cents, is_active, channel_id } = req.body;
-  const goal = await prisma.fundGoal.create({
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active: is_active ?? true,
-      channel_id: channel_id || null,
-    },
+  const goal = await withWebhooks(async (tx, emit) => {
+    const created = await tx.fundGoal.create({
+      data: {
+        title,
+        description,
+        target_cents,
+        is_active: is_active ?? true,
+        channel_id: channel_id || null,
+      },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'GOAL',
+        incentiveId: created.id,
+        title: created.title,
+        isActive: created.is_active,
+        targetCents: created.target_cents,
+      }),
+    );
+    return created;
   });
-  emitWebhookMessage(
-    'incentive.created',
-    buildIncentiveCreatedPayload({
-      incentiveKind: 'GOAL',
-      incentiveId: goal.id,
-      title: goal.title,
-      isActive: goal.is_active,
-      targetCents: goal.target_cents,
-    }),
-  );
   res.json(goal);
 });
 
@@ -1108,53 +1113,52 @@ router.put('/goals/:id', async (req, res) => {
   const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
   if (!prior) return res.status(404).json({ error: 'Goal not found' });
 
-  const goal = await prisma.fundGoal.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active,
-      is_complete,
-      channel_id: channel_id || null,
-    },
+  const goal = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.fundGoal.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        target_cents,
+        is_active,
+        is_complete,
+        channel_id: channel_id || null,
+      },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    if (prior.target_cents !== updated.target_cents) {
+      const changedFields = ['target_cents'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          title: updated.title,
+          changedFields,
+          oldTargetCents: prior.target_cents,
+          newTargetCents: updated.target_cents,
+        }),
+      );
+    }
+    return updated;
   });
-
-  if (!prior.is_active && goal.is_active) {
-    emitWebhookMessage(
-      'incentive.enabled',
-      buildIncentiveEnabledPayload({
-        incentiveKind: 'GOAL',
-        incentiveId: goal.id,
-        title: goal.title,
-      }),
-    );
-  } else if (prior.is_active && !goal.is_active) {
-    emitWebhookMessage(
-      'incentive.disabled',
-      buildIncentiveDisabledPayload({
-        incentiveKind: 'GOAL',
-        incentiveId: goal.id,
-        title: goal.title,
-      }),
-    );
-  }
-
-  if (prior.target_cents !== goal.target_cents) {
-    const changedFields = ['target_cents'];
-    emitWebhookMessage(
-      'incentive.value_changed',
-      buildIncentiveValueChangedPayload({
-        incentiveKind: 'GOAL',
-        incentiveId: goal.id,
-        title: goal.title,
-        changedFields,
-        oldTargetCents: prior.target_cents,
-        newTargetCents: goal.target_cents,
-      }),
-    );
-  }
-
   res.json(goal);
 });
 
@@ -1163,25 +1167,23 @@ router.delete('/goals/:id', async (req, res) => {
     const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
     if (!prior) return res.status(404).json({ error: 'Goal not found' });
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await withWebhooks(async (tx, emit) => {
       const refund = await refundGoalContributions(tx, req.params.id);
       await tx.fundGoal.update({
         where: { id: req.params.id },
         data: { is_active: false },
       });
+      if (prior.is_active) {
+        await emit('incentive.disabled', () =>
+          buildIncentiveDisabledPayload({
+            incentiveKind: 'GOAL',
+            incentiveId: prior.id,
+            title: prior.title,
+          }),
+        );
+      }
       return refund;
     });
-
-    if (prior.is_active) {
-      emitWebhookMessage(
-        'incentive.disabled',
-        buildIncentiveDisabledPayload({
-          incentiveKind: 'GOAL',
-          incentiveId: prior.id,
-          title: prior.title,
-        }),
-      );
-    }
 
     res.json({ success: true, ...result });
   } catch (err) {
@@ -1536,6 +1538,8 @@ router.put('/destinations/:id', async (req, res) => {
       ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
     },
   });
+  // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.
+  if (endpoint.is_active) wakeDispatcher(endpoint.id);
   res.json({
     ...endpoint,
     event_types: JSON.parse(endpoint.event_types),
@@ -1566,6 +1570,22 @@ router.delete('/destinations/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+/** Wire shape of a delivery row: the Prisma field `message_type` is sent as `event_type` (ADR-0006). */
+function toDeliveryResponse<T extends { message_type: string }>({ message_type, ...rest }: T) {
+  return { ...rest, event_type: message_type };
+}
+
+/** Fields reset when a FAILED delivery is requeued; `seq` and `message_id` are kept. */
+function requeueData() {
+  return {
+    status: 'PENDING',
+    attempts: 0,
+    next_attempt_at: new Date(),
+    last_error: null,
+    last_status_code: null,
+  };
+}
+
 router.get('/destinations/:id/deliveries', async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
   const [deliveries, total] = await Promise.all([
@@ -1578,7 +1598,7 @@ router.get('/destinations/:id/deliveries', async (req, res) => {
     prisma.webhookDelivery.count({ where: { destination_id: req.params.id } }),
   ]);
   res.json({
-    deliveries: deliveries.map(({ message_type, ...d }) => ({ ...d, event_type: message_type })),
+    deliveries: deliveries.map(toDeliveryResponse),
     total,
   });
 });
@@ -1604,6 +1624,7 @@ router.post('/destinations/:id/test', async (req, res) => {
       data: {
         destination_id: req.params.id,
         seq: row.seq,
+        message_id: payload.id,
         message_type: 'ping',
         payload: JSON.stringify(payload),
         status: 'PENDING',
@@ -1612,8 +1633,50 @@ router.post('/destinations/:id/test', async (req, res) => {
     });
     return row.seq;
   });
+  wakeDispatcher(req.params.id);
 
   res.json({ success: true, seq });
+});
+
+router.post('/destinations/:id/deliveries/:deliveryId/requeue', async (req, res) => {
+  const delivery = await prisma.webhookDelivery.findFirst({
+    where: { id: req.params.deliveryId, destination_id: req.params.id },
+  });
+  if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+  if (delivery.status !== 'FAILED') {
+    return res.status(409).json({ error: 'Only FAILED deliveries can be requeued' });
+  }
+  if (delivery.payload === '') {
+    return res.status(409).json({ error: 'This delivery was never built and cannot be resent' });
+  }
+
+  const updated = await prisma.webhookDelivery.update({
+    where: { id: delivery.id },
+    data: requeueData(),
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json(toDeliveryResponse(updated));
+});
+
+router.post('/destinations/:id/requeue-failed', async (req, res) => {
+  const destination = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!destination) return res.status(404).json({ error: 'Destination not found' });
+
+  const { count } = await prisma.webhookDelivery.updateMany({
+    where: { destination_id: req.params.id, status: 'FAILED', payload: { not: '' } },
+    data: requeueData(),
+  });
+  // Rows whose payload was never built cannot be resent; report them so the
+  // operator knows some FAILED rows remain.
+  const unbuilt = await prisma.webhookDelivery.count({
+    where: { destination_id: req.params.id, status: 'FAILED', payload: '' },
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json({ requeued: count, skipped_unbuilt: unbuilt });
 });
 
 // Feature Flags CRUD
