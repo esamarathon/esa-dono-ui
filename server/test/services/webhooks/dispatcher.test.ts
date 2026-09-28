@@ -469,7 +469,7 @@ describe('webhook dispatcher', () => {
     const env = process.env.NODE_ENV;
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
-      expect(startWebhookDispatcher()).toBeDefined(); // no-op under NODE_ENV=test
+      startWebhookDispatcher().stop(); // no-op under NODE_ENV=test
       expect(vi.getTimerCount()).toBe(0);
 
       process.env.NODE_ENV = 'development';
@@ -481,6 +481,101 @@ describe('webhook dispatcher', () => {
       process.env.NODE_ENV = env;
       vi.useRealTimers();
     }
+  });
+
+  it('the safety tick wakes destinations and the retention timer sweeps', async () => {
+    const env = process.env.NODE_ENV;
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    const old = await createDelivery(dest.id, 1, { status: 'SUCCESS' });
+    // An old SUCCESS row (retention: 2 h) and a due PENDING row.
+    await prisma.webhookDelivery.update({
+      where: { id: old.id },
+      data: { updated_at: new Date(Date.now() - 3 * 3600_000) },
+    });
+    const due = await createDelivery(dest.id, 2);
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let dispatcher: { stop(): void } | undefined;
+    try {
+      process.env.NODE_ENV = 'development';
+      dispatcher = startWebhookDispatcher();
+      vi.advanceTimersByTime(60_000); // runs the 5 s safety tick and the 60 s sweep
+    } finally {
+      dispatcher?.stop();
+      process.env.NODE_ENV = env;
+      vi.useRealTimers();
+    }
+
+    const deadline = Date.now() + 5_000;
+    let dueStatus = '';
+    let oldGone = false;
+    while (Date.now() < deadline) {
+      dueStatus = (await prisma.webhookDelivery.findUnique({ where: { id: due.id } }))!.status;
+      oldGone = (await prisma.webhookDelivery.findUnique({ where: { id: old.id } })) === null;
+      if (dueStatus === 'SUCCESS' && oldGone) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(dueStatus).toBe('SUCCESS');
+    expect(oldGone).toBe(true);
+
+    await close(capture.server);
+  });
+
+  it('evicts and reconnects when the cached AMQP connection errors', async () => {
+    const handlers: Record<string, (err?: unknown) => void> = {};
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockImplementation(async () => ({
+      on: (event: string, fn: (err?: unknown) => void) => (handlers[event] = fn),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    }));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+
+    await createDelivery(dest.id, 1);
+    await drainDestination(dest.id);
+    handlers.error!(new Error('socket reset'));
+    await createDelivery(dest.id, 2);
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes the connection when a publish is rejected, and retries later', async () => {
+    const close = vi.fn().mockRejectedValue(new Error('already closed'));
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: Error) => void) =>
+        cb(new Error('channel closed by broker')),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      close,
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    });
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_error).toBe('channel closed by broker');
+    expect(close).toHaveBeenCalled(); // and a rejected close() does not throw
   });
 
   it('reconnects after the cached AMQP connection closes', async () => {
