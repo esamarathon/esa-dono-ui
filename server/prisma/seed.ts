@@ -19,6 +19,8 @@ const envPath = resolve(__dirname, '../../.env');
 loadEnv({ path: envPath });
 
 import prisma from '../lib/prisma.js';
+import { availableSlugFrom } from '../lib/slugs.js';
+import { assertCanActivateEvent } from '../services/events.js';
 
 const DEV_MODERATOR_EMAIL = 'moderator@localhost';
 const DEV_ADMIN_EMAIL = 'admin@localhost';
@@ -105,6 +107,11 @@ async function main() {
   }
   console.log(`✓ Banner created/updated with moderator and admin keys`);
 
+  const { event, channel } = await ensureActiveEvent();
+  console.log(
+    `✓ Event "${event.name}" (${event.slug}) is active; primary channel "${channel.name}" (${channel.slug})`,
+  );
+
   console.log('✅ Seed completed successfully!');
   console.log('');
   console.log('📝 Dev accounts:');
@@ -120,6 +127,44 @@ async function main() {
   );
   console.log('');
   console.log('✨ Banner displayed at the top of the app showing these raw keys.');
+}
+
+/**
+ * PRD-0002 §S9: the dev/staging stack always has one active Event with an active
+ * primary Channel, so donations route without extra setup. Idempotent, and safe
+ * after seed-dev.sh has already created channels: it reuses the first Event (the
+ * migration creates one) and its earliest active Channel, or creates "Main Channel".
+ */
+async function ensureActiveEvent() {
+  return prisma.$transaction(async (tx) => {
+    const event =
+      (await tx.event.findFirst({ orderBy: { created_at: 'asc' } })) ??
+      (await tx.event.create({
+        data: {
+          name: 'Default Event',
+          slug: await availableSlugFrom(tx, 'Default Event', 'event'),
+        },
+      }));
+    const channel =
+      (event.primary_channel_id
+        ? await tx.channel.findFirst({ where: { id: event.primary_channel_id, is_active: true } })
+        : null) ??
+      (await tx.channel.findFirst({
+        where: { event_id: event.id, is_active: true },
+        orderBy: { created_at: 'asc' },
+      })) ??
+      (await tx.channel.create({
+        data: {
+          name: 'Main Channel',
+          slug: await availableSlugFrom(tx, 'Main Channel', 'channel'),
+          event_id: event.id,
+        },
+      }));
+    await tx.event.update({ where: { id: event.id }, data: { primary_channel_id: channel.id } });
+    await assertCanActivateEvent(tx, event.id);
+    const active = await tx.event.update({ where: { id: event.id }, data: { is_active: true } });
+    return { event: active, channel };
+  });
 }
 
 main()

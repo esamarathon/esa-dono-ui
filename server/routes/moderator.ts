@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
 import {
@@ -28,6 +29,13 @@ import {
 // change pass — if a moderator surface genuinely needs donor identity, use
 // donor_name (already a plain column, no join needed) instead of email.
 const router = Router();
+
+/** Send an Error carrying `status` (lib/slugs.ts httpError) as JSON; anything else is a 500. */
+function sendError(res: import('express').Response, e: unknown) {
+  const status = (e as { status?: number }).status;
+  if (!status) throw e;
+  res.status(status).json({ error: (e as Error).message });
+}
 router.use(moderatorAuth);
 
 // Dashboard stats
@@ -52,50 +60,29 @@ router.get('/channels', async (req, res) => {
 });
 
 router.post('/channels', async (req, res) => {
-  const { name, is_active } = req.body;
-  if (!name || !String(name).trim()) {
-    return res.status(400).json({ error: 'name is required' });
-  }
   try {
-    const channel = await prisma.channel.create({
-      data: { name: String(name).trim(), is_active: is_active ?? true },
-    });
-    res.json(channel);
+    res.json(await createChannel(req.body ?? {}));
   } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Channel name already exists' });
-    }
-    throw e;
+    sendError(res, e);
   }
 });
 
 router.put('/channels/:id', async (req, res) => {
-  const { name, is_active } = req.body;
   try {
-    const channel = await prisma.channel.update({
-      where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name: String(name).trim() } : {}),
-        ...(is_active !== undefined ? { is_active } : {}),
-      },
-    });
-    res.json(channel);
+    res.json(await updateChannel(req.params.id, req.body ?? {}));
   } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Channel name already exists' });
-    }
-    throw e;
+    sendError(res, e);
   }
 });
 
 // Soft-delete: channels may be referenced by incentives/donations/pledges, so
 // deactivate instead of hard-deleting to preserve those references.
 router.delete('/channels/:id', async (req, res) => {
-  const channel = await prisma.channel.update({
-    where: { id: req.params.id },
-    data: { is_active: false },
-  });
-  res.json({ success: true, channel });
+  try {
+    res.json({ success: true, channel: await deactivateChannel(req.params.id) });
+  } catch (e) {
+    sendError(res, e);
+  }
 });
 
 // Polls CRUD

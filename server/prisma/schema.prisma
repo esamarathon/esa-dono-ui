@@ -8,7 +8,7 @@ datasource db {
 }
 
 model Donor {
-  id                String          @id @default(cuid())
+  id                String          @id @default(uuid())
   email             String          @unique
   total_donated     Int             @default(0)
   balance_remaining Int             @default(0)
@@ -35,7 +35,7 @@ model Donor {
 }
 
 model Donation {
-  id          String   @id @default(cuid())
+  id          String   @id @default(uuid())
   external_id String   @unique
   donor_id    String
   amount_cents Int
@@ -45,6 +45,10 @@ model Donation {
   moderated_at DateTime?
   moderated_by String?
   channel_id  String?
+  /// Set on every donation that can be routed; null only while unassigned.
+  event_id    String?
+  /// A moderator removed this donation from the stream overlay (PRD-0002 §T5).
+  hidden_from_overlay Boolean @default(false)
   // PENDING | COMPLETED | REFUNDED | CHARGEBACK (#63). Existing/new webhook
   // and simulated donations default to COMPLETED since they only ever get
   // created after a successful payment; REFUNDED/CHARGEBACK are set when a
@@ -54,16 +58,41 @@ model Donation {
   created_at  DateTime @default(now())
   donor       Donor    @relation(fields: [donor_id], references: [id])
   channel     Channel? @relation(fields: [channel_id], references: [id])
+  event       Event?   @relation(fields: [event_id], references: [id])
   refund      BalanceAdjustment? @relation("DonationRefund", fields: [refund_id], references: [id])
   pledge      PendingPledge?
 }
 
+/// A charity event: a marathon, or a one-day stream event. Parent of Channels
+/// (Tiltify: a team campaign). See CONTEXT.md and docs/adr/0008-event-channel-identity.md.
+model Event {
+  id                 String     @id @default(uuid())
+  name               String
+  /// URL- and AMQP-routing-safe name, unique across Event and Channel. See lib/slugs.ts.
+  slug               String     @unique
+  /// An Event can only be active with an active primary Channel of its own.
+  is_active          Boolean    @default(false)
+  /// Where a donation that names no Channel is routed. Must be one of `channels`.
+  primary_channel_id String?    @unique
+  created_at         DateTime   @default(now())
+  updated_at         DateTime   @updatedAt
+  channels           Channel[]  @relation("EventChannels")
+  primary_channel    Channel?   @relation("EventPrimaryChannel", fields: [primary_channel_id], references: [id], onDelete: SetNull)
+  donations          Donation[]
+}
+
+/// One stream within an Event (Tiltify: a campaign). See CONTEXT.md.
 model Channel {
-  id         String          @id @default(cuid())
+  id         String          @id @default(uuid())
   name       String          @unique
+  /// URL- and AMQP-routing-safe name, unique across Event and Channel. See lib/slugs.ts.
+  slug       String          @unique
+  event_id   String
   is_active  Boolean         @default(true)
   created_at DateTime        @default(now())
   updated_at DateTime        @updatedAt
+  event      Event           @relation("EventChannels", fields: [event_id], references: [id], onDelete: Restrict)
+  primary_of Event?          @relation("EventPrimaryChannel")
   rewards    Reward[]
   polls      Poll[]
   goals      FundGoal[]
@@ -73,7 +102,7 @@ model Channel {
 }
 
 model Reward {
-  id               String        @id @default(cuid())
+  id               String        @id @default(uuid())
   title            String
   description      String?
   type             String        // DIGITAL | PHYSICAL | SHOUTOUT | CUSTOM
@@ -91,7 +120,7 @@ model Reward {
 }
 
 model RewardClaim {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   reward_id  String
   donor_id   String
   status     String   @default("PENDING") // PENDING | FULFILLED | REVERSED
@@ -105,7 +134,7 @@ model RewardClaim {
 }
 
 model Poll {
-  id                   String       @id @default(cuid())
+  id                   String       @id @default(uuid())
   title                String
   description          String?
   is_active            Boolean      @default(true)
@@ -124,7 +153,7 @@ model Poll {
 }
 
 model PollOption {
-  id              String          @id @default(cuid())
+  id              String          @id @default(uuid())
   poll_id         String
   label           String
   votes_cents     Int             @default(0)
@@ -136,7 +165,7 @@ model PollOption {
 }
 
 model PollVote {
-  id             String     @id @default(cuid())
+  id             String     @id @default(uuid())
   poll_id        String
   poll_option_id String
   donor_id       String
@@ -150,7 +179,7 @@ model PollVote {
 }
 
 model PollCustomEntry {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   poll_id    String
   donor_id   String
   label      String
@@ -162,12 +191,12 @@ model PollCustomEntry {
 }
 
 model BlockedWord {
-  id   String @id @default(cuid())
+  id   String @id @default(uuid())
   word String @unique
 }
 
 model FundGoal {
-  id            String             @id @default(cuid())
+  id            String             @id @default(uuid())
   title         String
   description   String?
   target_cents  Int
@@ -182,7 +211,7 @@ model FundGoal {
 }
 
 model FundContribution {
-  id           String   @id @default(cuid())
+  id           String   @id @default(uuid())
   goal_id      String
   donor_id     String
   amount_cents Int
@@ -194,7 +223,7 @@ model FundContribution {
 }
 
 model BalanceAdjustment {
-  id                String   @id @default(cuid())
+  id                String   @id @default(uuid())
   donor_id          String
   amount_cents      Int
   balance_after_cents Int
@@ -208,7 +237,7 @@ model BalanceAdjustment {
 }
 
 model PendingPledge {
-  id                    String       @id @default(cuid())
+  id                    String       @id @default(uuid())
   pledge_token          String       @unique
   donor_email           String?
   total_cents           Int
@@ -231,7 +260,7 @@ model PendingPledge {
 }
 
 model PledgeItem {
-  id          String       @id @default(cuid())
+  id          String       @id @default(uuid())
   pledge_id   String
   kind        String       // REWARD | POLL_VOTE | GOAL | POLL_CUSTOM
   target_id   String       // reward_id | poll_option_id | goal_id | poll_id (POLL_CUSTOM)
@@ -257,7 +286,7 @@ model PledgeItem {
 // ---------------------------------------------------------------------------
 
 model Auction {
-  id                  String          @id @default(cuid())
+  id                  String          @id @default(uuid())
   title               String
   description         String?
   type                String          // DIGITAL | PHYSICAL | SHOUTOUT | CUSTOM
@@ -283,7 +312,7 @@ model Auction {
 }
 
 model Bid {
-  id           String    @id @default(cuid())
+  id           String    @id @default(uuid())
   auction_id   String
   donor_id     String
   amount_cents Int
@@ -295,7 +324,7 @@ model Bid {
 }
 
 model AuctionOffer {
-  id                  String    @id @default(cuid())
+  id                  String    @id @default(uuid())
   auction_id          String
   donor_id            String
   bid_id              String
@@ -314,7 +343,7 @@ model AuctionOffer {
 }
 
 model AuctionWin {
-  id                  String    @id @default(cuid())
+  id                  String    @id @default(uuid())
   auction_id          String    @unique
   donor_id            String
   winning_bid_cents   Int
@@ -329,7 +358,7 @@ model AuctionWin {
 }
 
 model WebhookDestination {
-  id               String          @id @default(cuid())
+  id               String          @id @default(uuid())
   url              String
   secret           String
   is_active        Boolean         @default(true)
@@ -344,6 +373,8 @@ model WebhookDestination {
   amqp_url         String?
   amqp_exchange    String          @default("")
   amqp_routing_key String?
+  // TILTIFY | NATIVE (PRD-0002 §T, §N). NATIVE is the existing envelope.
+  payload_format   String          @default("NATIVE")
 
   @@map("WebhookEndpoint")
 }
@@ -357,13 +388,15 @@ model WebhookDestinationSeq {
 }
 
 model WebhookDelivery {
-  id               String          @id @default(cuid())
+  id               String          @id @default(uuid())
   seq              Int             @default(0)
   // One id per webhook message, shared by every Destination's row for that
   // message and stable across retries. Sent as the AMQP messageId (PRD-0002 §Q9).
   message_id       String          @default(uuid())
   destination_id   String
   message_type     String             @map("event_type")
+  // Per-message AMQP routing key (TILTIFY: <channel-slug>.donation). Null = the Destination\'s.
+  routing_key      String?
   payload          String
   status           String          @default("PENDING") // PENDING | SUCCESS | FAILED
   attempts         Int             @default(0)
@@ -380,7 +413,7 @@ model WebhookDelivery {
 }
 
 model FeatureFlag {
-  id          String    @id @default(cuid())
+  id          String    @id @default(uuid())
   name        String    @unique
   description String?
   is_enabled  Boolean   @default(false)
@@ -389,7 +422,7 @@ model FeatureFlag {
 }
 
 model Broadcast {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   message    String   // The banner message/content
   level      String?  // INFO | WARNING | CRITICAL (#68); null = original single fixed style
   is_active  Boolean  @default(true)
