@@ -126,6 +126,13 @@ const webhookQueueFailed = new client.Gauge({
   registers: [register],
 });
 
+const webhookDestinationActive = new client.Gauge({
+  name: 'dono_webhook_destination_active',
+  help: '1 if the webhook destination is active, 0 if paused (lets stall alerts ignore paused destinations)',
+  labelNames: ['destination_id', 'destination_type'] as const,
+  registers: [register],
+});
+
 const webhookDestinationLastSuccessTimestampSeconds = new client.Gauge({
   name: 'dono_webhook_destination_last_success_timestamp_seconds',
   help: 'Unix time of the most recent retained SUCCESS webhook delivery per destination (0 if none)',
@@ -179,7 +186,9 @@ export async function refreshBusinessMetrics(): Promise<void> {
       prisma.bid.count({ where: { status: 'ACTIVE' } }),
       prisma.auctionWin.count({ where: { status: 'FULFILLED' } }),
       prisma.auction.count({ where: { status: 'UNSOLD' } }),
-      prisma.webhookDestination.findMany({ select: { id: true, destination_type: true } }),
+      prisma.webhookDestination.findMany({
+        select: { id: true, destination_type: true, is_active: true },
+      }),
       prisma.webhookDelivery.groupBy({
         by: ['destination_id', 'status'],
         _count: { _all: true },
@@ -206,26 +215,21 @@ export async function refreshBusinessMetrics(): Promise<void> {
     webhookQueueDepth.reset();
     webhookQueueOldestPendingAgeSeconds.reset();
     webhookQueueFailed.reset();
+    webhookDestinationActive.reset();
     webhookDestinationLastSuccessTimestampSeconds.reset();
+    const group = new Map(webhookDeliveryGroups.map((g) => [`${g.destination_id}:${g.status}`, g]));
     for (const d of webhookDestinations) {
       const labels = { destination_id: d.id, destination_type: d.destination_type };
-      const pending = webhookDeliveryGroups.find(
-        (g) => g.destination_id === d.id && g.status === 'PENDING',
-      );
-      const failed = webhookDeliveryGroups.find(
-        (g) => g.destination_id === d.id && g.status === 'FAILED',
-      );
-      const success = webhookDeliveryGroups.find(
-        (g) => g.destination_id === d.id && g.status === 'SUCCESS',
-      );
-      webhookQueueDepth.set(labels, pending?._count._all ?? 0);
+      const pending = group.get(`${d.id}:PENDING`);
       const oldestPending = pending?._min.created_at;
+      const lastSuccess = group.get(`${d.id}:SUCCESS`)?._max.updated_at;
+      webhookQueueDepth.set(labels, pending?._count._all ?? 0);
       webhookQueueOldestPendingAgeSeconds.set(
         labels,
         oldestPending ? Math.max(0, (Date.now() - oldestPending.getTime()) / 1000) : 0,
       );
-      webhookQueueFailed.set(labels, failed?._count._all ?? 0);
-      const lastSuccess = success?._max.updated_at;
+      webhookQueueFailed.set(labels, group.get(`${d.id}:FAILED`)?._count._all ?? 0);
+      webhookDestinationActive.set(labels, d.is_active ? 1 : 0);
       webhookDestinationLastSuccessTimestampSeconds.set(
         labels,
         lastSuccess ? lastSuccess.getTime() / 1000 : 0,

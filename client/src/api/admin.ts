@@ -204,7 +204,7 @@ export async function requeueDelivery(
 
 export async function requeueFailedDeliveries(
   destinationId: string,
-): Promise<{ requeued: number }> {
+): Promise<{ requeued: number; skipped_unbuilt: number }> {
   const { data } = await adminClient.post(`/destinations/${destinationId}/requeue-failed`);
   return data;
 }

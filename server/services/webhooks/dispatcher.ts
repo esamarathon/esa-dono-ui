@@ -248,7 +248,7 @@ async function drainOnce(destinationId: string): Promise<void> {
 
     if (!head) return;
 
-    const delivery = head as DeliveryWithDestination;
+    const delivery: DeliveryWithDestination = head;
     if (!delivery.destination.is_active) return;
     if (delivery.next_attempt_at.getTime() > Date.now()) return;
 

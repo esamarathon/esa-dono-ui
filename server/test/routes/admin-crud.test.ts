@@ -767,7 +767,7 @@ describe('Admin CRUD routes', () => {
         .set(AUTH);
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ requeued: 2 });
+      expect(res.body).toEqual({ requeued: 2, skipped_unbuilt: 1 });
 
       const stillFailed = await prisma.webhookDelivery.findUnique({ where: { id: neverBuilt.id } });
       expect(stillFailed!.status).toBe('FAILED');

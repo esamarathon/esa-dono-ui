@@ -218,10 +218,10 @@ describe('webhook dispatcher', () => {
     const second = await prisma.webhookDelivery.findUnique({ where: { id: d2.id } });
     const third = await prisma.webhookDelivery.findUnique({ where: { id: d3.id } });
     expect(first!.status).toBe('FAILED');
-    expect(first!.last_error).toBeTruthy();
+    expect(first!.last_error).toBe('payload is empty (never built)');
     expect(first!.last_status_code).toBeNull();
     expect(second!.status).toBe('FAILED');
-    expect(second!.last_error).toBeTruthy();
+    expect(second!.last_error).toBe('payload is not valid JSON');
     expect(third!.status).toBe('SUCCESS');
     expect(capture.bodies).toEqual([JSON.stringify({ id: 3 })]);
 

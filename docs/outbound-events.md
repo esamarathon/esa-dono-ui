@@ -49,7 +49,7 @@ An outage never turns messages into `FAILED`. It shows up as messages that keep 
    - `429`: the endpoint is rate-limiting you.
    - `RabbitMQ destination missing …`: the configuration is incomplete.
 2. Fix the endpoint or the Destination's configuration. You need to do nothing else: the next retry sends the head, and the backlog follows in order.
-3. To pause delivery while you fix something, set the Destination **inactive**. Its waiting messages are kept and delivery resumes when you set it active again. While it is inactive, new messages are **not** queued for it.
+3. To pause delivery while you fix something, set the Destination **inactive**. The stall alert ignores paused Destinations. Its waiting messages are kept and delivery resumes when you set it active again. While it is inactive, new messages are **not** queued for it.
 
 ### A message FAILED
 
@@ -85,18 +85,22 @@ A message that was delivered and then lost by the consumer **cannot be resent af
 
 These gauges are on `/api/metrics`. They come from the database and refresh every `METRICS_REFRESH_MS` (default 45 s). Each is labelled `destination_id` and `destination_type`.
 
-| Metric                                                    | Meaning                                                          |
-| --------------------------------------------------------- | ---------------------------------------------------------------- |
-| `dono_webhook_queue_depth`                                | `PENDING` messages                                               |
-| `dono_webhook_queue_oldest_pending_age_seconds`           | Age of the oldest `PENDING` message (0 if none)                  |
-| `dono_webhook_queue_failed`                               | `FAILED` messages still retained                                 |
-| `dono_webhook_destination_last_success_timestamp_seconds` | Unix time of the last successful delivery that is still retained |
+| Metric                                                    | Meaning                                                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `dono_webhook_queue_depth`                                | `PENDING` messages                                                                                     |
+| `dono_webhook_queue_oldest_pending_age_seconds`           | Age of the oldest `PENDING` message (0 if none)                                                        |
+| `dono_webhook_queue_failed`                               | `FAILED` messages still retained                                                                       |
+| `dono_webhook_destination_active`                         | `1` if the Destination is active, `0` if paused. The stall alert uses it to ignore paused Destinations |
+| `dono_webhook_destination_last_success_timestamp_seconds` | Unix time of the last successful delivery that is still retained                                       |
 
 Reference alert rules. They are deployed from `esamarathon/esa-observability`. This copy is for reference only:
 
 ```yaml
 - alert: WebhookQueueStalled
-  expr: dono_webhook_queue_depth > 0 and dono_webhook_queue_oldest_pending_age_seconds > 300
+  expr: >
+    dono_webhook_queue_depth > 0
+    and dono_webhook_queue_oldest_pending_age_seconds > 300
+    and on (destination_id) dono_webhook_destination_active == 1
   for: 1m
 - alert: WebhookMessageFailed
   expr: dono_webhook_queue_failed > 0

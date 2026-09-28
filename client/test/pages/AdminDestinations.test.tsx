@@ -288,7 +288,7 @@ describe('AdminDestinations', () => {
       deliveries: [failedDelivery],
       total: 1,
     });
-    mocks.requeueFailedDeliveries.mockResolvedValue({ requeued: 1 });
+    mocks.requeueFailedDeliveries.mockResolvedValue({ requeued: 1, skipped_unbuilt: 0 });
 
     render(
       <MemoryRouter>

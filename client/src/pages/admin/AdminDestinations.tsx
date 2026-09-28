@@ -202,7 +202,12 @@ export default function AdminWebhooks() {
     if (!expandedId) return;
     try {
       const r = await requeueFailedDeliveries(expandedId);
-      alert(`Requeued ${r.requeued} deliveries.`);
+      alert(
+        `Requeued ${r.requeued} deliveries.` +
+          (r.skipped_unbuilt
+            ? ` ${r.skipped_unbuilt} FAILED row(s) were never built and cannot be resent.`
+            : ''),
+      );
       await loadDeliveries(expandedId);
     } catch (e) {
       alert(apiErrorMessage(e, 'Requeue failed'));

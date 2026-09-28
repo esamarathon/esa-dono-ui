@@ -84,8 +84,8 @@ describe('refreshBusinessMetrics', () => {
     const pendingCreatedAt = new Date(now - 120_000);
     const lastSuccessAt = new Date('2026-01-01T00:00:00.000Z');
     vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([
-      { id: 'd1', destination_type: 'HTTP' },
-      { id: 'd2', destination_type: 'RABBITMQ' },
+      { id: 'd1', destination_type: 'HTTP', is_active: true },
+      { id: 'd2', destination_type: 'RABBITMQ', is_active: false },
     ] as any);
     vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValue([
       {
@@ -135,12 +135,14 @@ describe('refreshBusinessMetrics', () => {
     expect(value('dono_webhook_queue_oldest_pending_age_seconds', 'd2')).toBe(0);
     expect(value('dono_webhook_queue_failed', 'd2')).toBe(0);
     expect(value('dono_webhook_destination_last_success_timestamp_seconds', 'd2')).toBe(0);
+    expect(value('dono_webhook_destination_active', 'd1')).toBe(1);
+    expect(value('dono_webhook_destination_active', 'd2')).toBe(0);
   });
 
   it('drops series for a destination that disappears between refreshes', async () => {
     vi.mocked(prisma.webhookDestination.findMany).mockResolvedValueOnce([
-      { id: 'd1', destination_type: 'HTTP' },
-      { id: 'd2', destination_type: 'RABBITMQ' },
+      { id: 'd1', destination_type: 'HTTP', is_active: true },
+      { id: 'd2', destination_type: 'RABBITMQ', is_active: false },
     ] as any);
     vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValueOnce([
       {
@@ -154,7 +156,7 @@ describe('refreshBusinessMetrics', () => {
     await refreshBusinessMetrics();
 
     vi.mocked(prisma.webhookDestination.findMany).mockResolvedValueOnce([
-      { id: 'd1', destination_type: 'HTTP' },
+      { id: 'd1', destination_type: 'HTTP', is_active: true },
     ] as any);
     vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValueOnce([]);
     await refreshBusinessMetrics();

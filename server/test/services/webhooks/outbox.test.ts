@@ -73,6 +73,40 @@ describe('withWebhooks (transactional outbox)', () => {
     expect(dispatcher.wakeDispatcher).not.toHaveBeenCalled();
   });
 
+  it('allocates seq in commit order: a transaction started while another is open gets the later seq', async () => {
+    const d = await destination(['incentive.created']);
+    const commits: string[] = [];
+    let releaseA!: () => void;
+    const aMayCommit = new Promise<void>((resolve) => (releaseA = resolve));
+    let aStarted!: () => void;
+    const aIsOpen = new Promise<void>((resolve) => (aStarted = resolve));
+
+    // A opens first and holds its transaction open.
+    const a = withWebhooks(async (tx, emit) => {
+      await tx.webhookDestination.update({ where: { id: d.id }, data: { description: 'A' } });
+      aStarted();
+      await aMayCommit;
+      await emit('incentive.created', build);
+    }).then(() => commits.push('A'));
+    await aIsOpen;
+
+    // B is requested while A is open; it can only run after A commits.
+    const b = withWebhooks(async (tx, emit) => {
+      await tx.webhookDestination.update({ where: { id: d.id }, data: { description: 'B' } });
+      await emit('incentive.created', build);
+    }).then(() => commits.push('B'));
+
+    releaseA();
+    await Promise.all([a, b]);
+
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { destination_id: d.id },
+      orderBy: { seq: 'asc' },
+    });
+    expect(commits).toEqual(['A', 'B']);
+    expect(rows.map((r) => r.seq)).toEqual([1, 2]);
+  });
+
   it('gives concurrent transactions distinct, gap-free seq numbers', async () => {
     const d = await destination(['incentive.created']);
 

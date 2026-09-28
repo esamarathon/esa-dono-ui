@@ -1856,6 +1856,9 @@ paths:
                 type: object
                 properties:
                   requeued: { type: integer }
+                  skipped_unbuilt:
+                    type: integer
+                    description: FAILED rows whose payload was never built; they stay FAILED
         '404':
           description: Endpoint not found
 
