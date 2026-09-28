@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import channelsRouter from '../../routes/channels.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -37,8 +37,9 @@ describe('Channels', () => {
   const createdDonorIds: string[] = [];
   const createdEventIds: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
+    await ensureDefaultEvent(prisma);
   });
 
   afterAll(async () => {

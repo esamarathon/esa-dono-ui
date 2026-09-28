@@ -49,7 +49,7 @@ async function resolveEventId(tx: Prisma.TransactionClient, eventId: unknown): P
   }
   const events = await tx.event.findMany({ select: { id: true }, take: 2 });
   if (events.length !== 1)
-    throw httpError(400, 'event_id is required when more than one event exists');
+    throw httpError(400, 'event_id is required unless exactly one event exists');
   return events[0]!.id;
 }
 
