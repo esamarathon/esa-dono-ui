@@ -192,6 +192,23 @@ export async function testDestination(id: string): Promise<{ success: boolean; s
   return data;
 }
 
+export async function requeueDelivery(
+  destinationId: string,
+  deliveryId: string,
+): Promise<WebhookDelivery> {
+  const { data } = await adminClient.post(
+    `/destinations/${destinationId}/deliveries/${deliveryId}/requeue`,
+  );
+  return data;
+}
+
+export async function requeueFailedDeliveries(
+  destinationId: string,
+): Promise<{ requeued: number }> {
+  const { data } = await adminClient.post(`/destinations/${destinationId}/requeue-failed`);
+  return data;
+}
+
 /** Upload a reward image via the shared moderator upload endpoint.
  *  The admin bearer key satisfies moderatorAuth, so no separate admin
  *  upload route is needed. */

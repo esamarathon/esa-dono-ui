@@ -1619,6 +1619,55 @@ router.post('/destinations/:id/test', async (req, res) => {
   res.json({ success: true, seq });
 });
 
+router.post('/destinations/:id/deliveries/:deliveryId/requeue', async (req, res) => {
+  const delivery = await prisma.webhookDelivery.findFirst({
+    where: { id: req.params.deliveryId, destination_id: req.params.id },
+  });
+  if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+  if (delivery.status !== 'FAILED') {
+    return res.status(409).json({ error: 'Only FAILED deliveries can be requeued' });
+  }
+  if (delivery.payload === '') {
+    return res.status(409).json({ error: 'This delivery was never built and cannot be resent' });
+  }
+
+  const updated = await prisma.webhookDelivery.update({
+    where: { id: delivery.id },
+    data: {
+      status: 'PENDING',
+      attempts: 0,
+      next_attempt_at: new Date(),
+      last_error: null,
+      last_status_code: null,
+    },
+  });
+  wakeDispatcher(req.params.id);
+
+  const { message_type, ...rest } = updated;
+  res.json({ ...rest, event_type: message_type });
+});
+
+router.post('/destinations/:id/requeue-failed', async (req, res) => {
+  const destination = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!destination) return res.status(404).json({ error: 'Webhook endpoint not found' });
+
+  const { count } = await prisma.webhookDelivery.updateMany({
+    where: { destination_id: req.params.id, status: 'FAILED', payload: { not: '' } },
+    data: {
+      status: 'PENDING',
+      attempts: 0,
+      next_attempt_at: new Date(),
+      last_error: null,
+      last_status_code: null,
+    },
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json({ requeued: count });
+});
+
 // Feature Flags CRUD
 router.get('/feature-flags', async (req, res) => {
   const flags = await prisma.featureFlag.findMany({

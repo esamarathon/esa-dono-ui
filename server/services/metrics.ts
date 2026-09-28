@@ -105,6 +105,34 @@ const metricsLastRefreshTimestamp = new client.Gauge({
   registers: [register],
 });
 
+const webhookQueueDepth = new client.Gauge({
+  name: 'dono_webhook_queue_depth',
+  help: 'PENDING webhook deliveries per destination',
+  labelNames: ['destination_id', 'destination_type'] as const,
+  registers: [register],
+});
+
+const webhookQueueOldestPendingAgeSeconds = new client.Gauge({
+  name: 'dono_webhook_queue_oldest_pending_age_seconds',
+  help: 'Age in seconds of the oldest PENDING webhook delivery per destination (0 if none)',
+  labelNames: ['destination_id', 'destination_type'] as const,
+  registers: [register],
+});
+
+const webhookQueueFailed = new client.Gauge({
+  name: 'dono_webhook_queue_failed',
+  help: 'FAILED webhook deliveries still retained, per destination',
+  labelNames: ['destination_id', 'destination_type'] as const,
+  registers: [register],
+});
+
+const webhookDestinationLastSuccessTimestampSeconds = new client.Gauge({
+  name: 'dono_webhook_destination_last_success_timestamp_seconds',
+  help: 'Unix time of the most recent retained SUCCESS webhook delivery per destination (0 if none)',
+  labelNames: ['destination_id', 'destination_type'] as const,
+  registers: [register],
+});
+
 const ADJUSTMENT_TYPES = ['REFUND', 'FREEZE_ZERO', 'MANUAL', 'CHARGEBACK'] as const;
 
 /**
@@ -129,6 +157,8 @@ export async function refreshBusinessMetrics(): Promise<void> {
       activeBids,
       settledWins,
       unsoldAuctions,
+      webhookDestinations,
+      webhookDeliveryGroups,
     ] = await Promise.all([
       prisma.donor.count(),
       prisma.donation.aggregate({ _sum: { amount_cents: true } }),
@@ -149,6 +179,13 @@ export async function refreshBusinessMetrics(): Promise<void> {
       prisma.bid.count({ where: { status: 'ACTIVE' } }),
       prisma.auctionWin.count({ where: { status: 'FULFILLED' } }),
       prisma.auction.count({ where: { status: 'UNSOLD' } }),
+      prisma.webhookDestination.findMany({ select: { id: true, destination_type: true } }),
+      prisma.webhookDelivery.groupBy({
+        by: ['destination_id', 'status'],
+        _count: { _all: true },
+        _min: { created_at: true },
+        _max: { updated_at: true },
+      }),
     ]);
 
     donorsTotal.set(donorCount);
@@ -166,6 +203,34 @@ export async function refreshBusinessMetrics(): Promise<void> {
     auctionBidsActive.set(activeBids);
     auctionWinsTotal.set(settledWins);
     auctionsUnsold.set(unsoldAuctions);
+    webhookQueueDepth.reset();
+    webhookQueueOldestPendingAgeSeconds.reset();
+    webhookQueueFailed.reset();
+    webhookDestinationLastSuccessTimestampSeconds.reset();
+    for (const d of webhookDestinations) {
+      const labels = { destination_id: d.id, destination_type: d.destination_type };
+      const pending = webhookDeliveryGroups.find(
+        (g) => g.destination_id === d.id && g.status === 'PENDING',
+      );
+      const failed = webhookDeliveryGroups.find(
+        (g) => g.destination_id === d.id && g.status === 'FAILED',
+      );
+      const success = webhookDeliveryGroups.find(
+        (g) => g.destination_id === d.id && g.status === 'SUCCESS',
+      );
+      webhookQueueDepth.set(labels, pending?._count._all ?? 0);
+      const oldestPending = pending?._min.created_at;
+      webhookQueueOldestPendingAgeSeconds.set(
+        labels,
+        oldestPending ? Math.max(0, (Date.now() - oldestPending.getTime()) / 1000) : 0,
+      );
+      webhookQueueFailed.set(labels, failed?._count._all ?? 0);
+      const lastSuccess = success?._max.updated_at;
+      webhookDestinationLastSuccessTimestampSeconds.set(
+        labels,
+        lastSuccess ? lastSuccess.getTime() / 1000 : 0,
+      );
+    }
     metricsLastRefreshTimestamp.set(Date.now() / 1000);
   } catch (err) {
     metricsRefreshErrorsTotal.inc();

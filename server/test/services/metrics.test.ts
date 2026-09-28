@@ -12,6 +12,8 @@ vi.mock('../../lib/prisma.js', () => ({
     auction: { count: vi.fn() },
     bid: { count: vi.fn() },
     auctionWin: { count: vi.fn() },
+    webhookDestination: { findMany: vi.fn() },
+    webhookDelivery: { groupBy: vi.fn() },
   },
 }));
 
@@ -41,6 +43,8 @@ describe('refreshBusinessMetrics', () => {
     vi.mocked(prisma.auction.count).mockResolvedValue(0);
     vi.mocked(prisma.bid.count).mockResolvedValue(0);
     vi.mocked(prisma.auctionWin.count).mockResolvedValue(0);
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValue([]);
   });
 
   it('populates gauges from aggregate DB queries', async () => {
@@ -74,6 +78,98 @@ describe('refreshBusinessMetrics', () => {
     const metrics = await register.metrics();
     expect(metrics).toContain('dono_metrics_refresh_errors_total 1');
   });
+
+  it('sets per-destination webhook queue gauges', async () => {
+    const now = Date.now();
+    const pendingCreatedAt = new Date(now - 120_000);
+    const lastSuccessAt = new Date('2026-01-01T00:00:00.000Z');
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([
+      { id: 'd1', destination_type: 'HTTP' },
+      { id: 'd2', destination_type: 'RABBITMQ' },
+    ] as any);
+    vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValue([
+      {
+        destination_id: 'd1',
+        status: 'PENDING',
+        _count: { _all: 3 },
+        _min: { created_at: pendingCreatedAt },
+        _max: { updated_at: pendingCreatedAt },
+      },
+      {
+        destination_id: 'd1',
+        status: 'FAILED',
+        _count: { _all: 1 },
+        _min: { created_at: pendingCreatedAt },
+        _max: { updated_at: lastSuccessAt },
+      },
+      {
+        destination_id: 'd1',
+        status: 'SUCCESS',
+        _count: { _all: 5 },
+        _min: { created_at: lastSuccessAt },
+        _max: { updated_at: lastSuccessAt },
+      },
+    ] as any);
+
+    await refreshBusinessMetrics();
+
+    const metrics = await register.getMetricsAsJSON();
+    const value = (name: string, destination_id: string) => {
+      const gauge = metrics.find((m) => m.name === name);
+      const sample = gauge?.values.find(
+        (v) => (v.labels as Record<string, unknown>).destination_id === destination_id,
+      );
+      return sample?.value as number | undefined;
+    };
+
+    expect(value('dono_webhook_queue_depth', 'd1')).toBe(3);
+    const oldestAge = value('dono_webhook_queue_oldest_pending_age_seconds', 'd1')!;
+    expect(oldestAge).toBeGreaterThanOrEqual(115);
+    expect(oldestAge).toBeLessThanOrEqual(125);
+    expect(value('dono_webhook_queue_failed', 'd1')).toBe(1);
+    expect(value('dono_webhook_destination_last_success_timestamp_seconds', 'd1')).toBe(
+      lastSuccessAt.getTime() / 1000,
+    );
+
+    expect(value('dono_webhook_queue_depth', 'd2')).toBe(0);
+    expect(value('dono_webhook_queue_oldest_pending_age_seconds', 'd2')).toBe(0);
+    expect(value('dono_webhook_queue_failed', 'd2')).toBe(0);
+    expect(value('dono_webhook_destination_last_success_timestamp_seconds', 'd2')).toBe(0);
+  });
+
+  it('drops series for a destination that disappears between refreshes', async () => {
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValueOnce([
+      { id: 'd1', destination_type: 'HTTP' },
+      { id: 'd2', destination_type: 'RABBITMQ' },
+    ] as any);
+    vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValueOnce([
+      {
+        destination_id: 'd2',
+        status: 'PENDING',
+        _count: { _all: 4 },
+        _min: { created_at: new Date() },
+        _max: { updated_at: new Date() },
+      },
+    ] as any);
+    await refreshBusinessMetrics();
+
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValueOnce([
+      { id: 'd1', destination_type: 'HTTP' },
+    ] as any);
+    vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValueOnce([]);
+    await refreshBusinessMetrics();
+
+    const metrics = await register.getMetricsAsJSON();
+    const depth = metrics.find((m) => m.name === 'dono_webhook_queue_depth');
+    const d2Sample = depth?.values.find(
+      (v) => (v.labels as Record<string, unknown>).destination_id === 'd2',
+    );
+    expect(d2Sample).toBeUndefined();
+    const d1Sample = depth?.values.find(
+      (v) => (v.labels as Record<string, unknown>).destination_id === 'd1',
+    );
+    expect(d1Sample?.value).toBe(0);
+  });
 });
 
 describe('startMetricsRefresh / stopMetricsRefresh', () => {
@@ -87,6 +183,8 @@ describe('startMetricsRefresh / stopMetricsRefresh', () => {
     vi.mocked(prisma.rewardClaim.count).mockResolvedValue(0);
     vi.mocked(prisma.pollVote.count).mockResolvedValue(0);
     vi.mocked(prisma.balanceAdjustment.count).mockResolvedValue(0);
+    vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.webhookDelivery.groupBy).mockResolvedValue([]);
   });
 
   it('starts and stops the refresh loop', () => {
