@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { httpError } from '../lib/slugs.js';
+import { httpError } from '../lib/httpError.js';
 
 type EventDb = Pick<Prisma.TransactionClient, 'event' | 'channel'>;
 

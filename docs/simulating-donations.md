@@ -27,6 +27,8 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
 # Recording a real donation received externally — external_id/occurred_at/
 # channel_id are all optional. external_id must be unique (409 on reuse).
 # channel_id is a Channel's UUID (GET /api/channels lists them with their slug).
+# `prisma db seed` creates one active Event with a primary Channel, so a dev
+# database always has at least one Channel to use here.
 curl -X POST http://localhost:3001/api/admin/simulate-donation \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer key_admin_change-me" \

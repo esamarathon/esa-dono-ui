@@ -36,8 +36,8 @@ They depend on three things we did not have:
 
   There is no `.`, because it is the AMQP topic separator, and kollekt's `*.donation` binding matches exactly one word. The admin API derives a slug from the name when none is given.
 
-- **A slug is fixed while active.** It can change only while its Event or Channel is inactive. There are no alias or redirect tables in v1.
-- **The migration works on a non-empty database.** It inserts a default Event (fixed id `00000000-0000-4000-8000-000000000001`, slug `default-event`, inactive) and attaches existing Channels to it. It gives them the slugs `channel-<id>` and sets `event_id` on donations that have a channel. `prisma db seed` then makes one Event active with a primary Channel.
+- **A slug is fixed while active.** A Channel's slug can change only while that Channel is inactive, and the same rule applies to an Event's slug once Events can be edited (#115). There are no alias or redirect tables in v1.
+- **The migration works on a non-empty database.** This deliberately deviates from PRD-0002 §S1 ("no backfill"). Without it, the new image's `prisma migrate deploy` fails on any existing database before a reset can happen. A reset is still recommended. It inserts a default Event (fixed id `00000000-0000-4000-8000-000000000001`, slug `default-event`, inactive) and attaches existing Channels to it. It gives them the slugs `channel-<id>` and sets `event_id` on donations that have a channel. `prisma db seed` then makes one Event active with a primary Channel.
 - **Only one Event?** A Channel created without `event_id` joins the only Event. With several Events, `event_id` is required. This keeps channel creation working until the Event admin UI arrives in #115.
 
 ## Consequences

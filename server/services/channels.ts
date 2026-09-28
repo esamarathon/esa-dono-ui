@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
-import { assertUsableSlug, availableSlugFrom, httpError } from '../lib/slugs.js';
+import { httpError } from '../lib/httpError.js';
+import { assertUsableSlug, availableSlugFrom } from '../lib/slugs.js';
 import { activeEventWithPrimary } from './events.js';
 
 /**
@@ -15,9 +16,22 @@ export interface ChannelInput {
   is_active?: unknown;
 }
 
-function isUniqueNameError(e: unknown): boolean {
+/** Map a Prisma unique-constraint error to a 409 (the slug check can race with another writer). */
+function uniqueConflict(e: unknown): Error | null {
   const err = e as { code?: string; meta?: { target?: unknown } };
-  return err.code === 'P2002' && JSON.stringify(err.meta?.target ?? '').includes('name');
+  if (err.code !== 'P2002') return null;
+  const target = JSON.stringify(err.meta?.target ?? '');
+  if (target.includes('slug'))
+    return httpError(409, 'slug is already used by another event or channel');
+  if (target.includes('name')) return httpError(409, 'Channel name already exists');
+  return null;
+}
+
+/** `is_active` must be a boolean when given: a truthy string must not bypass the primary-channel rule. */
+function optionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw httpError(400, `${field} must be true or false`);
+  return value;
 }
 
 /**
@@ -43,6 +57,7 @@ async function resolveEventId(tx: Prisma.TransactionClient, eventId: unknown): P
 export async function createChannel(input: ChannelInput) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) throw httpError(400, 'name is required');
+  const isActive = optionalBoolean(input.is_active, 'is_active');
   try {
     return await prisma.$transaction(async (tx) => {
       const event_id = await resolveEventId(tx, input.event_id);
@@ -51,12 +66,11 @@ export async function createChannel(input: ChannelInput) {
           ? await availableSlugFrom(tx, name, 'channel')
           : await assertUsableSlug(tx, input.slug);
       return tx.channel.create({
-        data: { name, slug, event_id, is_active: input.is_active === false ? false : true },
+        data: { name, slug, event_id, is_active: isActive ?? true },
       });
     });
   } catch (e) {
-    if (isUniqueNameError(e)) throw httpError(409, 'Channel name already exists');
-    throw e;
+    throw uniqueConflict(e) ?? e;
   }
 }
 
@@ -66,6 +80,8 @@ export async function createChannel(input: ChannelInput) {
  * Event.
  */
 export async function updateChannel(id: string, input: ChannelInput) {
+  const isActive = optionalBoolean(input.is_active, 'is_active');
+  const eventId = input.event_id === '' || input.event_id === null ? undefined : input.event_id;
   try {
     return await prisma.$transaction(async (tx) => {
       const current = await tx.channel.findUnique({ where: { id } });
@@ -86,11 +102,8 @@ export async function updateChannel(id: string, input: ChannelInput) {
         }
         data.slug = await assertUsableSlug(tx, input.slug, { channelId: id });
       }
-      const movingEvent =
-        input.event_id !== undefined &&
-        input.event_id !== null &&
-        input.event_id !== current.event_id;
-      const deactivating = input.is_active === false && current.is_active;
+      const movingEvent = eventId !== undefined && eventId !== current.event_id;
+      const deactivating = isActive === false && current.is_active;
       if (movingEvent || deactivating) {
         const primaryOf = await activeEventWithPrimary(tx, id);
         if (primaryOf) {
@@ -100,14 +113,13 @@ export async function updateChannel(id: string, input: ChannelInput) {
           );
         }
       }
-      if (movingEvent) data.event_id = await resolveEventId(tx, input.event_id);
-      if (input.is_active !== undefined) data.is_active = input.is_active === true;
+      if (movingEvent) data.event_id = await resolveEventId(tx, eventId);
+      if (isActive !== undefined) data.is_active = isActive;
 
       return tx.channel.update({ where: { id }, data });
     });
   } catch (e) {
-    if (isUniqueNameError(e)) throw httpError(409, 'Channel name already exists');
-    throw e;
+    throw uniqueConflict(e) ?? e;
   }
 }
 

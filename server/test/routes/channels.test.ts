@@ -109,7 +109,7 @@ describe('Channels', () => {
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
 
-    it('rejects duplicate event names', async () => {
+    it('rejects duplicate channel names', async () => {
       const name = `Dup Event ${crypto.randomUUID()}`;
       const first = await request(createApp()).post('/api/admin/channels').send({ name }).set(auth);
       createdChannelIds.push(first.body.id);
@@ -123,7 +123,7 @@ describe('Channels', () => {
 
     it('includes per-channel raised totals in /admin/stats', async () => {
       const channel = await createTestChannel(prisma, {
-        name: `Stats Event ${crypto.randomUUID()}`,
+        name: `Stats Channel ${crypto.randomUUID()}`,
       });
       createdChannelIds.push(channel.id);
 
@@ -201,21 +201,48 @@ describe('Channels', () => {
       createdChannelIds.push(res.body.id);
     });
 
-    it('falls back to the only event when event_id is omitted', async () => {
-      // Only the migration's default Event exists here. Other test files create
-      // Events too, so skip (rather than fail) if one is still present when this
-      // file runs — the fallback is a convenience, not an invariant.
-      if ((await prisma.event.count()) !== 1) return;
-
+    it('uses the only event when event_id is omitted, and requires it when there are several', async () => {
+      // Other test files may leave extra Events behind, so assert whichever rule
+      // applies to the Events that exist right now; both branches are real checks.
       const suffix = rand();
+      const events = await prisma.event.count();
       const res = await request(createApp())
         .post('/api/admin/channels')
         .send({ name: `QA Fallback ${suffix}` })
         .set(auth);
-      expect(res.status).toBe(200);
-      expect(res.body.slug).toBe(`qa-fallback-${suffix}`);
-      expect(res.body.event_id).toBe(DEFAULT_EVENT_ID);
-      createdChannelIds.push(res.body.id);
+      if (events === 1) {
+        expect(res.status).toBe(200);
+        expect(res.body.slug).toBe(`qa-fallback-${suffix}`);
+        expect(res.body.event_id).toBe(DEFAULT_EVENT_ID);
+        createdChannelIds.push(res.body.id);
+      } else {
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/event_id is required/);
+      }
+    });
+
+    it('rejects a non-boolean is_active with 400 (it must not bypass the primary-channel rule)', async () => {
+      const event = await makeEvent(`Bool Guard ${rand()}`);
+      const channel = await createTestChannel(prisma, {
+        name: `Bool ${rand()}`,
+        event_id: event.id,
+      });
+      createdChannelIds.push(channel.id);
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: channel.id, is_active: true },
+      });
+
+      for (const value of ['false', 0, null]) {
+        const res = await request(createApp())
+          .put(`/api/admin/channels/${channel.id}`)
+          .send({ is_active: value })
+          .set(auth);
+        expect(res.status).toBe(400);
+      }
+      expect((await prisma.channel.findUnique({ where: { id: channel.id } }))!.is_active).toBe(
+        true,
+      );
     });
 
     it('rejects an invalid slug with 400', async () => {

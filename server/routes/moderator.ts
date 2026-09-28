@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
+import { sendError } from '../lib/httpError.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
 import {
@@ -29,13 +30,6 @@ import {
 // change pass — if a moderator surface genuinely needs donor identity, use
 // donor_name (already a plain column, no join needed) instead of email.
 const router = Router();
-
-/** Send an Error carrying `status` (lib/slugs.ts httpError) as JSON; anything else is a 500. */
-function sendError(res: import('express').Response, e: unknown) {
-  const status = (e as { status?: number }).status;
-  if (!status) throw e;
-  res.status(status).json({ error: (e as Error).message });
-}
 router.use(moderatorAuth);
 
 // Dashboard stats
@@ -63,7 +57,7 @@ router.post('/channels', async (req, res) => {
   try {
     res.json(await createChannel(req.body ?? {}));
   } catch (e) {
-    sendError(res, e);
+    sendError(res, e, '[channels]');
   }
 });
 
@@ -71,7 +65,7 @@ router.put('/channels/:id', async (req, res) => {
   try {
     res.json(await updateChannel(req.params.id, req.body ?? {}));
   } catch (e) {
-    sendError(res, e);
+    sendError(res, e, '[channels]');
   }
 });
 
@@ -81,7 +75,7 @@ router.delete('/channels/:id', async (req, res) => {
   try {
     res.json({ success: true, channel: await deactivateChannel(req.params.id) });
   } catch (e) {
-    sendError(res, e);
+    sendError(res, e, '[channels]');
   }
 });
 

@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { httpError } from './httpError.js';
 
 /**
  * Slugs name an Event or a Channel in URLs (`/donate/<event>/<channel>`) and in
@@ -96,11 +97,6 @@ export async function availableSlugFrom(
     const candidate = n === 1 ? base : `${base}-${n}`;
     if (!slugProblem(candidate) && (await isSlugAvailable(db, candidate))) return candidate;
   }
-}
-
-/** An Error carrying an HTTP `status`, the convention routes already use (see services/pledge.ts). */
-export function httpError(status: number, message: string): Error & { status: number } {
-  return Object.assign(new Error(message), { status });
 }
 
 /** Throws 400 for an invalid slug, 409 for one already used by another Event or Channel. */
