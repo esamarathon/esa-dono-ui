@@ -16,12 +16,13 @@ import {
 import { invalidateFlagCache } from '../services/featureFlags.js';
 import { TOKEN_TTL_MS } from '../config.js';
 import {
-  emitWebhookEvent,
+  emitWebhookMessage,
+  isWebhookMessageType,
   buildIncentiveCreatedPayload,
   buildIncentiveEnabledPayload,
   buildIncentiveDisabledPayload,
   buildIncentiveValueChangedPayload,
-} from '../services/eventDelivery.js';
+} from '../services/webhooks/delivery.js';
 
 const router = Router();
 router.use(adminAuth);
@@ -283,7 +284,7 @@ router.post('/rewards', async (req, res) => {
       channel_id: channel_id || null,
     },
   });
-  emitWebhookEvent(
+  emitWebhookMessage(
     'incentive.created',
     buildIncentiveCreatedPayload({
       incentiveKind: 'REWARD',
@@ -330,7 +331,7 @@ router.put('/rewards/:id', async (req, res) => {
   });
 
   if (!prior.is_active && reward.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.enabled',
       buildIncentiveEnabledPayload({
         incentiveKind: 'REWARD',
@@ -339,7 +340,7 @@ router.put('/rewards/:id', async (req, res) => {
       }),
     );
   } else if (prior.is_active && !reward.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.disabled',
       buildIncentiveDisabledPayload({
         incentiveKind: 'REWARD',
@@ -351,7 +352,7 @@ router.put('/rewards/:id', async (req, res) => {
 
   if (prior.cost_cents !== reward.cost_cents) {
     const changedFields = ['cost_cents'];
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.value_changed',
       buildIncentiveValueChangedPayload({
         incentiveKind: 'REWARD',
@@ -899,7 +900,7 @@ router.post('/polls', async (req, res) => {
     },
     include: { options: true },
   });
-  emitWebhookEvent(
+  emitWebhookMessage(
     'incentive.created',
     buildIncentiveCreatedPayload({
       incentiveKind: 'POLL',
@@ -943,7 +944,7 @@ router.put('/polls/:id', async (req, res) => {
   });
 
   if (!prior.is_active && poll.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.enabled',
       buildIncentiveEnabledPayload({
         incentiveKind: 'POLL',
@@ -952,7 +953,7 @@ router.put('/polls/:id', async (req, res) => {
       }),
     );
   } else if (prior.is_active && !poll.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.disabled',
       buildIncentiveDisabledPayload({
         incentiveKind: 'POLL',
@@ -968,7 +969,7 @@ router.put('/polls/:id', async (req, res) => {
   const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
   if (oldEndsMs !== newEndsMs) {
     const changedFields = ['ends_at'];
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.value_changed',
       buildIncentiveValueChangedPayload({
         incentiveKind: 'POLL',
@@ -1088,7 +1089,7 @@ router.post('/goals', async (req, res) => {
       channel_id: channel_id || null,
     },
   });
-  emitWebhookEvent(
+  emitWebhookMessage(
     'incentive.created',
     buildIncentiveCreatedPayload({
       incentiveKind: 'GOAL',
@@ -1120,7 +1121,7 @@ router.put('/goals/:id', async (req, res) => {
   });
 
   if (!prior.is_active && goal.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.enabled',
       buildIncentiveEnabledPayload({
         incentiveKind: 'GOAL',
@@ -1129,7 +1130,7 @@ router.put('/goals/:id', async (req, res) => {
       }),
     );
   } else if (prior.is_active && !goal.is_active) {
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.disabled',
       buildIncentiveDisabledPayload({
         incentiveKind: 'GOAL',
@@ -1141,7 +1142,7 @@ router.put('/goals/:id', async (req, res) => {
 
   if (prior.target_cents !== goal.target_cents) {
     const changedFields = ['target_cents'];
-    emitWebhookEvent(
+    emitWebhookMessage(
       'incentive.value_changed',
       buildIncentiveValueChangedPayload({
         incentiveKind: 'GOAL',
@@ -1172,7 +1173,7 @@ router.delete('/goals/:id', async (req, res) => {
     });
 
     if (prior.is_active) {
-      emitWebhookEvent(
+      emitWebhookMessage(
         'incentive.disabled',
         buildIncentiveDisabledPayload({
           incentiveKind: 'GOAL',
@@ -1393,17 +1394,8 @@ router.get('/auction-wins', async (req, res) => {
 });
 
 // Webhook endpoints
-const WEBHOOK_EVENT_TYPE_KEYS: string[] = [
-  'donation.created',
-  'donation.moderated',
-  'incentive.created',
-  'incentive.enabled',
-  'incentive.disabled',
-  'incentive.value_changed',
-];
-
 router.get('/destinations', async (req, res) => {
-  const endpoints = await prisma.eventDestination.findMany({
+  const endpoints = await prisma.webhookDestination.findMany({
     orderBy: { created_at: 'desc' },
   });
   res.json(
@@ -1458,15 +1450,12 @@ router.post('/destinations', async (req, res) => {
   if (event_types && !Array.isArray(event_types)) {
     return res.status(400).json({ error: 'event_types must be an array' });
   }
-  if (
-    event_types &&
-    !event_types.every((t: unknown) => WEBHOOK_EVENT_TYPE_KEYS.includes(t as string))
-  ) {
+  if (event_types && !event_types.every(isWebhookMessageType)) {
     return res.status(400).json({ error: 'event_types contains invalid event type' });
   }
 
   const generatedSecret = secret || crypto.randomBytes(32).toString('hex');
-  const destination = await prisma.eventDestination.create({
+  const destination = await prisma.webhookDestination.create({
     data: {
       url: url ?? '',
       secret: generatedSecret,
@@ -1528,12 +1517,12 @@ router.put('/destinations/:id', async (req, res) => {
     if (!Array.isArray(event_types)) {
       return res.status(400).json({ error: 'event_types must be an array' });
     }
-    if (!event_types.every((t: unknown) => WEBHOOK_EVENT_TYPE_KEYS.includes(t as string))) {
+    if (!event_types.every(isWebhookMessageType)) {
       return res.status(400).json({ error: 'event_types contains invalid event type' });
     }
   }
 
-  const endpoint = await prisma.eventDestination.update({
+  const endpoint = await prisma.webhookDestination.update({
     where: { id: req.params.id },
     data: {
       ...(url !== undefined ? { url } : {}),
@@ -1555,7 +1544,7 @@ router.put('/destinations/:id', async (req, res) => {
 
 router.post('/destinations/:id/rotate-secret', async (req, res) => {
   const newSecret = crypto.randomBytes(32).toString('hex');
-  const destination = await prisma.eventDestination.update({
+  const destination = await prisma.webhookDestination.update({
     where: { id: req.params.id },
     data: { secret: newSecret },
   });
@@ -1567,7 +1556,7 @@ router.post('/destinations/:id/rotate-secret', async (req, res) => {
 
 router.delete('/destinations/:id', async (req, res) => {
   try {
-    await prisma.eventDestination.delete({ where: { id: req.params.id } });
+    await prisma.webhookDestination.delete({ where: { id: req.params.id } });
   } catch (err) {
     if ((err as { code?: string }).code === 'P2025') {
       return res.status(404).json({ error: 'Webhook endpoint not found' });
@@ -1580,19 +1569,22 @@ router.delete('/destinations/:id', async (req, res) => {
 router.get('/destinations/:id/deliveries', async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
   const [deliveries, total] = await Promise.all([
-    prisma.eventDelivery.findMany({
+    prisma.webhookDelivery.findMany({
       where: { destination_id: req.params.id },
       orderBy: { seq: 'desc' },
       take: Number(limit),
       skip: Number(offset),
     }),
-    prisma.eventDelivery.count({ where: { destination_id: req.params.id } }),
+    prisma.webhookDelivery.count({ where: { destination_id: req.params.id } }),
   ]);
-  res.json({ deliveries, total });
+  res.json({
+    deliveries: deliveries.map(({ message_type, ...d }) => ({ ...d, event_type: message_type })),
+    total,
+  });
 });
 
 router.post('/destinations/:id/test', async (req, res) => {
-  const endpoint = await prisma.eventDestination.findUnique({ where: { id: req.params.id } });
+  const endpoint = await prisma.webhookDestination.findUnique({ where: { id: req.params.id } });
   if (!endpoint) return res.status(404).json({ error: 'Webhook endpoint not found' });
 
   const payload = {
@@ -1603,16 +1595,16 @@ router.post('/destinations/:id/test', async (req, res) => {
   };
 
   const seq = await prisma.$transaction(async (tx) => {
-    const row = await tx.eventDestinationSeq.upsert({
+    const row = await tx.webhookDestinationSeq.upsert({
       where: { destination_id: req.params.id },
       create: { destination_id: req.params.id, seq: 1 },
       update: { seq: { increment: 1 } },
     });
-    await tx.eventDelivery.create({
+    await tx.webhookDelivery.create({
       data: {
         destination_id: req.params.id,
         seq: row.seq,
-        event_type: 'ping',
+        message_type: 'ping',
         payload: JSON.stringify(payload),
         status: 'PENDING',
         next_attempt_at: new Date(),

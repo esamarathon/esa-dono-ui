@@ -36,4 +36,22 @@ export default [
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // PRD-0002 §V5: "Event" means the charity event. Webhook code says "message".
+    // Warn only — this must never fail CI.
+    files: ['services/webhooks/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'warn',
+        {
+          // Declared names only (variables, functions, params, types, classes) —
+          // not property keys, so wire fields such as `event_types` stay allowed.
+          selector:
+            ':matches(VariableDeclarator > Identifier.id, :function > Identifier.id, :function > Identifier.params, :function > AssignmentPattern.params > Identifier.left, TSTypeAliasDeclaration > Identifier.id, TSInterfaceDeclaration > Identifier.id, ClassDeclaration > Identifier.id)[name=/[Ee]vent/]',
+          message:
+            'Avoid "Event" in webhook identifiers; use "Message" (see CONTEXT.md). Wire strings like X-Webhook-Event are fine.',
+        },
+      ],
+    },
+  },
 ];

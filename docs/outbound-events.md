@@ -12,7 +12,7 @@ Each destination picks a transport:
 **Delivery guarantees:**
 
 - At-least-once, per-destination FIFO ordering — one destination stalling on a bad response never blocks or reorders another destination's queue
-- Persistent SQLite-backed outbox (`EventDelivery` table) — survives process restarts; a destination outage is tolerated for roughly an hour (5 retry attempts, exponential backoff capped at 60 min) before the delivery is marked permanently `FAILED`
+- Persistent SQLite-backed outbox (`WebhookDelivery` table) — survives process restarts; a destination outage is tolerated for roughly an hour (5 retry attempts, exponential backoff capped at 60 min) before the delivery is marked permanently `FAILED`
 - Payloads are PII-safe: explicit allowlist serializers, never a raw Prisma object spread. Donor identity is a pseudonymous `donor_ref` (the donor's opaque `id`) — never email, name, or comment
 
 No environment variables are required for this feature — destinations, secrets, and RabbitMQ connection URLs are all configured at runtime through the admin UI, not `.env`.

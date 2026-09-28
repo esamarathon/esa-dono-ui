@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import http from 'http';
 import { PrismaClient } from '@prisma/client';
-import { processDestination, backoffMinutes } from '../../services/eventDispatcher.js';
+import { processDestination, backoffMinutes } from '../../../services/webhooks/dispatcher.js';
 
 const amqpMocks = vi.hoisted(() => ({ connect: vi.fn() }));
 
@@ -22,16 +22,16 @@ function close(server: http.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
-describe('eventDispatcher', () => {
+describe('webhook dispatcher', () => {
   const destinationIds: string[] = [];
   const deliveryIds: string[] = [];
 
   afterAll(async () => {
-    await prisma.eventDelivery.deleteMany({ where: { id: { in: deliveryIds } } });
-    await prisma.eventDestinationSeq.deleteMany({
+    await prisma.webhookDelivery.deleteMany({ where: { id: { in: deliveryIds } } });
+    await prisma.webhookDestinationSeq.deleteMany({
       where: { destination_id: { in: destinationIds } },
     });
-    await prisma.eventDestination.deleteMany({ where: { id: { in: destinationIds } } });
+    await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
     await prisma.$disconnect();
   });
 
@@ -56,7 +56,7 @@ describe('eventDispatcher', () => {
     });
     const port = await listen(server);
 
-    const dest = await prisma.eventDestination.create({
+    const dest = await prisma.webhookDestination.create({
       data: {
         url: `http://127.0.0.1:${port}/hook`,
         secret: 'secret',
@@ -64,11 +64,11 @@ describe('eventDispatcher', () => {
       },
     });
     destinationIds.push(dest.id);
-    const delivery = await prisma.eventDelivery.create({
+    const delivery = await prisma.webhookDelivery.create({
       data: {
         destination_id: dest.id,
         seq: 1,
-        event_type: 'donation.created',
+        message_type: 'donation.created',
         payload: JSON.stringify({ id: 'x' }),
         status: 'PENDING',
         next_attempt_at: new Date(),
@@ -78,7 +78,7 @@ describe('eventDispatcher', () => {
 
     await processDestination(dest.id);
 
-    const updated = await prisma.eventDelivery.findUnique({ where: { id: delivery.id } });
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
     expect(updated!.status).toBe('SUCCESS');
     expect(updated!.last_status_code).toBe(200);
     expect(receivedBody).toBe(JSON.stringify({ id: 'x' }));
@@ -88,7 +88,7 @@ describe('eventDispatcher', () => {
   });
 
   it('processDestination marks a delivery FAILED once max attempts are exhausted', async () => {
-    const dest = await prisma.eventDestination.create({
+    const dest = await prisma.webhookDestination.create({
       data: {
         url: 'http://127.0.0.1:1/hook', // port 1 is effectively always closed
         secret: 'secret',
@@ -96,11 +96,11 @@ describe('eventDispatcher', () => {
       },
     });
     destinationIds.push(dest.id);
-    const delivery = await prisma.eventDelivery.create({
+    const delivery = await prisma.webhookDelivery.create({
       data: {
         destination_id: dest.id,
         seq: 1,
-        event_type: 'donation.created',
+        message_type: 'donation.created',
         payload: JSON.stringify({ id: 'x' }),
         status: 'PENDING',
         attempts: 4,
@@ -111,7 +111,7 @@ describe('eventDispatcher', () => {
 
     await processDestination(dest.id);
 
-    const updated = await prisma.eventDelivery.findUnique({ where: { id: delivery.id } });
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
     expect(updated!.status).toBe('FAILED');
     expect(updated!.attempts).toBe(5);
   });
@@ -122,7 +122,7 @@ describe('eventDispatcher', () => {
       createConfirmChannel: async () => ({ publish }),
     });
 
-    const dest = await prisma.eventDestination.create({
+    const dest = await prisma.webhookDestination.create({
       data: {
         url: '',
         secret: 'secret',
@@ -133,11 +133,11 @@ describe('eventDispatcher', () => {
       },
     });
     destinationIds.push(dest.id);
-    const delivery = await prisma.eventDelivery.create({
+    const delivery = await prisma.webhookDelivery.create({
       data: {
         destination_id: dest.id,
         seq: 1,
-        event_type: 'donation.created',
+        message_type: 'donation.created',
         payload: JSON.stringify({ id: 'x' }),
         status: 'PENDING',
         next_attempt_at: new Date(),
@@ -147,13 +147,13 @@ describe('eventDispatcher', () => {
 
     await processDestination(dest.id);
 
-    const updated = await prisma.eventDelivery.findUnique({ where: { id: delivery.id } });
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
     expect(updated!.status).toBe('SUCCESS');
     expect(publish).toHaveBeenCalled();
   });
 
   it('processDestination fails a RABBITMQ delivery missing config', async () => {
-    const dest = await prisma.eventDestination.create({
+    const dest = await prisma.webhookDestination.create({
       data: {
         url: '',
         secret: 'secret',
@@ -164,11 +164,11 @@ describe('eventDispatcher', () => {
       },
     });
     destinationIds.push(dest.id);
-    const delivery = await prisma.eventDelivery.create({
+    const delivery = await prisma.webhookDelivery.create({
       data: {
         destination_id: dest.id,
         seq: 1,
-        event_type: 'donation.created',
+        message_type: 'donation.created',
         payload: '{}',
         status: 'PENDING',
         max_attempts: 1,
@@ -179,7 +179,7 @@ describe('eventDispatcher', () => {
 
     await processDestination(dest.id);
 
-    const updated = await prisma.eventDelivery.findUnique({ where: { id: delivery.id } });
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
     expect(updated!.status).toBe('FAILED');
   });
 });

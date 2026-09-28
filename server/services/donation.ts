@@ -4,7 +4,7 @@ import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
-import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
+import { emitWebhookMessage, buildDonationCreatedPayload } from './webhooks/delivery.js';
 import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
@@ -162,7 +162,7 @@ async function processDonationInner({
     throw err;
   }
 
-  emitWebhookEvent(
+  emitWebhookMessage(
     'donation.created',
     buildDonationCreatedPayload({
       donationId: result!.donation.id,

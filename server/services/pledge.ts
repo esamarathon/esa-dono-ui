@@ -7,7 +7,7 @@ import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } fro
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
-import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
+import { emitWebhookMessage, buildDonationCreatedPayload } from './webhooks/delivery.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
@@ -509,7 +509,7 @@ export async function createCheckoutForPledge(
           return created;
         });
 
-        emitWebhookEvent(
+        emitWebhookMessage(
           'donation.created',
           buildDonationCreatedPayload({
             donationId: donation.id,

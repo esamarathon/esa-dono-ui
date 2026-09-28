@@ -1650,7 +1650,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/WebhookEndpoint'
+                  $ref: '#/components/schemas/WebhookDestination'
     post:
       tags: [Admin]
       summary: Create an event destination
@@ -1696,7 +1696,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEndpoint'
+                $ref: '#/components/schemas/WebhookDestination'
         '400':
           description: Validation error
 
@@ -1777,7 +1777,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEndpoint'
+                $ref: '#/components/schemas/WebhookDestination'
         '404':
           description: Endpoint not found
 
@@ -2881,7 +2881,7 @@ components:
       name: X-Admin-Key
       description: Admin API key matching `ADMIN_API_KEY` env var
   schemas:
-    EventDestination:
+    WebhookDestination:
       type: object
       properties:
         id: { type: string }
@@ -2922,7 +2922,7 @@ components:
           { type: string, nullable: true, description: 'Required for RabbitMQ endpoints' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-    EventDelivery:
+    WebhookDelivery:
       type: object
       properties:
         id: { type: string }

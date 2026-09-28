@@ -17,7 +17,7 @@ import moderatorRouter from './routes/moderator.js';
 import auctionsRouter from './routes/auctions.js';
 import feedbackRouter from './routes/feedback.js';
 import featureFlagsRouter from './routes/featureFlags.js';
-import { startEventDispatcher } from './services/eventDispatcher.js';
+import { startWebhookDispatcher } from './services/webhooks/dispatcher.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { metricsAuth } from './middleware/metricsAuth.js';
@@ -99,7 +99,7 @@ app.use('/api/feedback', feedbackRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  startEventDispatcher();
+  startWebhookDispatcher();
 });
 startMetricsRefresh();
 startAuctionScheduler();
