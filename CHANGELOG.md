@@ -85,5 +85,5 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/v0.1.0
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0
