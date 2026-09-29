@@ -26,7 +26,7 @@ describe('sendMagicLink', () => {
     );
     expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
-        html: expect.stringContaining('http://localhost:5173/wallet?token=abc123'),
+        html: expect.stringContaining('http://localhost:5173/api/auth/magic?token=abc123'),
       }),
     );
   });

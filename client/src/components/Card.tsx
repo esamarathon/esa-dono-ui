@@ -4,13 +4,15 @@ export default function Card({
   children,
   className = '',
   style,
+  id,
 }: {
   children: ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  id?: string;
 }) {
   return (
-    <div className={`btrl-panel p-4 ${className}`} style={style}>
+    <div id={id} className={`btrl-panel p-4 ${className}`} style={style}>
       {children}
     </div>
   );

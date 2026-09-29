@@ -28,7 +28,7 @@ export default function Modal({
           className="flex items-center justify-between p-4"
           style={{ borderBottom: '1px solid rgba(239,238,236,.08)' }}
         >
-          <h2 className="font-display text-2xl lowercase text-off-white">{title}</h2>
+          <h2 className="font-display text-2xl uppercase text-off-white">{title}</h2>
           <button
             onClick={onClose}
             className="text-off-white/55 hover:text-off-white text-2xl leading-none"

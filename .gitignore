@@ -6,3 +6,10 @@ server/prisma/dev.db-journal
 coverage
 .claude
 .server-context
+\n# Local dev reward image uploads (persisted to /data/uploads in prod)\nserver/uploads/
+
+# Seeded simulator run output (wayfinder #37)
+sim-runs/
+
+# Local git worktrees (must never be committed as gitlinks)
+/dev-security/

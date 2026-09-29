@@ -94,6 +94,18 @@ export function ClipboardIcon(props: IconProps) {
   );
 }
 
+export function ShareIcon(props: IconProps) {
+  return base(
+    <>
+      <circle cx="5" cy="10" r="2" />
+      <circle cx="15" cy="4.5" r="2" />
+      <circle cx="15" cy="15.5" r="2" />
+      <path d="M6.8 8.8l6.4-3.1M6.8 11.2l6.4 3.1" />
+    </>,
+    props,
+  );
+}
+
 export function BanIcon(props: IconProps) {
   return base(
     <>
@@ -164,4 +176,26 @@ export function LogoutIcon(props: IconProps) {
 
 export function ChevronDownIcon(props: IconProps) {
   return base(<path d="M5 7.5 10 12.5 15 7.5" />, props);
+}
+
+export function InfoIcon(props: IconProps) {
+  return base(
+    <>
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 9v4M10 6.5v.01" />
+    </>,
+    props,
+  );
+}
+
+export function BroadcastIcon(props: IconProps) {
+  return base(
+    <>
+      <path d="M10 3.5A6.5 6.5 0 0 1 16.5 10" />
+      <path d="M10 6A3 3 0 0 1 13 9" />
+      <circle cx="10" cy="10" r="1.5" />
+      <path d="M10 10v6" />
+    </>,
+    props,
+  );
 }

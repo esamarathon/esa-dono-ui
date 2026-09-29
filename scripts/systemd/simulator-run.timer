@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the seeded platform simulator on a schedule
+
+[Timer]
+# All-day coverage: hourly, 06:00-22:00 UTC. The nightly demo-reset.timer
+# (04:00 UTC) tears the stack down, so keep the window after 04:00 and leave
+# a gap before it. Adjust to taste — e.g. OnCalendar=*:0/30 for every 30
+# minutes during active bug-hunting, or a longer window for a lighter cadence.
+OnCalendar=*-*-* 06..22:00:00
+# Run the missed occurrence on boot if the host was down when it was due.
+Persistent=true
+# Spread start time slightly to avoid thundering-herd if multiple timers fire
+# at once on this host.
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Card from '../Card';
 import Modal from '../Modal';
 import LoadingSpinner from '../LoadingSpinner';
+import ShareLinkButton from '../ShareLinkButton';
 import { useCart } from '../../context/CartContext';
 import type { Reward } from '../../types';
 
@@ -15,14 +16,9 @@ interface FieldDef {
   required: boolean;
 }
 
-// PHYSICAL rewards intentionally collect NO fields here. Stripe Checkout
-// collects the shipping address at payment time and is the single source of
-// truth for it — every fulfillment path for a physical reward goes through
-// Stripe (server/services/pledge.ts forces Stripe even when the wallet
-// covers the full pledge, specifically to collect the address). Collecting
-// an address here too would be redundant, and worse: claimRewardTx merges
-// `{ ...shippingAddress, ...claimData }`, so a cart-collected address would
-// silently override the one the donor actually confirmed at payment.
+// PHYSICAL rewards intentionally collect NO fields here. The donor adds the
+// item to the cart and completes Stripe Checkout to pay; no shipping address
+// is captured or stored by the platform.
 const FIELDS: Record<string, FieldDef[]> = {
   SHOUTOUT: [{ key: 'message', label: 'Shoutout Message', required: false }],
   PHYSICAL: [],
@@ -30,7 +26,17 @@ const FIELDS: Record<string, FieldDef[]> = {
 };
 
 export default function RewardList() {
-  const { rewards, loading, cart, addToCart, removeFromCart, markVisited } = useCart();
+  const {
+    rewards,
+    loading,
+    cart,
+    addToCart,
+    removeFromCart,
+    incrementRewardQuantity,
+    decrementRewardQuantity,
+    markVisited,
+    staleRewardIds,
+  } = useCart();
   const [claiming, setClaiming] = useState<Reward | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -42,6 +48,8 @@ export default function RewardList() {
   if (loading) return <LoadingSpinner />;
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'REWARD' && i.target_id === id);
+  const cartQuantity = (id: string) =>
+    cart.find((i) => i.kind === 'REWARD' && i.target_id === id)?.quantity ?? 1;
 
   const fieldsFor = (reward: Reward): FieldDef[] =>
     FIELDS[reward.type] ?? [
@@ -78,20 +86,37 @@ export default function RewardList() {
 
   return (
     <div>
-      <h2 className="font-display text-3xl lowercase text-off-white mb-2">rewards</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">rewards</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Add rewards to your cart. Each reward costs a fixed amount, applied when you check out.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {rewards.map((r) => {
           const soldOut = r.quantity_total !== null && r.quantity_claimed >= r.quantity_total;
+          const unavailable = staleRewardIds.has(r.id);
           return (
-            <Card key={r.id} className={soldOut ? 'opacity-50' : ''}>
+            <Card key={r.id} className={soldOut || unavailable ? 'opacity-50' : ''}>
+              {r.image_url && (
+                <img
+                  src={r.image_url}
+                  alt={r.title}
+                  loading="lazy"
+                  className="w-full h-40 object-cover rounded-sm mb-3"
+                />
+              )}
               <div className="flex justify-between items-start">
                 <div className="flex-1">
                   <h3 className="font-data font-bold text-lg text-off-white">{r.title}</h3>
                   {r.description && (
                     <p className="font-body text-sm text-off-white/55 mt-1">{r.description}</p>
+                  )}
+                  {unavailable && (
+                    <span
+                      className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
+                      style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
+                    >
+                      no longer available
+                    </span>
                   )}
                   <span
                     className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
@@ -107,22 +132,51 @@ export default function RewardList() {
                 </div>
                 <div className="text-right ml-4">
                   <p className="font-display text-2xl text-d-yellow">{fmt(r.cost_cents)}</p>
-                  {inCart(r.id) ? (
-                    <button
-                      onClick={() => removeFromCart('REWARD', r.id)}
-                      className={`btrl-button btrl-button-outline mt-2 text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
-                    >
-                      remove
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleAddClick(r)}
-                      disabled={soldOut}
-                      className="btrl-button mt-2 text-sm"
-                    >
-                      {soldOut ? 'sold out' : 'add'}
-                    </button>
-                  )}
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <ShareLinkButton path={`/rewards?reward=${r.id}`} />
+                    {inCart(r.id) ? (
+                      fieldsFor(r).length === 0 ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => decrementRewardQuantity(r.id)}
+                            aria-label="decrease quantity"
+                            className="btrl-button btrl-button-outline text-sm w-8"
+                          >
+                            -
+                          </button>
+                          <span className="font-data text-off-white w-4 text-center">
+                            {cartQuantity(r.id)}
+                          </span>
+                          <button
+                            onClick={() => incrementRewardQuantity(r.id)}
+                            disabled={
+                              r.quantity_total !== null &&
+                              cartQuantity(r.id) >= r.quantity_total - r.quantity_claimed
+                            }
+                            aria-label="increase quantity"
+                            className={`btrl-button text-sm w-8 ${flashId === r.id ? 'animate-add-flash' : ''}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => removeFromCart('REWARD', r.id)}
+                          className={`btrl-button btrl-button-outline text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
+                        >
+                          remove
+                        </button>
+                      )
+                    ) : (
+                      <button
+                        onClick={() => handleAddClick(r)}
+                        disabled={soldOut}
+                        className="btrl-button text-sm"
+                      >
+                        {soldOut ? 'sold out' : 'add'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </Card>

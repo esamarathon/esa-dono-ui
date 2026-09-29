@@ -28,5 +28,25 @@ export default defineConfig({
     // SQLITE_BUSY / "Operations timed out" flakiness. Fully sequential
     // execution trades a bit of speed for a suite that doesn't flake.
     fileParallelism: false,
+    // Integration tests share one SQLite file and run under v8 coverage in the
+    // pre-commit hook (alongside lint-staged). On small CI/dev hosts the 5s
+    // default was hit intermittently by unrelated DB-backed route tests, so
+    // allow more headroom. This only bounds how long a hung test may take.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+    coverage: {
+      provider: 'v8',
+      include: ['lib/**/*.ts', 'middleware/**/*.ts', 'routes/**/*.ts', 'services/**/*.ts'],
+      // `include` makes untested files appear at 0% (rather than dropping out
+      // of the metric). Entry points (index.ts) and config are left out as
+      // glue, not behavior.
+      // Thresholds updated to match current coverage levels (~79% statements).
+      thresholds: {
+        statements: 77,
+        branches: 65,
+        functions: 87,
+        lines: 79,
+      },
+    },
   },
 });

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getPledge } from '../api/pledge';
-import { setDonorToken } from '../utils/authToken';
+import { isSessionActive } from '../utils/authToken';
+import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
 import type { Pledge } from '../types';
@@ -26,6 +27,7 @@ export default function PledgeReturn() {
       setError('No pledge token provided.');
       return;
     }
+    track('pledge_return', { 'pledge.token': token });
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -39,8 +41,14 @@ export default function PledgeReturn() {
         setPledge(data);
 
         if (data.status === 'FULFILLED') {
-          if (data.magic_token) {
-            setDonorToken(data.magic_token);
+          // Never auto-authenticate from a pledge return — that would let
+          // anyone gain a session by paying to someone else's email (#48).
+          // The magic link (emailed on every donation) is the only way to
+          // establish a new session. But if this browser already has an
+          // active session (a returning, logged-in donor), just take them
+          // straight to their wallet — no need to make them click the link
+          // again for their 2nd, 3rd, ... donation.
+          if (isSessionActive()) {
             navigate('/wallet');
           }
           return;
@@ -73,7 +81,7 @@ export default function PledgeReturn() {
     return (
       <div className="max-w-xl mx-auto p-8">
         <Card>
-          <h2 className="font-display text-3xl lowercase text-off-white mb-4">pledge status</h2>
+          <h2 className="font-display text-3xl uppercase text-off-white mb-4">pledge status</h2>
           <p className="font-body text-sm" style={{ color: 'var(--red)' }}>
             {error}
           </p>
@@ -93,7 +101,7 @@ export default function PledgeReturn() {
   return (
     <div className="max-w-xl mx-auto p-8">
       <Card>
-        <h2 className="font-display text-3xl lowercase text-off-white mb-4">pledge status</h2>
+        <h2 className="font-display text-3xl uppercase text-off-white mb-4">pledge status</h2>
 
         {isFulfilled ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(92,189,125,.16)' }}>

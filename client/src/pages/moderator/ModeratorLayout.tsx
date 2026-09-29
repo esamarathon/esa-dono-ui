@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getDonor } from '../../api/donor';
+import { isSessionActive } from '../../utils/authToken';
 import { hasModeratorAccess } from '../../types';
 import SidebarLayout, { type SidebarNavItem } from '../../components/SidebarLayout';
 import {
@@ -13,16 +14,24 @@ import {
   PlayIcon,
   HomeIcon,
   LogoutIcon,
+  InfoIcon,
 } from '../../components/icons';
+import {
+  ModeratorChannelFilterProvider,
+  useModeratorChannelFilter,
+} from '../../context/ModeratorChannelFilterContext';
 
 const NAV: SidebarNavItem[] = [
   { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
   { to: '/moderate/events', label: 'events', icon: PlayIcon },
+  { to: '/moderate/channels', label: 'channels', icon: PlayIcon },
   { to: '/moderate/polls', label: 'polls', icon: PollIcon },
   { to: '/moderate/rewards', label: 'rewards', icon: GiftIcon },
   { to: '/moderate/goals', label: 'goals', icon: GoalIcon },
+  { to: '/moderate/auctions', label: 'auctions', icon: GiftIcon },
   { to: '/moderate/claims', label: 'claims', icon: CheckBadgeIcon },
   { to: '/moderate/donations', label: 'donations', icon: ReceiptIcon },
+  { to: '/moderate/help', label: 'help', icon: InfoIcon },
 ];
 
 type AccessState = 'checking' | 'granted' | 'denied';
@@ -40,8 +49,8 @@ export default function ModeratorLayout() {
       setAccess('granted');
       return;
     }
-    const donorToken = localStorage.getItem('donor_token');
-    if (!donorToken) {
+    const donorSession = isSessionActive();
+    if (!donorSession) {
       setAccess('denied');
       return;
     }
@@ -72,7 +81,7 @@ export default function ModeratorLayout() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="btrl-panel p-8 w-full max-w-sm">
-          <h1 className="font-display text-3xl lowercase mb-2">moderator login</h1>
+          <h1 className="font-display text-3xl uppercase mb-2">moderator login</h1>
           <p className="font-data text-sm text-off-white/55 mb-4">
             Log in with your donor magic link for moderator/admin access, or enter a moderator key
             below.
@@ -99,10 +108,40 @@ export default function ModeratorLayout() {
   }
 
   return (
+    <ModeratorChannelFilterProvider>
+      <ModeratorLayoutInner keyValue={key} onLogout={logout} />
+    </ModeratorChannelFilterProvider>
+  );
+}
+
+function ChannelFilterBar() {
+  const { channels, selectedChannelId, setSelectedChannelId } = useModeratorChannelFilter();
+  return (
+    <div className="mb-6 flex items-center gap-3">
+      <label className="font-data text-sm text-off-white/55">channel filter</label>
+      <select
+        className="px-3 py-1.5 text-sm bg-transparent border border-off-white/20 rounded-sm"
+        value={selectedChannelId ?? ''}
+        onChange={(e) => setSelectedChannelId(e.target.value || null)}
+      >
+        <option value="">all channels</option>
+        {channels.map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ModeratorLayoutInner({ keyValue, onLogout }: { keyValue: string; onLogout: () => void }) {
+  return (
     <SidebarLayout
       title="moderator"
       nav={NAV}
       storageKey="moderator_sidebar_collapsed"
+      header={<ChannelFilterBar />}
       footer={(collapsed) => (
         <div className="flex flex-col">
           <Link
@@ -113,9 +152,9 @@ export default function ModeratorLayout() {
             <HomeIcon className="w-4 h-4 shrink-0" />
             {!collapsed && <span>back to home</span>}
           </Link>
-          {key ? (
+          {keyValue ? (
             <button
-              onClick={logout}
+              onClick={onLogout}
               title="logout (moderator key)"
               className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white ${collapsed ? 'justify-center' : 'text-left'}`}
             >

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { getDonor } from '../api/donor';
-import { clearDonorToken } from '../utils/authToken';
+import { getFeatureFlags } from '../api/featureFlags';
+import { isSessionActive, endSession } from '../utils/authToken';
 import { useCart } from '../context/CartContext';
 import UserMenu from './UserMenu';
 import type { DonorWallet } from '../types';
@@ -12,7 +13,9 @@ function fmt(cents: number) {
 
 export default function Navbar() {
   const [donor, setDonor] = useState<DonorWallet | null>(null);
+  const [auctionsEnabled, setAuctionsEnabled] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const { cart, totalCents, toggleDrawer } = useCart();
 
   // Brief "juice" pop on the cart badge whenever the cart total actually
@@ -35,9 +38,14 @@ export default function Navbar() {
   }, [cart.length, totalCents]);
 
   useEffect(() => {
+    getFeatureFlags()
+      .then((flags) => setAuctionsEnabled(flags.auctions ?? false))
+      .catch(() => setAuctionsEnabled(false));
+  }, []);
+
+  useEffect(() => {
     const refresh = () => {
-      const token = localStorage.getItem('donor_token');
-      if (!token) {
+      if (!isSessionActive()) {
         setDonor(null);
         return;
       }
@@ -50,9 +58,10 @@ export default function Navbar() {
     return () => window.removeEventListener('donor-token-changed', refresh);
   }, [location.pathname, location.search]);
 
-  const logout = () => {
-    clearDonorToken();
+  const logout = async () => {
+    await endSession();
     setDonor(null);
+    navigate('/');
   };
 
   return (
@@ -65,7 +74,7 @@ export default function Navbar() {
     >
       <Link
         to="/"
-        className="font-display text-2xl tracking-wide text-off-white no-underline lowercase"
+        className="font-display text-2xl tracking-wide text-off-white no-underline uppercase"
       >
         esa dono
       </Link>
@@ -73,15 +82,33 @@ export default function Navbar() {
         to="/"
         end
         className={({ isActive }) =>
-          `font-data font-bold text-sm tracking-wider lowercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
+          `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
         }
       >
         home
       </NavLink>
       <NavLink
+        to="/help"
+        className={({ isActive }) =>
+          `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
+        }
+      >
+        help
+      </NavLink>
+      {auctionsEnabled && (
+        <NavLink
+          to="/auctions"
+          className={({ isActive }) =>
+            `font-data font-bold text-sm tracking-wider uppercase ${isActive ? 'text-off-white' : 'text-off-white/55 hover:text-off-white'}`
+          }
+        >
+          auctions
+        </NavLink>
+      )}
+      <NavLink
         to="/donate"
         className={({ isActive }) =>
-          `font-data font-bold text-sm tracking-wider lowercase text-black no-underline px-3 py-1 rounded-sm hover:opacity-90 ${isActive ? 'opacity-80' : ''}`
+          `font-data font-bold text-sm tracking-wider uppercase text-black no-underline px-3 py-1 rounded-sm hover:opacity-90 ${isActive ? 'opacity-80' : ''}`
         }
         style={{ background: 'var(--d-yellow)' }}
       >
@@ -90,12 +117,12 @@ export default function Navbar() {
       <div className="ml-auto flex items-center gap-4">
         <button
           onClick={toggleDrawer}
-          className="relative font-data font-bold text-sm tracking-wider lowercase text-off-white/80 hover:text-off-white flex items-center gap-2"
+          className="relative font-data font-bold text-base tracking-wider uppercase text-off-white/80 hover:text-off-white flex items-center gap-2"
         >
           <span>cart</span>
           {cart.length > 0 && (
             <span
-              className={`font-data text-xs font-bold px-2 py-0.5 rounded-sm ${pop ? 'animate-cart-pop' : ''}`}
+              className={`font-data text-sm font-bold px-3 py-1 rounded-sm ${pop ? 'animate-cart-pop' : ''}`}
               style={{ background: 'var(--d-yellow)', color: 'black' }}
             >
               {cart.length} &middot; {fmt(totalCents)}
@@ -107,7 +134,7 @@ export default function Navbar() {
         ) : (
           <NavLink
             to="/wallet"
-            className="font-data font-bold text-sm tracking-wider lowercase text-d-yellow hover:text-off-white"
+            className="font-data font-bold text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
           >
             login
           </NavLink>

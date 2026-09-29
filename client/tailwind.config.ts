@@ -5,18 +5,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        btrl: {
-          'off-white': '#efeeec',
-          'dark-gray': '#191919',
-          purple: '#734e9e',
-          'd-purple': '#5f4082',
-          'd-yellow': '#d09846',
-          yellow: '#fdbb1c',
-          green: '#5cbd7d',
-          'green-pale': '#d0f2dc',
-          red: '#fc1c67',
-          'pink-pale': '#ff76a4',
-        },
+        'off-white': '#efeeec',
+        'dark-gray': '#191919',
+        purple: '#734e9e',
+        'd-purple': '#5f4082',
+        'd-yellow': '#d09846',
+        yellow: '#fdbb1c',
+        green: '#5cbd7d',
+        'green-pale': '#d0f2dc',
+        red: '#fc1c67',
+        'pink-pale': '#ff76a4',
       },
       fontFamily: {
         display: ['"Bebas Neue Pro"', '"Oswald BTRL"', '"Arial Narrow"', 'sans-serif'],

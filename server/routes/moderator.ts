@@ -1,12 +1,22 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
+import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
+import {
+  closeAuctionTx,
+  cancelAuctionTx,
+  reopenAuctionTx,
+  skipCurrentOfferTx,
+  resendCurrentOfferTx,
+} from '../services/auction.js';
 
 // INVARIANT: no handler in this file may select/include `donor.email` (or
 // return it via any other path) in a JSON response. Moderators can see
 // donor_name, spend amounts, claim/entry content, and moderation metadata,
 // but never the donor's email address — only ADMIN routes (server/routes/
-// admin.ts, gated by X-Admin-Key) are allowed to expose it.
+// admin.ts, gated by the admin key or an ADMIN session) are allowed to expose it.
 //
 // This has regressed once already (fixed in 87ad5e4, then again for the
 // donations endpoints): the pattern `donor: { select: { email: ... } } }` was
@@ -37,57 +47,8 @@ router.get('/stats', async (req, res) => {
   });
 });
 
-// Events CRUD
-router.get('/events', async (req, res) => {
-  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/events', async (req, res) => {
-  const { name, is_active } = req.body;
-  if (!name || !String(name).trim()) {
-    return res.status(400).json({ error: 'name is required' });
-  }
-  try {
-    const event = await prisma.event.create({
-      data: { name: String(name).trim(), is_active: is_active ?? true },
-    });
-    res.json(event);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
-    }
-    throw e;
-  }
-});
-
-router.put('/events/:id', async (req, res) => {
-  const { name, is_active } = req.body;
-  try {
-    const event = await prisma.event.update({
-      where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name: String(name).trim() } : {}),
-        ...(is_active !== undefined ? { is_active } : {}),
-      },
-    });
-    res.json(event);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
-    }
-    throw e;
-  }
-});
-
-// Soft-delete: events may be referenced by incentives/donations/pledges, so
-// deactivate instead of hard-deleting to preserve those references.
-router.delete('/events/:id', async (req, res) => {
-  const event = await prisma.event.update({
-    where: { id: req.params.id },
-    data: { is_active: false },
-  });
-  res.json({ success: true, event });
-});
+// Channels and Events (routes/identityRoutes.ts)
+mountIdentityRoutes(router);
 
 // Polls CRUD
 router.get('/polls', async (req, res) => {
@@ -109,7 +70,7 @@ router.post('/polls', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
   const poll = await prisma.poll.create({
     data: {
@@ -120,7 +81,7 @@ router.post('/polls', async (req, res) => {
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
       auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
       options: options?.length
         ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
         : undefined,
@@ -139,7 +100,7 @@ router.put('/polls/:id', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
   const poll = await prisma.poll.update({
     where: { id: req.params.id },
@@ -151,7 +112,7 @@ router.put('/polls/:id', async (req, res) => {
       allow_custom_entries: allow_custom_entries ?? false,
       max_entry_chars: max_entry_chars ?? null,
       auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
     include: { options: true },
   });
@@ -166,6 +127,18 @@ router.delete('/polls/:id', async (req, res) => {
 router.post('/polls/:id/options', async (req, res) => {
   const option = await prisma.pollOption.create({
     data: { poll_id: req.params.id, label: req.body.label },
+  });
+  res.json(option);
+});
+
+router.patch('/polls/options/:id', async (req, res) => {
+  const { label } = req.body;
+  if (!label || !String(label).trim()) {
+    return res.status(400).json({ error: 'label is required' });
+  }
+  const option = await prisma.pollOption.update({
+    where: { id: req.params.id },
+    data: { label: String(label).trim() },
   });
   res.json(option);
 });
@@ -267,6 +240,28 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
 });
 
 // Rewards CRUD
+
+// Image upload — returns { url } for storing in reward.image_url.
+// Accepts jpeg/png/webp/gif up to 8 MB; resizes to ≤800 px wide and
+// re-encodes to webp (~80 quality) before writing to disk.
+router.post('/uploads', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+  try {
+    const filename = await processAndStore(req.file.buffer);
+    res.json({ url: publicUrlFor(filename) });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Multer error handler (file-type rejection, size exceeded, etc.)
+router.use('/uploads', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof multer.MulterError || err instanceof Error) {
+    return res.status(400).json({ error: err.message });
+  }
+  _next(err);
+});
+
 router.get('/rewards', async (req, res) => {
   res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
 });
@@ -280,7 +275,8 @@ router.post('/rewards', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
   const reward = await prisma.reward.create({
     data: {
@@ -291,7 +287,8 @@ router.post('/rewards', async (req, res) => {
       quantity_total: quantity_total ?? null,
       is_active: is_active ?? true,
       custom_type_label,
-      event_id: event_id || null,
+      image_url: image_url || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(reward);
@@ -306,8 +303,17 @@ router.put('/rewards/:id', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
+  // Best-effort cleanup of old upload if the image is being replaced/removed
+  const existing = await prisma.reward.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true },
+  });
+  if (existing && existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
   const reward = await prisma.reward.update({
     where: { id: req.params.id },
     data: {
@@ -318,21 +324,61 @@ router.put('/rewards/:id', async (req, res) => {
       quantity_total: quantity_total ?? null,
       is_active,
       custom_type_label,
-      event_id: event_id || null,
+      image_url: image_url || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(reward);
 });
 
 router.delete('/rewards/:id', async (req, res) => {
-  await prisma.reward.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    const claims = await prisma.rewardClaim.count({ where: { reward_id: req.params.id } });
+    if (claims > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete a reward with existing claims; deactivate it instead',
+      });
+    }
+    const existing = await prisma.reward.findUnique({
+      where: { id: req.params.id },
+      select: { image_url: true },
+    });
+    await prisma.reward.delete({ where: { id: req.params.id } });
+    await deleteUploadByUrl(existing?.image_url);
+    res.json({ success: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'P2025') return res.status(404).json({ error: 'Reward not found' });
+    if (code === 'P2003') {
+      return res.status(409).json({
+        error: 'Cannot delete a reward with existing claims; deactivate it instead',
+      });
+    }
+    throw err;
+  }
 });
 
 // Claims
+// Read-only from the moderator side: fulfillment status is not
+// displayed/tracked here (admin retains its own status toggle at
+// admin.ts's PATCH /claims/:id, which is unrelated and untouched).
 router.get('/claims', async (req, res) => {
   const claims = await prisma.rewardClaim.findMany({
-    include: { reward: true },
+    include: {
+      reward: true,
+      // Human-readable donor identity without ever touching email (#57):
+      // donor_name is a plain column on Donation (self-reported at checkout),
+      // not on Donor — join to the donor's most recent donation for it.
+      donor: {
+        select: {
+          donations: {
+            orderBy: { created_at: 'desc' },
+            take: 1,
+            select: { donor_name: true },
+          },
+        },
+      },
+    },
     orderBy: { created_at: 'desc' },
   });
   res.json(
@@ -343,22 +389,14 @@ router.get('/claims', async (req, res) => {
       } catch {
         /* ignore */
       }
-      return { ...c, claim_data: parsed };
+      const { donor, ...rest } = c;
+      return {
+        ...rest,
+        claim_data: parsed,
+        donor_name: donor?.donations[0]?.donor_name ?? null,
+      };
     }),
   );
-});
-
-router.patch('/claims/:id', async (req, res) => {
-  const { status } = req.body;
-  if (!['PENDING', 'FULFILLED'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
-  }
-  const claim = await prisma.rewardClaim.update({
-    where: { id: req.params.id },
-    data: { status },
-    include: { reward: true },
-  });
-  res.json(claim);
 });
 
 // Donations — read-only list + moderation flag. Downstream tools (exports,
@@ -369,24 +407,185 @@ router.patch('/claims/:id', async (req, res) => {
 // (see file-level invariant above; caught by moderator-donor-email.test.ts).
 router.get('/donations', async (req, res) => {
   const donations = await prisma.donation.findMany({
-    include: { event: { select: { id: true, name: true } } },
+    include: {
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
+      pledge: { include: { items: true } },
+    },
     orderBy: { created_at: 'desc' },
   });
-  res.json(donations);
+
+  // Batch-resolve each pledge item's target into a human-readable label
+  // (#58) — e.g. "Best Runner: Runner A" or "T-shirt", never a raw
+  // target_id/uuid — so a moderator can see at a glance what a donor
+  // selected/pledged toward. target_id is polymorphic by kind (reward_id |
+  // poll_option_id | goal_id | poll_id for a POLL_CUSTOM write-in), so there's
+  // no direct Prisma relation to include — resolve it via a few batched
+  // lookups instead of one query per item.
+  const allItems = donations.flatMap((d) => d.pledge?.items ?? []);
+  const rewardIds = [
+    ...new Set(allItems.filter((i) => i.kind === 'REWARD').map((i) => i.target_id)),
+  ];
+  const goalIds = [...new Set(allItems.filter((i) => i.kind === 'GOAL').map((i) => i.target_id))];
+  const optionIds = [
+    ...new Set(allItems.filter((i) => i.kind === 'POLL_VOTE').map((i) => i.target_id)),
+  ];
+  const pollIds = [
+    ...new Set(
+      allItems
+        .filter((i) => i.kind === 'POLL_VOTE' || i.kind === 'POLL_CUSTOM')
+        .map((i) => i.poll_id)
+        .filter((id): id is string => !!id),
+    ),
+  ];
+
+  const [rewards, goals, options, polls] = await Promise.all([
+    rewardIds.length
+      ? prisma.reward.findMany({
+          where: { id: { in: rewardIds } },
+          select: { id: true, title: true },
+        })
+      : [],
+    goalIds.length
+      ? prisma.fundGoal.findMany({
+          where: { id: { in: goalIds } },
+          select: { id: true, title: true },
+        })
+      : [],
+    optionIds.length
+      ? prisma.pollOption.findMany({
+          where: { id: { in: optionIds } },
+          select: { id: true, label: true },
+        })
+      : [],
+    pollIds.length
+      ? prisma.poll.findMany({ where: { id: { in: pollIds } }, select: { id: true, title: true } })
+      : [],
+  ]);
+
+  const rewardMap = new Map(rewards.map((r) => [r.id, r.title]));
+  const goalMap = new Map(goals.map((g) => [g.id, g.title]));
+  const optionMap = new Map(options.map((o) => [o.id, o.label]));
+  const pollMap = new Map(polls.map((p) => [p.id, p.title]));
+
+  const labelForItem = (item: {
+    kind: string;
+    target_id: string;
+    poll_id: string | null;
+    data: string | null;
+    quantity: number;
+  }) => {
+    if (item.kind === 'REWARD') {
+      const title = rewardMap.get(item.target_id) ?? 'Unknown reward';
+      return item.quantity > 1 ? `${item.quantity}× ${title}` : title;
+    }
+    if (item.kind === 'GOAL') return goalMap.get(item.target_id) ?? 'Unknown goal';
+    if (item.kind === 'POLL_VOTE') {
+      const pollTitle = item.poll_id ? pollMap.get(item.poll_id) : undefined;
+      const optionLabel = optionMap.get(item.target_id) ?? 'Unknown option';
+      return pollTitle ? `${pollTitle}: ${optionLabel}` : optionLabel;
+    }
+    if (item.kind === 'POLL_CUSTOM') {
+      const pollTitle = item.poll_id ? pollMap.get(item.poll_id) : undefined;
+      let writeInLabel = 'write-in';
+      try {
+        const parsed = item.data ? JSON.parse(item.data) : null;
+        if (parsed?.label) writeInLabel = parsed.label;
+      } catch {
+        /* ignore */
+      }
+      return pollTitle ? `${pollTitle}: "${writeInLabel}"` : `"${writeInLabel}"`;
+    }
+    return 'Unknown item';
+  };
+
+  res.json(
+    donations.map((d) => {
+      const { pledge, ...rest } = d;
+      return {
+        ...rest,
+        pledge_items: (pledge?.items ?? []).map((i) => ({
+          kind: i.kind,
+          label: labelForItem(i),
+          amount_cents: i.amount_cents,
+          quantity: i.quantity,
+        })),
+        top_up_cents: pledge?.top_up_cents ?? null,
+      };
+    }),
+  );
 });
 
+/**
+ * PATCH /moderator/donations/:id — `{ moderated?, hidden_from_overlay? }`, at least one.
+ *
+ * - `moderated` is the review toggle: native `donation.moderated` only. It does NOT
+ *   republish on TILTIFY, because the body would not change and a republish of an
+ *   anonymous donation removes it from the overlay (PRD-0002 §T8).
+ * - `hidden_from_overlay` hides the donation from the stream overlay: native
+ *   `donation.hidden` / `donation.unhidden`, and a TILTIFY republish (as `"Anonymous"`
+ *   without `completed_at` when hidden, the full donation when shown; §T5–T6).
+ *   Setting the value it already has publishes nothing.
+ */
 router.patch('/donations/:id', async (req, res) => {
-  const { moderated } = req.body;
-  if (typeof moderated !== 'boolean') {
+  const { moderated, hidden_from_overlay: hidden } = req.body;
+  if (moderated === undefined && hidden === undefined) {
+    return res
+      .status(400)
+      .json({ error: 'Provide moderated and/or hidden_from_overlay (booleans)' });
+  }
+  if (moderated !== undefined && typeof moderated !== 'boolean') {
     return res.status(400).json({ error: 'moderated must be a boolean' });
   }
+  if (hidden !== undefined && typeof hidden !== 'boolean') {
+    return res.status(400).json({ error: 'hidden_from_overlay must be a boolean' });
+  }
   const moderatorEmail = req.donor?.email || 'moderator';
-  const donation = await prisma.donation.update({
-    where: { id: req.params.id },
-    data: moderated
+
+  const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
+    await import('../services/webhooks/delivery.js');
+  const { withWebhooks } = await import('../services/webhooks/outbox.js');
+  const reviewFields = (value: boolean) =>
+    value
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
-      : { moderated: false, moderated_at: null, moderated_by: null },
+      : { moderated: false, moderated_at: null, moderated_by: null };
+
+  const donation = await withWebhooks(async (tx, emit, tiltify) => {
+    // Read inside the transaction, so two concurrent hides publish once.
+    const existing = await tx.donation.findUnique({
+      where: { id: req.params.id },
+      select: { hidden_from_overlay: true },
+    });
+    if (!existing) return null;
+    const updated = await tx.donation.update({
+      where: { id: req.params.id },
+      data: {
+        ...(moderated === undefined ? {} : reviewFields(moderated)),
+        ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
+      },
+    });
+    if (moderated !== undefined) {
+      await emit('donation.moderated', () =>
+        buildDonationModeratedPayload({
+          donationId: updated.id,
+          externalId: updated.external_id,
+          donorRef: updated.donor_id,
+          moderated,
+          moderatedAt: updated.moderated_at,
+        }),
+      );
+    }
+    // An unassigned donation was never published, so there is nothing to hide (§E6).
+    const published = updated.channel_id !== null || updated.event_id !== null;
+    if (hidden !== undefined && hidden !== existing.hidden_from_overlay && published) {
+      await emit(hidden ? 'donation.hidden' : 'donation.unhidden', () =>
+        buildDonationVisibilityPayload(updated),
+      );
+      await tiltify.donation(updated.id);
+    }
+    return updated;
   });
+
+  if (!donation) return res.status(404).json({ error: 'Donation not found' });
   res.json(donation);
 });
 
@@ -396,21 +595,21 @@ router.get('/goals', async (req, res) => {
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, event_id } = req.body;
+  const { title, description, target_cents, is_active, channel_id } = req.body;
   const goal = await prisma.fundGoal.create({
     data: {
       title,
       description,
       target_cents,
       is_active: is_active ?? true,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
-  const { title, description, target_cents, is_active, is_complete, event_id } = req.body;
+  const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
   const goal = await prisma.fundGoal.update({
     where: { id: req.params.id },
     data: {
@@ -419,7 +618,7 @@ router.put('/goals/:id', async (req, res) => {
       target_cents,
       is_active,
       is_complete,
-      event_id: event_id || null,
+      channel_id: channel_id || null,
     },
   });
   res.json(goal);
@@ -428,6 +627,164 @@ router.put('/goals/:id', async (req, res) => {
 router.delete('/goals/:id', async (req, res) => {
   await prisma.fundGoal.delete({ where: { id: req.params.id } });
   res.json({ success: true });
+});
+
+// Auctions CRUD — same shape as admin, but offer/cascade views never expose
+// donor.email (see file-level invariant above); donor_id is fine since it's
+// an opaque identifier, not personal data.
+router.get('/auctions', async (req, res) => {
+  res.json(
+    await prisma.auction.findMany({
+      orderBy: { created_at: 'desc' },
+      include: { current_offer: true },
+    }),
+  );
+});
+
+router.post('/auctions', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
+    return res.status(400).json({
+      error: 'title, type, starting_price_cents, min_increment_cents, and ends_at are required',
+    });
+  }
+  const auction = await prisma.auction.create({
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      starting_price_cents,
+      min_increment_cents,
+      ends_at: new Date(ends_at),
+      is_active: is_active ?? true,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.put('/auctions/:id', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  const existing = await prisma.auction.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true, status: true },
+  });
+  if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  if (existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
+  const auction = await prisma.auction.update({
+    where: { id: req.params.id },
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      ...(existing.status === 'OPEN'
+        ? {
+            starting_price_cents,
+            min_increment_cents,
+            ends_at: ends_at ? new Date(ends_at) : undefined,
+          }
+        : {}),
+      is_active,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.get('/auctions/:id/offers', async (req, res) => {
+  const offers = await prisma.auctionOffer.findMany({
+    where: { auction_id: req.params.id },
+    orderBy: { rank: 'asc' },
+  });
+  res.json(offers);
+});
+
+// All bids for an auction, newest first. Exposes only the opaque donor_id
+// (never donor.email — see file-level invariant), same as the offers view.
+router.get('/auctions/:id/bids', async (req, res) => {
+  const bids = await prisma.bid.findMany({
+    where: { auction_id: req.params.id },
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(bids);
+});
+
+router.post('/auctions/:id/reopen', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => reopenAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/close', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => closeAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/cancel', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => cancelAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/skip-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => skipCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/resend-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => resendCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
 });
 
 export default router;

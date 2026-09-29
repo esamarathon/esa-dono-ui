@@ -1,14 +1,23 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 import Navbar from './components/Navbar';
+import GlobalProgressBar from './components/GlobalProgressBar';
 import CartDrawer from './components/CartDrawer';
+import FeedbackButton from './components/FeedbackButton';
+import BroadcastBanner from './components/BroadcastBanner';
 import { CartProvider } from './context/CartContext';
+import { CampaignProvider } from './context/CampaignContext';
+import { track } from './lib/tracing';
 import Home from './pages/Home';
 import DonateFlow from './pages/DonateFlow';
 import PledgeReturn from './pages/PledgeReturn';
 import MyWallet from './pages/MyWallet';
+import Help from './pages/Help';
+import Auctions from './pages/Auctions';
 import AdminLayout from './pages/admin/AdminLayout';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminEvents from './pages/admin/AdminEvents';
+import AdminChannels from './pages/admin/AdminChannels';
 import AdminRewards from './pages/admin/AdminRewards';
 import AdminPolls from './pages/admin/AdminPolls';
 import AdminGoals from './pages/admin/AdminGoals';
@@ -16,15 +25,31 @@ import AdminDonations from './pages/admin/AdminDonations';
 import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
+import AdminFeatureFlags from './pages/admin/AdminFeatureFlags';
+import AdminBroadcast from './pages/admin/AdminBroadcast';
 import AdminPledges from './pages/admin/AdminPledges';
+import AdminAuctions from './pages/admin/AdminAuctions';
+import AdminDestinations from './pages/admin/AdminDestinations';
+import AdminHelp from './pages/admin/AdminHelp';
 import ModeratorLayout from './pages/moderator/ModeratorLayout';
+import ModeratorHelp from './pages/moderator/ModeratorHelp';
 import ModeratorDashboard from './pages/moderator/ModeratorDashboard';
 import ModeratorEvents from './pages/moderator/ModeratorEvents';
+import ModeratorChannels from './pages/moderator/ModeratorChannels';
 import ModeratorPolls from './pages/moderator/ModeratorPolls';
 import ModeratorRewards from './pages/moderator/ModeratorRewards';
 import ModeratorGoals from './pages/moderator/ModeratorGoals';
 import ModeratorClaims from './pages/moderator/ModeratorClaims';
 import ModeratorDonations from './pages/moderator/ModeratorDonations';
+import ModeratorAuctions from './pages/moderator/ModeratorAuctions';
+/** Fires a `page_view` span on every client-side route change. */
+function PageViewTracker() {
+  const location = useLocation();
+  useEffect(() => {
+    track('page_view', { 'page.path': location.pathname, 'page.title': document.title });
+  }, [location.pathname]);
+  return null;
+}
 
 export default function App() {
   return (
@@ -34,6 +59,7 @@ export default function App() {
           <Route index element={<AdminDashboard />} />
           <Route path="donors" element={<AdminDonors />} />
           <Route path="events" element={<AdminEvents />} />
+          <Route path="channels" element={<AdminChannels />} />
           <Route path="rewards" element={<AdminRewards />} />
           <Route path="polls" element={<AdminPolls />} />
           <Route path="goals" element={<AdminGoals />} />
@@ -41,33 +67,53 @@ export default function App() {
           <Route path="simulate" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
+          <Route path="feature-flags" element={<AdminFeatureFlags />} />
+          <Route path="broadcast" element={<AdminBroadcast />} />
+          <Route path="auctions" element={<AdminAuctions />} />
+          <Route path="destinations" element={<AdminDestinations />} />
+          <Route path="help" element={<AdminHelp />} />
         </Route>
         <Route path="/moderate" element={<ModeratorLayout />}>
           <Route index element={<ModeratorDashboard />} />
           <Route path="events" element={<ModeratorEvents />} />
+          <Route path="channels" element={<ModeratorChannels />} />
           <Route path="polls" element={<ModeratorPolls />} />
           <Route path="rewards" element={<ModeratorRewards />} />
           <Route path="goals" element={<ModeratorGoals />} />
           <Route path="claims" element={<ModeratorClaims />} />
           <Route path="donations" element={<ModeratorDonations />} />
+          <Route path="auctions" element={<ModeratorAuctions />} />
+          <Route path="help" element={<ModeratorHelp />} />
         </Route>
         <Route
           path="*"
           element={
-            <div className="min-h-screen">
-              <CartProvider>
-                <Navbar />
-                <CartDrawer />
-                <Routes>
-                  <Route path="/" element={<Home />} />
-                  <Route path="/donate" element={<DonateFlow />} />
-                  <Route path="/pledge/:token" element={<PledgeReturn />} />
-                  <Route path="/wallet" element={<MyWallet />} />
-                  <Route path="/rewards" element={<DonateFlow />} />
-                  <Route path="/polls" element={<DonateFlow />} />
-                  <Route path="/goals" element={<DonateFlow />} />
-                </Routes>
-              </CartProvider>
+            <div className="min-h-screen flex flex-col">
+              <BroadcastBanner />
+              <CampaignProvider>
+                <CartProvider>
+                  <PageViewTracker />
+                  <Navbar />
+                  <GlobalProgressBar />
+                  <CartDrawer />
+                  <FeedbackButton />
+                  <div className="flex-1">
+                    <Routes>
+                      <Route path="/" element={<Home />} />
+                      <Route path="/donate" element={<DonateFlow />} />
+                      <Route path="/donate/:eventSlug" element={<DonateFlow />} />
+                      <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
+                      <Route path="/pledge/:token" element={<PledgeReturn />} />
+                      <Route path="/wallet" element={<MyWallet />} />
+                      <Route path="/help" element={<Help />} />
+                      <Route path="/rewards" element={<DonateFlow />} />
+                      <Route path="/polls" element={<DonateFlow />} />
+                      <Route path="/goals" element={<DonateFlow />} />
+                      <Route path="/auctions" element={<Auctions />} />
+                    </Routes>
+                  </div>
+                </CartProvider>
+              </CampaignProvider>
             </div>
           }
         />

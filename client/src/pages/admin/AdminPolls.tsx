@@ -3,7 +3,8 @@ import adminClient, { refundPollOption } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
-import { apiErrorMessage, type Poll, type Event } from '../../types';
+import StatusBadge from '../../components/StatusBadge';
+import { apiErrorMessage, type Poll, type Channel } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -18,7 +19,7 @@ interface PollForm {
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
   auto_approve: boolean;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -29,29 +30,31 @@ const EMPTY: PollForm = {
   allow_custom_entries: false,
   max_entry_chars: '',
   auto_approve: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
 
 export default function AdminPolls() {
   const [polls, setPolls] = useState<Poll[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
   const [newOption, setNewOption] = useState('');
+  const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
+  const [optionDraft, setOptionDraft] = useState('');
   const [error, setError] = useState('');
 
   const reload = () => adminClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
-    Promise.all([reload(), adminClient.get('/events').then((r) => setEvents(r.data))]).finally(() =>
-      setLoading(false),
+    Promise.all([reload(), adminClient.get('/channels').then((r) => setChannels(r.data))]).finally(
+      () => setLoading(false),
     );
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -63,7 +66,7 @@ export default function AdminPolls() {
       ...p,
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
-      event_id: p.event_id ?? null,
+      channel_id: p.channel_id ?? null,
     } as PollForm);
     setModal(p);
     setError('');
@@ -124,12 +127,24 @@ export default function AdminPolls() {
     }
   };
 
+  const startEditOption = (opt: { id: string; label: string }) => {
+    setEditingOptionId(opt.id);
+    setOptionDraft(opt.label);
+  };
+
+  const saveOption = async (id: string) => {
+    if (!optionDraft.trim()) return;
+    await adminClient.patch(`/polls/options/${id}`, { label: optionDraft.trim() });
+    setEditingOptionId(null);
+    await reload();
+  };
+
   if (loading) return <LoadingSpinner />;
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="font-display text-4xl lowercase">polls</h1>
+        <h1 className="font-display text-4xl uppercase">polls</h1>
         <button onClick={openCreate} className="btrl-button">
           + new poll
         </button>
@@ -148,8 +163,11 @@ export default function AdminPolls() {
                   total votes: {fmt(poll.total_votes_cents)}
                 </p>
                 <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(poll.event_id)}
+                  channel: {channelName(poll.channel_id)}
                 </p>
+                <div className="mt-2">
+                  <StatusBadge active={poll.is_active} />
+                </div>
               </div>
               <div className="flex gap-2">
                 <button
@@ -174,25 +192,62 @@ export default function AdminPolls() {
                   className="flex justify-between items-center text-sm px-2 py-1 rounded-sm"
                   style={{ background: 'rgba(239,238,236,.03)' }}
                 >
-                  <span className="font-data text-off-white">
-                    {opt.label} ({fmt(opt.votes_cents)})
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleRefundOption(opt.id, opt.label)}
-                      className="font-mono text-[10px] hover:underline"
-                      style={{ color: 'var(--d-yellow)' }}
-                    >
-                      refund votes
-                    </button>
-                    <button
-                      onClick={() => deleteOption(opt.id, opt.label, opt.votes_cents)}
-                      className="font-mono text-[10px] hover:underline"
-                      style={{ color: 'var(--red)' }}
-                    >
-                      remove
-                    </button>
-                  </div>
+                  {editingOptionId === opt.id ? (
+                    <>
+                      <input
+                        autoFocus
+                        className="flex-1 px-2 py-1 text-sm"
+                        value={optionDraft}
+                        onChange={(e) => setOptionDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveOption(opt.id);
+                          if (e.key === 'Escape') setEditingOptionId(null);
+                        }}
+                      />
+                      <button
+                        onClick={() => saveOption(opt.id)}
+                        className="ml-2 font-mono text-[10px] hover:underline"
+                        style={{ color: 'var(--green)' }}
+                      >
+                        save
+                      </button>
+                      <button
+                        onClick={() => setEditingOptionId(null)}
+                        className="ml-2 font-mono text-[10px] hover:underline text-off-white/55"
+                      >
+                        cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-data text-off-white">
+                        {opt.label} ({fmt(opt.votes_cents)})
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => startEditOption(opt)}
+                          className="font-mono text-[10px] hover:underline"
+                          style={{ color: 'var(--d-yellow)' }}
+                        >
+                          edit
+                        </button>
+                        <button
+                          onClick={() => handleRefundOption(opt.id, opt.label)}
+                          className="font-mono text-[10px] hover:underline"
+                          style={{ color: 'var(--d-yellow)' }}
+                        >
+                          refund votes
+                        </button>
+                        <button
+                          onClick={() => deleteOption(opt.id, opt.label, opt.votes_cents)}
+                          className="font-mono text-[10px] hover:underline"
+                          style={{ color: 'var(--red)' }}
+                        >
+                          remove
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
               <div className="flex gap-2 mt-2">
@@ -217,6 +272,11 @@ export default function AdminPolls() {
 
       {modal && (
         <Modal title={modal === 'create' ? 'new poll' : 'edit poll'} onClose={() => setModal(null)}>
+          {modal === 'create' && (
+            <p className="mb-3 text-sm" style={{ color: 'var(--d-yellow)' }}>
+              Poll options are added on the main polls page after the poll is created.
+            </p>
+          )}
           {(
             [
               { key: 'title', label: 'Title' },
@@ -246,14 +306,14 @@ export default function AdminPolls() {
             />
           </div>
           <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
-              <option value="">shared (any event)</option>
-              {events.map((s) => (
+              <option value="">shared (any channel)</option>
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

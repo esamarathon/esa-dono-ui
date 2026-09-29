@@ -19,7 +19,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   try {
-    if (event.type !== 'checkout.session.completed') {
+    if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.expired') {
       return res.status(200).json({ received: true });
     }
 
@@ -32,20 +32,32 @@ router.post('/', async (req: Request, res: Response) => {
           metadata?: Record<string, string> | null;
           client_reference_id?: string | null;
           total_details?: { amount_shipping?: number | null } | null;
-          shipping_details?: {
-            name?: string | null;
-            address?: {
-              line1?: string | null;
-              line2?: string | null;
-              city?: string | null;
-              country?: string | null;
-            } | null;
-          } | null;
         }
       | undefined;
 
     if (!session) {
       return res.status(200).json({ received: true, skipped: 'no session object' });
+    }
+
+    const auctionId = session.metadata?.auction_id ?? null;
+    if (auctionId && session.id) {
+      const prisma = (await import('../lib/prisma.js')).default;
+      if (event.type === 'checkout.session.expired') {
+        const { advanceCascadeTx } = await import('../services/auction.js');
+        const sessionId = session.id;
+        await prisma.$transaction((tx) => advanceCascadeTx(tx, auctionId, sessionId));
+      } else {
+        const { settleWinTx } = await import('../services/auction.js');
+        const sessionId = session.id;
+        await prisma.$transaction((tx) => settleWinTx(tx, auctionId, sessionId));
+      }
+      return res.status(200).json({ received: true });
+    }
+
+    if (event.type !== 'checkout.session.completed') {
+      // checkout.session.expired for a non-auction (pledge) session — no
+      // action needed, pledges simply remain OPEN until their own TTL.
+      return res.status(200).json({ received: true });
     }
 
     const externalId = session.id;
@@ -54,17 +66,6 @@ router.post('/', async (req: Request, res: Response) => {
     const donorName = session.customer_details?.name ?? 'Anonymous';
     const amountCents = session.amount_total ?? 0;
     const shippingCents = session.total_details?.amount_shipping ?? 0;
-
-    const ship = session.shipping_details;
-    const shippingAddress = ship
-      ? {
-          name: ship.name ?? undefined,
-          address:
-            [ship.address?.line1, ship.address?.line2].filter(Boolean).join(', ') || undefined,
-          city: ship.address?.city ?? undefined,
-          country: ship.address?.country ?? undefined,
-        }
-      : null;
 
     if (!email || !externalId) {
       return res.status(200).json({ received: true, skipped: 'missing email or id' });
@@ -81,7 +82,6 @@ router.post('/', async (req: Request, res: Response) => {
       comment: null,
       pledgeToken,
       shippingCents,
-      shippingAddress,
     });
 
     res.status(200).json({ received: true });

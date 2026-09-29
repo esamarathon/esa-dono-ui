@@ -4,11 +4,18 @@ services:
       context: .
       dockerfile: Dockerfile.backend
       target: runtime
-    image: ghcr.io/codescales/esa-dono-ui/backend:latest
+    image: ghcr.io/esamarathon/esa-dono-ui/backend:${BACKEND_IMAGE_TAG:-latest}
     environment:
+      # OpenTelemetry tracing → esa-observability otelcol gateway (shared network).
+      # Disabled by default; set OTEL_TRACES_ENABLED=true to enable.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otelcol:4318}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-esa-dono-backend}
+      - OTEL_TRACES_SAMPLER_ARG=${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      - OTEL_TRACES_ENABLED=${OTEL_TRACES_ENABLED:-false}
       - NODE_ENV=production
       - PORT=3001
       - DATABASE_URL=file:/data/dono.db
+      - UPLOADS_DIR=/data/uploads
       # Stripe integration
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
@@ -21,6 +28,29 @@ services:
       - MODERATOR_API_KEY=${MODERATOR_API_KEY:-}
       - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       - MODERATOR_EMAILS=${MODERATOR_EMAILS:-}
+      # Prometheus metrics (GET /api/metrics). Leave empty to disable the
+      # endpoint entirely (it 404s rather than serving unauthenticated).
+      - METRICS_API_KEY=${METRICS_API_KEY:-}
+      - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Proxy hops in front of Express (#140): 1 = the frontend nginx only; 2 when
+      # another reverse proxy (Caddy, Traefik, a load balancer) sits in front of it.
+      # Wrong here, and every client shares one rate-limit bucket.
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      # Rate limits (req/min): whole API per IP (backstop), spend per donor,
+      # auth and /api/metrics per IP.
+      - RATE_LIMIT_API=${RATE_LIMIT_API:-600}
+      - RATE_LIMIT_SPEND=${RATE_LIMIT_SPEND:-20}
+      - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-5}
+      - RATE_LIMIT_METRICS=${RATE_LIMIT_METRICS:-30}
+      # Outbound webhooks: RabbitMQ publisher-confirm timeout (ms). Default 10000.
+      - WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS=${WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS:-10000}
+      # OAuth sign-in (Google / Discord / Twitch). Leave empty to disable.
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID:-}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET:-}
       # Email (magic links). Omit SMTP_HOST to log links to stdout instead.
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -29,6 +59,10 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
+      # Feedback widget (server/routes/feedback.ts). Leave empty to disable
+      # (503); the `feedback` feature flag must also be enabled.
+      - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}
+      - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL:-}
     volumes:
       - dono-data:/data
     restart: unless-stopped
@@ -37,7 +71,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/codescales/esa-dono-ui/frontend:latest
+      args:
+        VITE_OTEL_ENDPOINT: ${VITE_OTEL_ENDPOINT:-/traces}
+        VITE_OTEL_SERVICE_NAME: ${VITE_OTEL_SERVICE_NAME:-esa-dono-frontend}
+        VITE_OTEL_SAMPLE_RATE: ${VITE_OTEL_SAMPLE_RATE:-1.0}
+        VITE_OTEL_ENABLED: ${VITE_OTEL_ENABLED:-false}
+    image: ghcr.io/esamarathon/esa-dono-ui/frontend:${FRONTEND_IMAGE_TAG:-latest}
     ports:
       - '${FRONTEND_PORT:-8080}:8080'
     depends_on:

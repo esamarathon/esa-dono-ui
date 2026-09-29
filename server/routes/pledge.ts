@@ -1,26 +1,34 @@
 import { Router, type Request, type Response } from 'express';
 import { createPledge, createCheckoutForPledge, type WalletDonor } from '../services/pledge.js';
+import { resolveDonorToken } from '../middleware/donorAuth.js';
 
 const router = Router();
 
 /**
  * POST /api/pledge
  * Create a pending pledge from cart items.
- * Body: { email?, comment?, items: [{ kind, target_id, amount_cents?, poll_id?, data? }] }
- * Query: ?token=<magic_token> — when a valid donor token is provided, the donor's
+ * Body: { email?, comment?, display_name?, items: [{ kind, target_id, amount_cents?, poll_id?, data? }] }
+ * Donor session (cookie or Bearer, resolveDonorToken) — when a valid one is present, the donor's
  *         wallet balance is applied as a discount on the Stripe checkout amount.
  * Returns: { pledge_token, total_cents, expires_at, donate_url, has_checkout, wallet_discount_cents }
  */
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { email, comment, items, top_up_cents, event_id } = req.body;
-    const pledge = await createPledge({ email, comment, items, top_up_cents, event_id });
+    const { email, comment, display_name, items, top_up_cents, channel_id } = req.body;
+    const pledge = await createPledge({
+      email,
+      comment,
+      display_name,
+      items,
+      top_up_cents,
+      channel_id,
+    });
 
     // Resolve authenticated donor from magic token (wallet discount) — optional.
     // Must be a valid, non-expired, non-frozen token. Wallet discount is only
     // applied for authenticated donors, never by email alone.
     let walletDonor: WalletDonor | null = null;
-    const token = req.query.token;
+    const token = resolveDonorToken(req);
     if (token && typeof token === 'string') {
       const { default: prisma } = await import('../lib/prisma.js');
       const donor = await prisma.donor.findUnique({
@@ -85,7 +93,7 @@ router.get('/:token', async (req: Request, res: Response) => {
     const { default: prisma } = await import('../lib/prisma.js');
     const pledge = await prisma.pendingPledge.findUnique({
       where: { pledge_token: req.params.token },
-      include: { items: true, fulfilled_by: { include: { donor: true } } },
+      include: { items: true },
     });
     if (!pledge) return res.status(404).json({ error: 'Pledge not found' });
     res.json({
@@ -95,8 +103,6 @@ router.get('/:token', async (req: Request, res: Response) => {
       status: pledge.status,
       donor_email: pledge.donor_email,
       expires_at: pledge.expires_at,
-      magic_token:
-        pledge.status === 'FULFILLED' ? (pledge.fulfilled_by?.donor?.magic_token ?? null) : null,
       items: pledge.items.map((i) => ({
         kind: i.kind,
         target_id: i.target_id,

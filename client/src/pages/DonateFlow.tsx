@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
+import { getPublicEvent } from '../api/events';
+import type { PublicEvent } from '../types';
+import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
+import ShareLinkButton from '../components/ShareLinkButton';
 import { CheckBadgeIcon } from '../components/icons';
 import RewardList from '../components/incentives/RewardList';
 import PollList from '../components/incentives/PollList';
 import GoalList from '../components/incentives/GoalList';
-
 const TABS = ['rewards', 'polls', 'goals'] as const;
 type Tab = (typeof TABS)[number];
 
@@ -31,17 +34,85 @@ export default function DonateFlow() {
     loading,
     openDrawer,
     hasVisited,
-    events,
-    selectedEventId,
-    selectEvent,
-    pendingEventId,
-    confirmEventSwitch,
-    cancelEventSwitch,
+    channels,
+    selectedChannelId,
+    selectChannel,
+    refreshChannels,
+    pendingChannelId,
+    confirmChannelSwitch,
+    cancelChannelSwitch,
+    prefillFromLink,
   } = useCart();
   const location = useLocation();
+  const { eventSlug, channelSlug } = useParams<{
+    eventSlug?: string;
+    channelSlug?: string;
+  }>();
 
   const [tab, setTab] = useState<Tab>(() => tabFromPathname(location.pathname));
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
+  const [prefillWarning, setPrefillWarning] = useState<string | null>(null);
+  // Slug-link state (#115): the Event fetched from /donate/<event>[/<channel>].
+  // `linkError` is the not-found message for an unknown event/channel slug.
+  const [slugEvent, setSlugEvent] = useState<PublicEvent | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  // Fetch the event named by the URL slug. Runs once per distinct slug and
+  // respects the cart's own loading state, mirroring the ?channel= deep link.
+  const consumedEventSlug = useRef<string | null>(null);
+  const consumedSlugSelection = useRef<string | null>(null);
+  useEffect(() => {
+    if (!eventSlug) {
+      // Back on plain /donate (the route element is reused): drop the link state
+      // so the picker shows again and the same slug can be followed again later.
+      consumedEventSlug.current = null;
+      consumedSlugSelection.current = null;
+      setSlugEvent(null);
+      setLinkError(null);
+      return;
+    }
+    if (consumedEventSlug.current === eventSlug) return;
+    consumedEventSlug.current = eventSlug;
+    // A new slug (the route element is reused across /donate/<a> → /donate/<b>).
+    setSlugEvent(null);
+    setLinkError(null);
+    getPublicEvent(eventSlug)
+      .then((event) => setSlugEvent(event))
+      .catch(() => setLinkError("That event isn't open for donations."));
+  }, [eventSlug]);
+
+  // Select a channel named by the URL slug, an event's only channel, or its
+  // primary channel — once the event's channels are known.
+  useEffect(() => {
+    const linkKey = `${slugEvent?.slug}/${channelSlug ?? ''}`;
+    if (loading || !slugEvent || consumedSlugSelection.current === linkKey) return;
+    consumedSlugSelection.current = linkKey;
+    const { channels: eventChannels } = slugEvent;
+    if (channelSlug) {
+      const match = eventChannels.find((c) => c.slug === channelSlug);
+      if (!match) {
+        setLinkError("That channel isn't open for donations.");
+        return;
+      }
+      selectChannel(match.id);
+      return;
+    }
+    const target =
+      eventChannels.length === 1
+        ? eventChannels[0]
+        : eventChannels.find((c) => c.id === slugEvent.primary_channel_id);
+    if (target) selectChannel(target.id);
+  }, [loading, slugEvent, channelSlug, selectChannel]);
+
+  // Refetch the channel list once when the donate flow mounts (the channel
+  // picker at the top of this page), rather than relying solely on the
+  // background poll — CartProvider persists for the app's lifetime, so a
+  // channel opened by an admin while the donor was elsewhere on the site
+  // otherwise wouldn't show until the next poll tick (#46).
+  useEffect(() => {
+    refreshChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Warning shown when "review & checkout" is clicked before every category
   // has been opened. A second click while it's showing bypasses it and
@@ -58,6 +129,53 @@ export default function DonateFlow() {
     setTab(tabFromPathname(location.pathname));
   }, [location.pathname]);
 
+  // Deep link to a channel (#49): ?channel=<id> selects that channel on load,
+  // the same action as clicking its picker button, so a shared link lands
+  // directly on a channel's incentives without the donor manually picking.
+  // Consumed once via a ref — channels refetches on a background interval
+  // (new tab, new poll, etc.), and without the guard each refetch would
+  // re-select the linked channel even after the donor switched away.
+  const consumedChannelParam = useRef(false);
+  useEffect(() => {
+    if (loading || channels.length === 0 || consumedChannelParam.current) return;
+    const channelParam = new URLSearchParams(location.search).get('channel');
+    if (!channelParam) return;
+    consumedChannelParam.current = true;
+    const channel = channels.find((c) => c.id === channelParam);
+    if (!channel) {
+      setPrefillWarning('That channel is no longer available.');
+      return;
+    }
+    selectChannel(channel.id);
+  }, [loading, channels, location.search, selectChannel]);
+
+  // Apply a shared permalink (e.g. /rewards?reward=<id>) once the incentive
+  // data has loaded. prefillFromLink resolves the target, auto-selects its
+  // channel, adds it to the cart, and opens the drawer; a non-null return is
+  // a warning about a missing/inactive/sold-out target that we surface
+  // instead of silently doing nothing.
+  useEffect(() => {
+    if (loading) return;
+    const warning = prefillFromLink(new URLSearchParams(location.search));
+    if (warning) setPrefillWarning(warning);
+  }, [loading, location.search, prefillFromLink]);
+
+  // A poll-only permalink (/polls?poll=<id>) doesn't prefill a cart item —
+  // it just takes the donor to the polls tab and scrolls to that poll so
+  // they can pick an option and amount themselves.
+  useEffect(() => {
+    if (loading) return;
+    const pollId = new URLSearchParams(location.search).get('poll');
+    if (!pollId) return;
+    setTab('polls');
+    const timer = setTimeout(() => {
+      document
+        .getElementById(`poll-${pollId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [loading, location.search]);
+
   // Dismiss a lingering warning banner once the donor moves to a different
   // category — it did its job (or was bypassed) and shouldn't stick around
   // while they browse.
@@ -70,9 +188,28 @@ export default function DonateFlow() {
     const currentIndex = TABS.indexOf(tab);
     setDirection(nextIndex >= currentIndex ? 'next' : 'prev');
     setTab(next);
+    track('tab_visit', { tab: next });
   };
 
   if (loading) return <LoadingSpinner />;
+
+  if (linkError) {
+    return (
+      <div className="max-w-3xl mx-auto p-8">
+        <div className="p-4 rounded-sm" style={{ background: 'rgba(224,90,90,.16)' }}>
+          <p className="font-data" style={{ color: 'var(--red)' }}>
+            {linkError}
+          </p>
+          <Link
+            to="/donate"
+            className="font-data text-sm underline mt-2 inline-block text-d-yellow hover:text-off-white"
+          >
+            back to donations &rarr;
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const slideClass = direction === 'next' ? 'animate-slide-in-right' : 'animate-slide-in-left';
   const tabIndex = TABS.indexOf(tab);
@@ -105,58 +242,79 @@ export default function DonateFlow() {
 
   return (
     <div className="max-w-3xl mx-auto p-8">
-      {/* Event picker — required before browsing incentives. Every donation
-          routes to exactly one event, and incentives tied to a specific
-          event cannot be mixed with another event's in the same cart, so
+      {prefillWarning && (
+        <div className="p-3 mb-6 rounded-sm text-sm" style={{ background: 'rgba(224,90,90,.16)' }}>
+          <p className="font-data" style={{ color: 'var(--red)' }}>
+            {prefillWarning}
+          </p>
+          <p className="font-body text-xs text-off-white/55 mt-1">
+            This link couldn't be fully applied.
+          </p>
+        </div>
+      )}
+
+      {/* Channel picker — required before browsing incentives. Every donation
+          routes to exactly one channel, and incentives tied to a specific
+          channel cannot be mixed with another channel's in the same cart, so
           the picker filters what's shown below. */}
       <div className="btrl-panel p-4 mb-6">
-        <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">event</p>
-        {events.length === 0 ? (
-          <p className="font-body text-sm text-off-white/55">No events are open right now.</p>
+        <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">
+          channel
+        </p>
+        {channels.length === 0 ? (
+          <p className="font-body text-sm text-off-white/55">No channels are open right now.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {events.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => selectEvent(s.id)}
-                className={`font-data font-bold text-sm tracking-wider lowercase px-4 py-2 rounded-sm transition-colors ${
-                  selectedEventId === s.id ? 'text-black' : 'text-off-white/55 hover:text-off-white'
-                }`}
-                style={{
-                  background:
-                    selectedEventId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
-                }}
-              >
-                {s.name}
-              </button>
+            {channels.map((s) => (
+              <div key={s.id} className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    selectChannel(s.id);
+                    track('channel_select', { 'channel.id': s.id });
+                  }}
+                  className={`font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
+                    selectedChannelId === s.id
+                      ? 'text-black'
+                      : 'text-off-white/55 hover:text-off-white'
+                  }`}
+                  style={{
+                    background:
+                      selectedChannelId === s.id ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)',
+                  }}
+                >
+                  {s.name}
+                </button>
+                <ShareLinkButton path={`/donate?channel=${s.id}`} />
+              </div>
             ))}
           </div>
         )}
-        {!selectedEventId && events.length > 0 && (
+        {!selectedChannelId && channels.length > 0 && (
           <p className="font-body text-xs text-off-white/55 mt-2">
-            Select an event to see its rewards, polls, and fund goals.
+            Select a channel to see its rewards, polls, and fund goals.
           </p>
         )}
       </div>
 
-      {pendingEventId && (
-        <Modal title="switch event?" onClose={cancelEventSwitch}>
+      {pendingChannelId && (
+        <Modal title="switch channel?" onClose={cancelChannelSwitch}>
           <p className="font-body text-sm text-off-white/55 mb-4">
-            Your cart has items tied to your current event. Incentives can't be mixed across events
-            in one donation — switching will remove those items from your cart (shared items stay).
+            Your cart has items tied to your current channel. Incentives can't be mixed across
+            channels in one donation — switching will remove those items from your cart (shared
+            items stay).
           </p>
           <div className="flex justify-end gap-2">
-            <button onClick={cancelEventSwitch} className="btrl-button btrl-button-outline">
+            <button onClick={cancelChannelSwitch} className="btrl-button btrl-button-outline">
               cancel
             </button>
-            <button onClick={confirmEventSwitch} className="btrl-button">
+            <button onClick={confirmChannelSwitch} className="btrl-button">
               switch &amp; clear those items
             </button>
           </div>
         </Modal>
       )}
 
-      {!selectedEventId ? null : (
+      {!selectedChannelId ? null : (
         <>
           {/* Tab bar — still clickable for jumping directly to a category. A
           checkmark marks any category the donor has already opened. */}
@@ -165,7 +323,7 @@ export default function DonateFlow() {
               <button
                 key={t}
                 onClick={() => selectTab(t)}
-                className={`flex items-center gap-1.5 font-data font-bold text-sm tracking-wider lowercase px-4 py-2 rounded-sm transition-colors ${
+                className={`flex items-center gap-1.5 font-data font-bold text-sm tracking-wider uppercase px-4 py-2 rounded-sm transition-colors ${
                   tab === t ? 'text-black' : 'text-off-white/55 hover:text-off-white'
                 }`}
                 style={{ background: tab === t ? 'var(--d-yellow)' : 'rgba(239,238,236,.08)' }}

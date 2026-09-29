@@ -17,3 +17,16 @@ export const DEFAULT_GOAL_AMOUNT = '5.00';
  * keystroke. See DonateFlow.tsx's PollsStep/GoalsStep.
  */
 export const CART_SYNC_DEBOUNCE_MS = 400;
+
+/**
+ * How often the homepage re-fetches campaign totals so the raised amount
+ * updates for clients without a manual reload.
+ */
+export const CAMPAIGN_POLL_MS = 15000;
+
+/**
+ * How often the incentive data (rewards/polls/goals/channels) is refreshed.
+ * Refreshes preserve the current on-screen order and never drop items that
+ * are in the cart, so a donor's in-progress selection is never disturbed.
+ */
+export const INCENTIVES_POLL_MS = 15000;

@@ -3,7 +3,10 @@ import moderatorClient from '../../api/moderator';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
-import { apiErrorMessage, type Poll, type CustomEntry, type Event } from '../../types';
+import StatusBadge from '../../components/StatusBadge';
+import ChannelPill from '../../components/ChannelPill';
+import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
+import { apiErrorMessage, type Poll, type CustomEntry } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -18,7 +21,7 @@ interface PollForm {
   allow_custom_entries: boolean;
   max_entry_chars: number | string;
   auto_approve: boolean;
-  event_id: string | null;
+  channel_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -29,31 +32,36 @@ const EMPTY: PollForm = {
   allow_custom_entries: false,
   max_entry_chars: '',
   auto_approve: true,
-  event_id: null,
+  channel_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
 
 export default function ModeratorPolls() {
   const [polls, setPolls] = useState<Poll[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
   const [newOption, setNewOption] = useState('');
+  const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
+  const [optionDraft, setOptionDraft] = useState('');
   const [error, setError] = useState('');
   const [entriesPanel, setEntriesPanel] = useState<string | null>(null);
   const [entries, setEntries] = useState<CustomEntry[]>([]);
+  const [entriesError, setEntriesError] = useState('');
+  const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
-    Promise.all([reload(), moderatorClient.get('/events').then((r) => setEvents(r.data))]).finally(
-      () => setLoading(false),
-    );
+    reload().finally(() => setLoading(false));
   }, []);
 
-  const eventName = (id: string | null | undefined) =>
-    id ? (events.find((s) => s.id === id)?.name ?? 'unknown event') : 'shared';
+  const channelName = (id: string | null | undefined) =>
+    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
+
+  const filteredPolls = polls.filter(
+    (p) => !selectedChannelId || p.channel_id === selectedChannelId || p.channel_id == null,
+  );
 
   const openCreate = () => {
     setForm(EMPTY);
@@ -65,7 +73,7 @@ export default function ModeratorPolls() {
       ...p,
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
-      event_id: p.event_id ?? null,
+      channel_id: p.channel_id ?? null,
     } as PollForm);
     setModal(p);
     setError('');
@@ -94,34 +102,72 @@ export default function ModeratorPolls() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete poll?')) return;
-    await moderatorClient.delete(`/polls/${id}`);
-    await reload();
+    try {
+      await moderatorClient.delete(`/polls/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Delete failed'));
+    }
   };
 
   const addOption = async (pollId: string) => {
     if (!newOption.trim()) return;
-    await moderatorClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
-    setNewOption('');
-    await reload();
+    try {
+      await moderatorClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
+      setNewOption('');
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to add option'));
+    }
   };
 
   const deleteOption = async (id: string) => {
-    await moderatorClient.delete(`/polls/options/${id}`);
-    await reload();
+    try {
+      await moderatorClient.delete(`/polls/options/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to delete option'));
+    }
+  };
+
+  const startEditOption = (opt: { id: string; label: string }) => {
+    setEditingOptionId(opt.id);
+    setOptionDraft(opt.label);
+  };
+
+  const saveOption = async (id: string) => {
+    if (!optionDraft.trim()) return;
+    try {
+      await moderatorClient.patch(`/polls/options/${id}`, { label: optionDraft.trim() });
+      setEditingOptionId(null);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to save option'));
+    }
   };
 
   const loadEntries = async (pollId: string) => {
-    const { data } = await moderatorClient.get(`/polls/${pollId}/custom-entries`);
-    setEntries(data);
-    setEntriesPanel(pollId);
+    setEntriesError('');
+    try {
+      const { data } = await moderatorClient.get(`/polls/${pollId}/custom-entries`);
+      setEntries(data);
+      setEntriesPanel(pollId);
+    } catch (e) {
+      setEntriesError(apiErrorMessage(e, 'Failed to load custom entries'));
+    }
   };
 
   const handleApproveReject = async (entryId: string, status: string) => {
-    await moderatorClient.patch(`/polls/custom-entries/${entryId}`, { status });
-    await reload();
-    if (entriesPanel) {
-      const { data } = await moderatorClient.get(`/polls/${entriesPanel}/custom-entries`);
-      setEntries(data);
+    setEntriesError('');
+    try {
+      await moderatorClient.patch(`/polls/custom-entries/${entryId}`, { status });
+      await reload();
+      if (entriesPanel) {
+        const { data } = await moderatorClient.get(`/polls/${entriesPanel}/custom-entries`);
+        setEntries(data);
+      }
+    } catch (e) {
+      setEntriesError(apiErrorMessage(e, 'Failed to moderate entry'));
     }
   };
 
@@ -133,18 +179,27 @@ export default function ModeratorPolls() {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h1 className="font-display text-4xl lowercase">polls</h1>
+        <h1 className="font-display text-4xl uppercase">polls</h1>
         <button onClick={openCreate} className="btrl-button">
           + new poll
         </button>
       </div>
 
+      {!modal && error && (
+        <p className="font-body text-sm mb-4" style={{ color: 'var(--red)' }}>
+          {error}
+        </p>
+      )}
+
       <div className="space-y-4">
-        {polls.map((poll) => (
+        {filteredPolls.map((poll) => (
           <Card key={poll.id}>
             <div className="flex justify-between">
               <div>
-                <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
+                  <ChannelPill label={channelName(poll.channel_id)} />
+                </div>
                 {poll.description && (
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
@@ -153,9 +208,9 @@ export default function ModeratorPolls() {
                   {poll.allow_custom_entries &&
                     ` · custom entries ${poll.auto_approve === false ? '(needs approval)' : '(auto-approved)'}`}
                 </p>
-                <p className="font-data text-xs text-off-white/40">
-                  event: {eventName(poll.event_id)}
-                </p>
+                <div className="mt-2">
+                  <StatusBadge active={poll.is_active} />
+                </div>
               </div>
               <div className="flex gap-2">
                 <button
@@ -181,16 +236,55 @@ export default function ModeratorPolls() {
                   className="flex justify-between items-center text-sm px-2 py-1 rounded-sm"
                   style={{ background: 'rgba(239,238,236,.03)' }}
                 >
-                  <span className="font-data text-off-white">
-                    {opt.label} ({fmt(opt.votes_cents)}){opt.custom_entry_id ? ' · custom' : ''}
-                  </span>
-                  <button
-                    onClick={() => deleteOption(opt.id)}
-                    className="font-mono text-[10px] hover:underline"
-                    style={{ color: 'var(--red)' }}
-                  >
-                    remove
-                  </button>
+                  {editingOptionId === opt.id ? (
+                    <>
+                      <input
+                        autoFocus
+                        className="flex-1 px-2 py-1 text-sm"
+                        value={optionDraft}
+                        onChange={(e) => setOptionDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveOption(opt.id);
+                          if (e.key === 'Escape') setEditingOptionId(null);
+                        }}
+                      />
+                      <button
+                        onClick={() => saveOption(opt.id)}
+                        className="ml-2 font-mono text-[10px] hover:underline"
+                        style={{ color: 'var(--green)' }}
+                      >
+                        save
+                      </button>
+                      <button
+                        onClick={() => setEditingOptionId(null)}
+                        className="ml-2 font-mono text-[10px] hover:underline text-off-white/55"
+                      >
+                        cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-data text-off-white">
+                        {opt.label} ({fmt(opt.votes_cents)}){opt.custom_entry_id ? ' · custom' : ''}
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => startEditOption(opt)}
+                          className="font-mono text-[10px] hover:underline"
+                          style={{ color: 'var(--d-yellow)' }}
+                        >
+                          edit
+                        </button>
+                        <button
+                          onClick={() => deleteOption(opt.id)}
+                          className="font-mono text-[10px] hover:underline"
+                          style={{ color: 'var(--red)' }}
+                        >
+                          remove
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
               <div className="flex gap-2 mt-2">
@@ -223,7 +317,15 @@ export default function ModeratorPolls() {
 
             {entriesPanel === poll.id && (
               <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
-                <h4 className="font-data font-bold text-sm mb-2 text-off-white">custom entries</h4>
+                <div className="flex items-center gap-2 mb-2">
+                  <h4 className="font-data font-bold text-sm text-off-white">custom entries</h4>
+                  <ChannelPill label={channelName(poll.channel_id)} />
+                </div>
+                {entriesError && (
+                  <p className="font-body text-xs mb-2" style={{ color: 'var(--red)' }}>
+                    {entriesError}
+                  </p>
+                )}
                 {entries.length === 0 ? (
                   <p className="font-body text-xs text-off-white/55">No entries yet.</p>
                 ) : (
@@ -298,6 +400,11 @@ export default function ModeratorPolls() {
 
       {modal && (
         <Modal title={modal === 'create' ? 'new poll' : 'edit poll'} onClose={() => setModal(null)}>
+          {modal === 'create' && (
+            <p className="mb-3 text-sm" style={{ color: 'var(--d-yellow)' }}>
+              Poll options are added on the main polls page after the poll is created.
+            </p>
+          )}
           {(
             [
               { key: 'title', label: 'Title' },
@@ -327,14 +434,14 @@ export default function ModeratorPolls() {
             />
           </div>
           <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
             <select
               className="w-full px-3 py-2 text-sm"
-              value={form.event_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value || null }))}
+              value={form.channel_id ?? ''}
+              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
             >
-              <option value="">shared (any event)</option>
-              {events.map((s) => (
+              <option value="">shared (any channel)</option>
+              {channels.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>

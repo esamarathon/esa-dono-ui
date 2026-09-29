@@ -28,7 +28,7 @@ export default function ModeratorDashboard() {
 
   return (
     <div>
-      <h1 className="font-display text-4xl lowercase mb-6">moderator dashboard</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">moderator dashboard</h1>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <div className="font-display text-3xl text-d-yellow">{stats.pending_entries}</div>

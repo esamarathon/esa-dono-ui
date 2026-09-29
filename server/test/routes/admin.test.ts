@@ -9,12 +9,15 @@ vi.mock('../../lib/prisma.js', () => ({
       findUnique: vi.fn(),
       count: vi.fn(),
       update: vi.fn(),
+      create: vi.fn(),
     },
     rewardClaim: {
       findUnique: vi.fn(),
+      count: vi.fn(),
     },
     reward: {
       findUnique: vi.fn(),
+      delete: vi.fn(),
     },
     pollVote: {
       findUnique: vi.fn(),
@@ -27,6 +30,7 @@ vi.mock('../../lib/prisma.js', () => ({
       update: vi.fn(),
     },
     poll: {
+      findUnique: vi.fn(),
       update: vi.fn(),
     },
     fundContribution: {
@@ -41,6 +45,13 @@ vi.mock('../../lib/prisma.js', () => ({
     balanceAdjustment: {
       create: vi.fn(),
     },
+    webhookDestination: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    webhookDelivery: {
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+    },
     $transaction: vi.fn((ops: any[]) =>
       Promise.all(ops.map((o) => (typeof o === 'function' ? o() : o))),
     ),
@@ -49,6 +60,47 @@ vi.mock('../../lib/prisma.js', () => ({
 
 vi.mock('../../services/donation.js', () => ({
   processDonation: vi.fn(),
+}));
+
+// The outbox runs the route's change against the mocked prisma client; emits are
+// recorded but queue nothing. Delivery itself is covered in services/webhooks tests.
+const outbox = vi.hoisted(() => ({
+  emit: vi.fn(async (_type: string, build: () => unknown) => {
+    build();
+  }),
+}));
+vi.mock('../../services/webhooks/outbox.js', async () => {
+  const { default: db } = await import('../../lib/prisma.js');
+  return { withWebhooks: vi.fn(async (fn: any) => fn(db, outbox.emit)) };
+});
+vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
+
+vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/webhooks/delivery.js')>()),
+  buildIncentiveCreatedPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.created',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveEnabledPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.enabled',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveDisabledPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.disabled',
+    created_at: '',
+    data: {},
+  })),
+  buildIncentiveValueChangedPayload: vi.fn(() => ({
+    id: 'x',
+    type: 'incentive.value_changed',
+    created_at: '',
+    data: {},
+  })),
 }));
 
 import prisma from '../../lib/prisma.js';
@@ -68,9 +120,11 @@ describe('Admin donor management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.ADMIN_API_KEY = 'test-key';
+    px.poll.findUnique?.mockResolvedValue({ id: 'p1', is_active: true, title: 'Test Poll' });
+    px.fundGoal.findUnique?.mockResolvedValue({ id: 'g1', is_active: true, title: 'Test Goal' });
   });
 
-  const auth = { 'x-admin-key': 'test-key' };
+  const auth = { Authorization: 'Bearer key_admin_test-key' };
 
   it('GET /donors lists donors', async () => {
     px.donor.findMany.mockResolvedValue([
@@ -84,6 +138,67 @@ describe('Admin donor management', () => {
     expect(res.body.donors).toHaveLength(1);
     expect(res.body.donors[0].email).toBe('a@b.com');
     expect(res.body.total).toBe(1);
+  });
+
+  it('POST /donors creates a donor without a prior donation', async () => {
+    px.donor.create.mockResolvedValue({
+      id: 'd2',
+      email: 'mod@b.com',
+      role: 'MODERATOR',
+    });
+
+    const res = await request(createApp())
+      .post('/api/admin/donors')
+      .send({ email: 'mod@b.com', role: 'MODERATOR' })
+      .set(auth);
+
+    expect(res.status).toBe(200);
+    expect(prisma.donor.create).toHaveBeenCalledWith({
+      data: { email: 'mod@b.com', role: 'MODERATOR' },
+    });
+    expect(res.body.email).toBe('mod@b.com');
+    expect(res.body.role).toBe('MODERATOR');
+  });
+
+  it('POST /donors defaults role to USER', async () => {
+    px.donor.create.mockResolvedValue({ id: 'd3', email: 'x@b.com', role: 'USER' });
+
+    const res = await request(createApp())
+      .post('/api/admin/donors')
+      .send({ email: 'x@b.com' })
+      .set(auth);
+
+    expect(res.status).toBe(200);
+    expect(prisma.donor.create).toHaveBeenCalledWith({
+      data: { email: 'x@b.com', role: 'USER' },
+    });
+  });
+
+  it('POST /donors rejects an invalid role', async () => {
+    const res = await request(createApp())
+      .post('/api/admin/donors')
+      .send({ email: 'x@b.com', role: 'SUPERUSER' })
+      .set(auth);
+
+    expect(res.status).toBe(400);
+    expect(px.donor.create).not.toHaveBeenCalled();
+  });
+
+  it('POST /donors requires an email', async () => {
+    const res = await request(createApp()).post('/api/admin/donors').send({}).set(auth);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /donors returns 409 on duplicate email', async () => {
+    px.donor.create.mockRejectedValue({ code: 'P2002' });
+
+    const res = await request(createApp())
+      .post('/api/admin/donors')
+      .send({ email: 'dup@b.com' })
+      .set(auth);
+
+    expect(res.status).toBe(409);
   });
 
   it('GET /donors/:id returns wallet', async () => {
@@ -300,7 +415,13 @@ describe('Admin donor management', () => {
   });
 
   it('DELETE /goals/:id refunds allocated funds and deactivates the goal', async () => {
-    px.fundGoal.findUnique.mockResolvedValue({ id: 'g1', current_cents: 400, target_cents: 1000 });
+    px.fundGoal.findUnique.mockResolvedValue({
+      id: 'g1',
+      title: 'Goal',
+      is_active: true,
+      current_cents: 400,
+      target_cents: 1000,
+    });
     px.fundContribution.findMany.mockResolvedValue([
       { id: 'c1', donor_id: 'd1', amount_cents: 400, created_at: new Date() },
     ]);
@@ -320,10 +441,32 @@ describe('Admin donor management', () => {
       data: { is_active: false },
     });
     expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(1);
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
+  });
+
+  it('DELETE /rewards/:id deletes an unclaimed reward', async () => {
+    px.rewardClaim.count.mockResolvedValue(0);
+    px.reward.delete.mockResolvedValue({ id: 'r1' });
+
+    const res = await request(createApp()).delete('/api/admin/rewards/r1').set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(prisma.reward.delete).toHaveBeenCalledWith({ where: { id: 'r1' } });
+  });
+
+  it('DELETE /rewards/:id returns 409 when the reward has claims', async () => {
+    px.rewardClaim.count.mockResolvedValue(2);
+
+    const res = await request(createApp()).delete('/api/admin/rewards/r1').set(auth);
+
+    expect(res.status).toBe(409);
+    expect(prisma.reward.delete).not.toHaveBeenCalled();
   });
 
   it('PUT /goals/:id disabling a goal does not refund contributions', async () => {
-    px.fundGoal.update.mockResolvedValue({ id: 'g1', is_active: false });
+    px.fundGoal.findUnique.mockResolvedValue({ id: 'g1', is_active: true, target_cents: 1000 });
+    px.fundGoal.update.mockResolvedValue({ id: 'g1', is_active: false, target_cents: 1000 });
 
     const res = await request(createApp())
       .put('/api/admin/goals/g1')
@@ -341,13 +484,16 @@ describe('Admin donor management', () => {
         target_cents: undefined,
         is_active: false,
         is_complete: undefined,
-        event_id: null,
+        channel_id: null,
       },
     });
+    // Queued inside the same transaction as the update (withWebhooks).
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 
   it('PUT /polls/:id closing a poll does not refund votes', async () => {
-    px.poll.update.mockResolvedValue({ id: 'p1', is_active: false });
+    px.poll.findUnique.mockResolvedValue({ id: 'p1', is_active: true, ends_at: null });
+    px.poll.update.mockResolvedValue({ id: 'p1', is_active: false, ends_at: null });
 
     const res = await request(createApp())
       .put('/api/admin/polls/p1')
@@ -367,10 +513,11 @@ describe('Admin donor management', () => {
         allow_custom_entries: false,
         max_entry_chars: null,
         auto_approve: true,
-        event_id: null,
+        channel_id: null,
       },
       include: { options: true },
     });
+    expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 
   it('rejects non-admin requests', async () => {

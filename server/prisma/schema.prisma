@@ -8,13 +8,17 @@ datasource db {
 }
 
 model Donor {
-  id                String          @id @default(cuid())
+  id                String          @id @default(uuid())
   email             String          @unique
   total_donated     Int             @default(0)
   balance_remaining Int             @default(0)
   magic_token       String?         @unique
   token_expires_at  DateTime?
   role              String          @default("USER") // USER | MODERATOR | ADMIN
+  // Set to true only after a verified OAuth login (Google/Discord). Required
+  // for ADMIN_EMAILS/MODERATOR_EMAILS allowlist role resolution — a Stripe
+  // checkout email is self-supplied and never counts as verified.
+  email_verified    Boolean         @default(false)
   is_frozen         Boolean         @default(false)
   created_at        DateTime        @default(now())
   updated_at        DateTime        @updatedAt
@@ -24,10 +28,14 @@ model Donor {
   fund_contributions FundContribution[]
   balance_adjustments BalanceAdjustment[]
   custom_entries    PollCustomEntry[]
+  bids              Bid[]
+  auction_offers    AuctionOffer[]
+  auction_wins      AuctionWin[]
+  current_bid_auctions Auction[] @relation("CurrentBidder")
 }
 
 model Donation {
-  id          String   @id @default(cuid())
+  id          String   @id @default(uuid())
   external_id String   @unique
   donor_id    String
   amount_cents Int
@@ -36,28 +44,68 @@ model Donation {
   moderated    Boolean   @default(false)
   moderated_at DateTime?
   moderated_by String?
+  channel_id  String?
+  /// Set on every donation that can be routed; null only while unassigned.
   event_id    String?
+  /// A moderator removed this donation from the stream overlay (PRD-0002 §T5).
+  hidden_from_overlay Boolean @default(false)
+  // PENDING | COMPLETED | REFUNDED | CHARGEBACK (#63). Existing/new webhook
+  // and simulated donations default to COMPLETED since they only ever get
+  // created after a successful payment; REFUNDED/CHARGEBACK are set when a
+  // linked BalanceAdjustment reverses the donation.
+  status      String   @default("COMPLETED")
+  refund_id   String?  @unique
   created_at  DateTime @default(now())
   donor       Donor    @relation(fields: [donor_id], references: [id])
+  channel     Channel? @relation(fields: [channel_id], references: [id])
   event       Event?   @relation(fields: [event_id], references: [id])
+  refund      BalanceAdjustment? @relation("DonationRefund", fields: [refund_id], references: [id])
   pledge      PendingPledge?
+  reward_claims RewardClaim[]
+  poll_votes    PollVote[]
+  contributions FundContribution[]
 }
 
+/// A charity event: a marathon, or a one-day stream event. Parent of Channels
+/// (Tiltify: a team campaign). See CONTEXT.md and docs/adr/0008-event-channel-identity.md.
 model Event {
-  id         String          @id @default(cuid())
+  id                 String     @id @default(uuid())
+  name               String
+  /// URL- and AMQP-routing-safe name, unique across Event and Channel. See lib/slugs.ts.
+  slug               String     @unique
+  /// An Event can only be active with an active primary Channel of its own.
+  is_active          Boolean    @default(false)
+  /// Where a donation that names no Channel is routed. Must be one of `channels`.
+  primary_channel_id String?    @unique
+  created_at         DateTime   @default(now())
+  updated_at         DateTime   @updatedAt
+  channels           Channel[]  @relation("EventChannels")
+  primary_channel    Channel?   @relation("EventPrimaryChannel", fields: [primary_channel_id], references: [id], onDelete: SetNull)
+  donations          Donation[]
+}
+
+/// One stream within an Event (Tiltify: a campaign). See CONTEXT.md.
+model Channel {
+  id         String          @id @default(uuid())
   name       String          @unique
+  /// URL- and AMQP-routing-safe name, unique across Event and Channel. See lib/slugs.ts.
+  slug       String          @unique
+  event_id   String
   is_active  Boolean         @default(true)
   created_at DateTime        @default(now())
   updated_at DateTime        @updatedAt
+  event      Event           @relation("EventChannels", fields: [event_id], references: [id], onDelete: Restrict)
+  primary_of Event?          @relation("EventPrimaryChannel")
   rewards    Reward[]
   polls      Poll[]
   goals      FundGoal[]
   donations  Donation[]
   pledges    PendingPledge[]
+  auctions   Auction[]
 }
 
 model Reward {
-  id               String        @id @default(cuid())
+  id               String        @id @default(uuid())
   title            String
   description      String?
   type             String        // DIGITAL | PHYSICAL | SHOUTOUT | CUSTOM
@@ -66,29 +114,34 @@ model Reward {
   quantity_claimed Int           @default(0)
   is_active        Boolean       @default(true)
   custom_type_label String?
-  event_id         String?       // null = shared across all events
+  image_url        String?       // served at /api/uploads/<uuid>.webp
+  channel_id        String?       // null = shared across all channels
   created_at       DateTime      @default(now())
   updated_at       DateTime      @updatedAt
   claims           RewardClaim[]
-  event            Event?        @relation(fields: [event_id], references: [id])
+  channel          Channel?      @relation(fields: [channel_id], references: [id])
 }
 
 model RewardClaim {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   reward_id  String
   donor_id   String
   status     String   @default("PENDING") // PENDING | FULFILLED | REVERSED
   claim_data String?  // JSON string
+  /// The donation whose pledge created this claim (null for a direct wallet claim).
+  /// Lets the Tiltify donation message list the claims it paid for (PRD-0002 §T4).
+  donation_id String?
   reversed_at DateTime?
   reversed_by String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   reward     Reward   @relation(fields: [reward_id], references: [id])
+  donation   Donation? @relation(fields: [donation_id], references: [id], onDelete: SetNull)
   donor      Donor    @relation(fields: [donor_id], references: [id])
 }
 
 model Poll {
-  id                   String       @id @default(cuid())
+  id                   String       @id @default(uuid())
   title                String
   description          String?
   is_active            Boolean      @default(true)
@@ -97,17 +150,17 @@ model Poll {
   allow_custom_entries Boolean      @default(false)
   max_entry_chars      Int?
   auto_approve         Boolean      @default(true)
-  event_id             String?      // null = shared across all events
+  channel_id           String?      // null = shared across all channels
   created_at           DateTime     @default(now())
   updated_at           DateTime     @updatedAt
   options              PollOption[]
   votes                PollVote[]
   custom_entries       PollCustomEntry[]
-  event                Event?       @relation(fields: [event_id], references: [id])
+  channel              Channel?     @relation(fields: [channel_id], references: [id])
 }
 
 model PollOption {
-  id              String          @id @default(cuid())
+  id              String          @id @default(uuid())
   poll_id         String
   label           String
   votes_cents     Int             @default(0)
@@ -119,21 +172,24 @@ model PollOption {
 }
 
 model PollVote {
-  id             String     @id @default(cuid())
+  id             String     @id @default(uuid())
   poll_id        String
   poll_option_id String
   donor_id       String
   amount_cents   Int
+  /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
+  donation_id    String?
   reversed_at    DateTime?
   reversed_by    String?
   created_at     DateTime   @default(now())
   poll           Poll       @relation(fields: [poll_id], references: [id])
   poll_option    PollOption @relation(fields: [poll_option_id], references: [id])
   donor          Donor      @relation(fields: [donor_id], references: [id])
+  donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
 }
 
 model PollCustomEntry {
-  id         String   @id @default(cuid())
+  id         String   @id @default(uuid())
   poll_id    String
   donor_id   String
   label      String
@@ -145,39 +201,42 @@ model PollCustomEntry {
 }
 
 model BlockedWord {
-  id   String @id @default(cuid())
+  id   String @id @default(uuid())
   word String @unique
 }
 
 model FundGoal {
-  id            String             @id @default(cuid())
+  id            String             @id @default(uuid())
   title         String
   description   String?
   target_cents  Int
   current_cents Int                @default(0)
   is_active     Boolean            @default(true)
   is_complete   Boolean            @default(false)
-  event_id      String?            // null = shared across all events
+  channel_id    String?            // null = shared across all channels
   created_at    DateTime           @default(now())
   updated_at    DateTime           @updatedAt
   contributions FundContribution[]
-  event         Event?             @relation(fields: [event_id], references: [id])
+  channel       Channel?           @relation(fields: [channel_id], references: [id])
 }
 
 model FundContribution {
-  id           String   @id @default(cuid())
+  id           String   @id @default(uuid())
   goal_id      String
   donor_id     String
   amount_cents Int
+  /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
+  donation_id    String?
   reversed_at  DateTime?
   reversed_by  String?
   created_at   DateTime @default(now())
   goal         FundGoal @relation(fields: [goal_id], references: [id])
   donor        Donor    @relation(fields: [donor_id], references: [id])
+  donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
 }
 
 model BalanceAdjustment {
-  id                String   @id @default(cuid())
+  id                String   @id @default(uuid())
   donor_id          String
   amount_cents      Int
   balance_after_cents Int
@@ -187,10 +246,11 @@ model BalanceAdjustment {
   created_by        String   @default("admin")
   created_at        DateTime @default(now())
   donor             Donor    @relation(fields: [donor_id], references: [id])
+  refunded_donation Donation? @relation("DonationRefund")
 }
 
 model PendingPledge {
-  id                    String       @id @default(cuid())
+  id                    String       @id @default(uuid())
   pledge_token          String       @unique
   donor_email           String?
   total_cents           Int
@@ -201,24 +261,184 @@ model PendingPledge {
   checkout_session_id   String?      // Stripe Checkout Session id for deterministic linkage
   checkout_url          String?      // Stripe Checkout Session URL used in the redirect
   comment               String?      // donor comment captured in the cart before checkout
-  event_id              String?      // event this donation routes to (required at creation)
+  display_name          String?      // donor-facing display name captured in the cart, carried through to Donation.donor_name (#54)
+  channel_id            String?      // channel this donation routes to (required at creation)
   fulfilled_by_donation_id String? @unique
   created_at            DateTime     @default(now())
   expires_at            DateTime
   updated_at            DateTime     @updatedAt
   items                 PledgeItem[]
   fulfilled_by          Donation?    @relation(fields: [fulfilled_by_donation_id], references: [id])
-  event                 Event?       @relation(fields: [event_id], references: [id])
+  channel               Channel?     @relation(fields: [channel_id], references: [id])
 }
 
 model PledgeItem {
-  id          String       @id @default(cuid())
+  id          String       @id @default(uuid())
   pledge_id   String
   kind        String       // REWARD | POLL_VOTE | GOAL | POLL_CUSTOM
   target_id   String       // reward_id | poll_option_id | goal_id | poll_id (POLL_CUSTOM)
   poll_id     String?      // required for POLL_VOTE and POLL_CUSTOM
   amount_cents Int
-  data        String?      // JSON string for claim_data (physical reward shipping, etc.)
+  quantity    Int          @default(1) // REWARD only — how many units of the reward this line claims; amount_cents is already the line total (cost_cents * quantity), not the unit price. Always 1 for other kinds.
+  data        String?      // JSON string for claim_data (shoutout message, custom reward fields, etc.)
   created_at  DateTime     @default(now())
   pledge      PendingPledge @relation(fields: [pledge_id], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Auctions (silent-auction / cascading-offer model)
+//
+// Bids are non-binding commitments — NOT wallet deductions (unlike rewards,
+// polls, and goals). At close, the highest bidder is offered the item via a
+// Stripe Checkout Session (24h window) that collects payment AND, for
+// physical items, the shipping address natively on Stripe's side — the
+// address never touches this application or database. If an offer expires
+// unpaid, the cascade advances to the next-highest bidder at their own bid
+// price, walking the entire ranked list until someone pays or it's
+// exhausted (UNSOLD). See docs/adr for the full design rationale.
+// ---------------------------------------------------------------------------
+
+model Auction {
+  id                  String          @id @default(uuid())
+  title               String
+  description         String?
+  type                String          // DIGITAL | PHYSICAL | SHOUTOUT | CUSTOM
+  custom_type_label   String?
+  image_url           String?         // served at /api/uploads/<uuid>.webp
+  starting_price_cents Int
+  min_increment_cents Int
+  current_bid_cents   Int?            // denormalized high bid, mirrors Bid rows
+  current_bidder_id   String?
+  ends_at             DateTime
+  status              String          @default("OPEN") // OPEN | CLOSED | AWAITING_PAYMENT | SETTLED | UNSOLD | CANCELLED
+  current_offer_id    String?         @unique
+  channel_id          String?         // null = shared across all channels
+  is_active           Boolean         @default(true)
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @updatedAt
+  bids                Bid[]
+  offers              AuctionOffer[]  @relation("AuctionOffers")
+  current_offer       AuctionOffer?   @relation("CurrentOffer", fields: [current_offer_id], references: [id])
+  win                 AuctionWin?
+  channel             Channel?        @relation(fields: [channel_id], references: [id])
+  current_bidder      Donor?          @relation("CurrentBidder", fields: [current_bidder_id], references: [id])
+}
+
+model Bid {
+  id           String    @id @default(uuid())
+  auction_id   String
+  donor_id     String
+  amount_cents Int
+  rank         Int?      // stamped at close: 1 = highest, collapsed to one bid per donor
+  status       String    @default("ACTIVE") // ACTIVE | OUTBID | OFFERED | WON | PASSED
+  created_at   DateTime  @default(now())
+  auction      Auction   @relation(fields: [auction_id], references: [id])
+  donor        Donor     @relation(fields: [donor_id], references: [id])
+}
+
+model AuctionOffer {
+  id                  String    @id @default(uuid())
+  auction_id          String
+  donor_id            String
+  bid_id              String
+  rank                Int
+  amount_cents        Int
+  checkout_session_id String?   @unique
+  checkout_url        String?
+  status              String    @default("SENT") // SENT | PAID | EXPIRED | SKIPPED
+  expires_at          DateTime
+  emailed_at          DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  auction             Auction   @relation("AuctionOffers", fields: [auction_id], references: [id])
+  current_for         Auction?  @relation("CurrentOffer")
+  donor               Donor     @relation(fields: [donor_id], references: [id])
+}
+
+model AuctionWin {
+  id                  String    @id @default(uuid())
+  auction_id          String    @unique
+  donor_id            String
+  winning_bid_cents   Int
+  checkout_session_id String
+  status              String    @default("FULFILLED") // FULFILLED | REVERSED (reversal action reserved for future use)
+  reversed_at         DateTime?
+  reversed_by         String?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+  auction             Auction   @relation(fields: [auction_id], references: [id])
+  donor               Donor     @relation(fields: [donor_id], references: [id])
+}
+
+model WebhookDestination {
+  id               String          @id @default(uuid())
+  url              String
+  secret           String
+  is_active        Boolean         @default(true)
+  event_types      String          @default("[]")
+  verify_ssl       Boolean         @default(true)
+  description      String?
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+  deliveries       WebhookDelivery[]
+  seq              WebhookDestinationSeq?
+  destination_type String          @default("HTTP") // HTTP | RABBITMQ
+  amqp_url         String?
+  amqp_exchange    String          @default("")
+  amqp_routing_key String?
+  // TILTIFY | NATIVE (PRD-0002 §T, §N). NATIVE is the existing envelope.
+  payload_format   String          @default("NATIVE")
+
+  @@map("WebhookEndpoint")
+}
+
+model WebhookDestinationSeq {
+  destination_id String           @id
+  seq            Int              @default(0)
+  destination    WebhookDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+
+  @@map("WebhookEndpointSeq")
+}
+
+model WebhookDelivery {
+  id               String          @id @default(uuid())
+  seq              Int             @default(0)
+  // One id per webhook message, shared by every Destination's row for that
+  // message and stable across retries. Sent as the AMQP messageId (PRD-0002 §Q9).
+  message_id       String          @default(uuid())
+  destination_id   String
+  message_type     String             @map("event_type")
+  // Per-message AMQP routing key (TILTIFY: <channel-slug>.donation). Null = the Destination\'s.
+  routing_key      String?
+  payload          String
+  status           String          @default("PENDING") // PENDING | SUCCESS | FAILED
+  attempts         Int             @default(0)
+  next_attempt_at  DateTime        @default(now())
+  last_status_code Int?
+  last_error       String?
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+  destination      WebhookDestination @relation(fields: [destination_id], references: [id], onDelete: Cascade)
+
+  @@unique([destination_id, seq])
+  @@index([status, updated_at])
+  @@map("WebhookDelivery")
+}
+
+model FeatureFlag {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  is_enabled  Boolean   @default(false)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+}
+
+model Broadcast {
+  id         String   @id @default(uuid())
+  message    String   // The banner message/content
+  level      String?  // INFO | WARNING | CRITICAL (#68); null = original single fixed style
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }

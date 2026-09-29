@@ -29,38 +29,42 @@ describe('Moderator API client', () => {
     localStorage.clear();
   });
 
-  it('creates an axios instance with /api/moderator base URL', async () => {
+  it('creates an axios instance with /api/moderator base URL and withCredentials', async () => {
     await import('../../src/api/moderator');
     const axios = (await import('axios')).default;
-    expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api/moderator' });
+    expect(axios.create).toHaveBeenCalledWith({
+      baseURL: '/api/moderator',
+      withCredentials: true,
+    });
   });
 
-  it('attaches ?token from localStorage donor_token', async () => {
-    localStorage.setItem('donor_token', 'tok-123');
-    await import('../../src/api/moderator');
-    const axios = (await import('axios')).default;
-    const instance = axios.create();
-    const interceptor = getInterceptor(instance);
-    const config = interceptor({ params: {}, headers: {} });
-    expect(config.params.token).toBe('tok-123');
-  });
-
-  it('attaches X-Moderator-Key header from localStorage moderator_key', async () => {
+  it('attaches the moderator key as a prefixed Bearer header when set', async () => {
     localStorage.setItem('moderator_key', 'mod-key-abc');
     await import('../../src/api/moderator');
     const axios = (await import('axios')).default;
     const instance = axios.create();
     const interceptor = getInterceptor(instance);
     const config = interceptor({ params: {}, headers: {} });
-    expect(config.headers['X-Moderator-Key']).toBe('mod-key-abc');
+    expect(config.headers.Authorization).toBe('Bearer key_mod_mod-key-abc');
   });
 
-  it('omits X-Moderator-Key header when not set', async () => {
+  it('still sends the moderator key even when a donor session is active (server checks the key first)', async () => {
+    localStorage.setItem('moderator_key', 'mod-key-abc');
+    localStorage.setItem('donor_session_active', '1');
     await import('../../src/api/moderator');
     const axios = (await import('axios')).default;
     const instance = axios.create();
     const interceptor = getInterceptor(instance);
     const config = interceptor({ params: {}, headers: {} });
-    expect(config.headers['X-Moderator-Key']).toBeUndefined();
+    expect(config.headers.Authorization).toBe('Bearer key_mod_mod-key-abc');
+  });
+
+  it('omits the Authorization header when nothing is set', async () => {
+    await import('../../src/api/moderator');
+    const axios = (await import('axios')).default;
+    const instance = axios.create();
+    const interceptor = getInterceptor(instance);
+    const config = interceptor({ params: {}, headers: {} });
+    expect(config.headers.Authorization).toBeUndefined();
   });
 });

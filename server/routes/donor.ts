@@ -8,7 +8,10 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
   const donor = await prisma.donor.findUnique({
     where: { id: req.donor!.id },
     include: {
-      donations: { orderBy: { created_at: 'desc' } },
+      donations: {
+        include: { channel: { select: { id: true, name: true, slug: true, event_id: true } } },
+        orderBy: { created_at: 'desc' },
+      },
       reward_claims: {
         include: { reward: true },
         orderBy: { created_at: 'desc' },
@@ -23,6 +26,19 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
       },
       custom_entries: {
         include: { poll: true, option: true },
+        orderBy: { created_at: 'desc' },
+      },
+      bids: {
+        include: { auction: { select: { title: true, status: true } } },
+        orderBy: { created_at: 'desc' },
+      },
+      auction_offers: {
+        where: { status: 'SENT' },
+        include: { auction: { select: { title: true } } },
+        orderBy: { created_at: 'desc' },
+      },
+      auction_wins: {
+        include: { auction: { select: { title: true } } },
         orderBy: { created_at: 'desc' },
       },
     },

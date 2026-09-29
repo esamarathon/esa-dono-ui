@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27
 # Frontend image for esa-dono-ui: builds the Vite SPA and serves it via nginx,
 # proxying /api to the backend service.
 #
@@ -12,6 +12,17 @@ WORKDIR /app
 ENV NPM_CONFIG_LOGLEVEL=warn \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     CI=true
+
+# Build-time OpenTelemetry client config (inlined by Vite). Defaults to the
+# same-origin nginx /traces proxy, which works on any host without extra config.
+ARG VITE_OTEL_ENDPOINT=/traces
+ARG VITE_OTEL_SERVICE_NAME=esa-dono-frontend
+ARG VITE_OTEL_SAMPLE_RATE=1.0
+ARG VITE_OTEL_ENABLED=false
+ENV VITE_OTEL_ENDPOINT=$VITE_OTEL_ENDPOINT \
+    VITE_OTEL_SERVICE_NAME=$VITE_OTEL_SERVICE_NAME \
+    VITE_OTEL_SAMPLE_RATE=$VITE_OTEL_SAMPLE_RATE \
+    VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED
 
 COPY package.json package-lock.json ./
 COPY client/package.json ./client/
@@ -28,11 +39,11 @@ COPY client ./client
 RUN npm run build --workspace client
 
 # ---------- Serve ----------
-FROM docker.io/nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM docker.io/nginxinc/nginx-unprivileged:1.31-alpine AS runner
 
 LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.description="ESA charity donation platform SPA (nginx)" \
-      org.opencontainers.image.source="https://github.com/Codescales/esa-dono-ui" \
+      org.opencontainers.image.source="https://github.com/esamarathon/esa-dono-ui" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="ESA"
 

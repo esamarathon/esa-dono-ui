@@ -40,6 +40,9 @@ export interface DonationRecord {
   donor_name?: string | null;
   created_at: string;
   donor?: { email?: string } | null;
+  // Which channel this donation was routed to, or null/absent for a shared
+  // (unscoped) donation (#53).
+  channel?: { id: string; name: string } | null;
 }
 
 export interface RewardSummary {
@@ -83,12 +86,39 @@ export interface WalletCustomEntry {
   option?: { votes_cents: number; status: string } | null;
 }
 
+export interface WalletBid {
+  id: string;
+  amount_cents: number;
+  status: string;
+  created_at: string;
+  auction: { title: string; status: string };
+}
+
+export interface WalletAuctionOffer {
+  id: string;
+  amount_cents: number;
+  checkout_url?: string | null;
+  expires_at: string;
+  auction: { title: string };
+}
+
+export interface WalletAuctionWin {
+  id: string;
+  winning_bid_cents: number;
+  status: string;
+  created_at: string;
+  auction: { title: string };
+}
+
 export interface DonorWallet extends Donor {
   donations: DonationRecord[];
   reward_claims: RewardClaim[];
   poll_votes: WalletPollVote[];
   fund_contributions: WalletContribution[];
   custom_entries: WalletCustomEntry[];
+  bids?: WalletBid[];
+  auction_offers?: WalletAuctionOffer[];
+  auction_wins?: WalletAuctionWin[];
 }
 
 export interface Reward {
@@ -101,7 +131,8 @@ export interface Reward {
   quantity_claimed: number;
   is_active?: boolean;
   custom_type_label?: string | null;
-  event_id?: string | null;
+  image_url?: string | null;
+  channel_id?: string | null;
 }
 
 export interface PollOption {
@@ -124,7 +155,7 @@ export interface Poll {
   max_entry_chars?: number | null;
   auto_approve?: boolean;
   custom_entries?: CustomEntry[];
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
 export interface CustomEntry {
@@ -142,13 +173,96 @@ export interface Goal {
   target_cents: number;
   is_complete?: boolean;
   is_active?: boolean;
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
+export interface Channel {
+  id: string;
+  name: string;
+  slug: string;
+  event_id: string;
+  is_active: boolean;
+}
+
+/** A charity Event (a marathon, or a one-day stream event) that groups
+ *  Channels. Only active Events are open for donations. */
 export interface Event {
   id: string;
   name: string;
+  slug: string;
   is_active: boolean;
+  // Where donations that name no channel are routed. Required (and must be an
+  // active channel of this event) before the event can be activated.
+  primary_channel_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Public view of an active Event with its active Channels (#115). Used by the
+ *  /donate/<event>[/<channel>] link tree; internal fields are omitted. */
+export interface PublicEvent {
+  id: string;
+  name: string;
+  slug: string;
+  primary_channel_id: string | null;
+  channels: Channel[];
+}
+
+export type AuctionStatus =
+  'OPEN' | 'CLOSED' | 'AWAITING_PAYMENT' | 'SETTLED' | 'UNSOLD' | 'CANCELLED';
+
+export interface Auction {
+  id: string;
+  title: string;
+  description?: string | null;
+  type: string;
+  custom_type_label?: string | null;
+  image_url?: string | null;
+  starting_price_cents: number;
+  min_increment_cents: number;
+  current_bid_cents: number | null;
+  current_bidder_id?: string | null;
+  min_next_bid_cents: number | null;
+  ends_at: string;
+  status: AuctionStatus;
+  is_active?: boolean;
+  channel_id?: string | null;
+  is_current_highest_bidder?: boolean;
+  bids?: { id: string; amount_cents: number; status: string; created_at: string }[];
+}
+
+export interface AuctionBid {
+  id: string;
+  auction_id: string;
+  donor_id: string;
+  amount_cents: number;
+  rank?: number | null;
+  status: string;
+  created_at: string;
+}
+
+export interface AuctionOffer {
+  id: string;
+  auction_id: string;
+  donor_id: string;
+  bid_id: string;
+  rank: number;
+  amount_cents: number;
+  checkout_url?: string | null;
+  status: string;
+  expires_at: string;
+  emailed_at?: string | null;
+}
+
+export interface AuctionWin {
+  id: string;
+  auction_id: string;
+  donor_id: string;
+  winning_bid_cents: number;
+  status: string;
+  created_at: string;
+  auction?: { title: string };
+  donor?: { email?: string };
 }
 
 export interface Campaign {
@@ -170,6 +284,10 @@ export interface CartItem {
   poll_id?: string;
   label?: string;
   data?: Record<string, string> | { label: string };
+  /** REWARD only: number of units this line claims. amount_cents is always
+   *  the line total (unit cost_cents * quantity), never the unit price.
+   *  Defaults to 1 when omitted. */
+  quantity?: number;
 }
 
 export interface PledgeItem {
@@ -179,6 +297,7 @@ export interface PledgeItem {
   amount_cents: number;
   poll_id?: string | null;
   data?: string | null;
+  quantity?: number;
 }
 
 export interface PledgeResult {
@@ -192,7 +311,6 @@ export interface Pledge {
   total_cents: number;
   top_up_cents?: number;
   expires_at: string;
-  magic_token?: string | null;
   items: PledgeItem[];
 }
 
@@ -204,13 +322,18 @@ export interface AdminStats {
   donations: number;
   claims: number;
   pledges: number;
-  events?: { id: string; name: string; raised_cents: number; donations: number }[];
+  // Sum of Donor.balance_remaining across all donors (#59) — credited but
+  // not yet spent on a reward/poll/goal.
+  unallocated_credits_cents?: number;
+  channels?: { id: string; name: string; raised_cents: number; donations: number }[];
 }
 
 export interface BlockedWord {
   id: string;
   word: string;
 }
+
+export type DonationStatus = 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'CHARGEBACK';
 
 export interface AdminDonation {
   id: string;
@@ -222,7 +345,21 @@ export interface AdminDonation {
   moderated?: boolean;
   moderated_at?: string | null;
   moderated_by?: string | null;
-  event?: { id: string; name: string } | null;
+  // PRD-0002 §N2: hidden donations stay in the totals but are pulled from the
+  // stream overlay until a moderator un-hides them (#116).
+  hidden_from_overlay?: boolean;
+  channel?: { id: string; name: string } | null;
+  // Routing (#115). Both null means the donation arrived while no single event
+  // was active — it stays unassigned until an admin assigns a channel.
+  channel_id?: string | null;
+  event_id?: string | null;
+  status: DonationStatus;
+  refund_id?: string | null;
+  // What the donor selected/pledged toward (#58) — human-readable labels
+  // only (e.g. "Best Runner: Runner A", "T-shirt"), never a raw target_id.
+  // Only present on the moderator donations list; undefined elsewhere.
+  pledge_items?: { kind: string; label: string; amount_cents: number }[];
+  top_up_cents?: number | null;
 }
 
 export interface AdminClaim {
@@ -231,7 +368,15 @@ export interface AdminClaim {
   claim_data?: unknown;
   created_at: string;
   donor?: { email?: string } | null;
-  reward?: { title?: string; type?: string; cost_cents?: number } | null;
+  // Human-readable donor identity for the moderator view (#57) — sourced
+  // from the donor's most recent Donation.donor_name, never email/id.
+  donor_name?: string | null;
+  reward?: {
+    title?: string;
+    type?: string;
+    cost_cents?: number;
+    channel_id?: string | null;
+  } | null;
 }
 
 export interface SpendRecord {
@@ -265,10 +410,63 @@ export interface AdminDonorWallet {
   balance_remaining: number;
   role?: Role;
   is_frozen?: boolean;
+  donations?: DonationRecord[];
   reward_claims?: SpendRecord[];
   poll_votes?: SpendRecord[];
   fund_contributions?: SpendRecord[];
   balance_adjustments?: BalanceAdjustment[];
+}
+
+export type WebhookMessageType =
+  | 'donation.created'
+  | 'donation.moderated'
+  | 'donation.hidden'
+  | 'donation.unhidden'
+  | 'incentive.created'
+  | 'incentive.enabled'
+  | 'incentive.disabled'
+  | 'incentive.value_changed';
+
+export interface WebhookEndpoint {
+  id: string;
+  url: string;
+  secret: string;
+  is_active: boolean;
+  event_types: string[];
+  verify_ssl: boolean;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  destination_type: 'HTTP' | 'RABBITMQ';
+  payload_format: 'NATIVE' | 'TILTIFY';
+  amqp_url: string | null;
+  amqp_exchange: string;
+  amqp_routing_key: string | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  seq: number;
+  message_id: string;
+  event_type: string;
+  status: string;
+  attempts: number;
+  next_attempt_at: string;
+  last_status_code: number | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminDonorList {
+  donors: AdminDonorSummary[];
+  total: number;
+}
+
+export interface RefundResult {
+  success: boolean;
+  refunded_count: number;
+  refunded_cents: number;
 }
 
 export interface AdminPledgeItem {

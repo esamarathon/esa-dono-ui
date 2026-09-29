@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
 import Modal from '../Modal';
 import ProgressBar from '../ProgressBar';
+import AddRemoveButton from '../AddRemoveButton';
 import LoadingSpinner from '../LoadingSpinner';
+import ShareLinkButton from '../ShareLinkButton';
 import { useCart } from '../../context/CartContext';
 import { sanitizeMoneyInput } from '../../utils/money';
 import {
@@ -18,7 +20,16 @@ function fmt(cents: number) {
 }
 
 export default function PollList() {
-  const { polls, loading, cart, addToCart, removeFromCart, markVisited } = useCart();
+  const {
+    polls,
+    loading,
+    cart,
+    addToCart,
+    removeFromCart,
+    markVisited,
+    stalePollIds,
+    staleOptionIds,
+  } = useCart();
 
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [writingIn, setWritingIn] = useState<Poll | null>(null);
@@ -52,6 +63,22 @@ export default function PollList() {
 
   const inCart = (pollId: string, optionId: string) =>
     cart.some((i) => i.kind === 'POLL_VOTE' && i.target_id === optionId && i.poll_id === pollId);
+
+  // Donation-impact preview (#52): if this option already has a pending cart
+  // amount, show what its bar would look like once that vote is cast. Both
+  // numerator and denominator grow by the pending amount (the vote adds to
+  // this option's total *and* the poll's total_votes_cents), so recompute
+  // the percentage with both adjusted rather than just overlaying the raw
+  // cents onto the existing percentage.
+  const previewPctFor = (poll: Poll, opt: PollOption) => {
+    const item = cart.find(
+      (i) => i.kind === 'POLL_VOTE' && i.target_id === opt.id && i.poll_id === poll.id,
+    );
+    if (!item) return undefined;
+    const newValue = opt.votes_cents + item.amount_cents;
+    const newMax = (poll.total_votes_cents || 1) + item.amount_cents;
+    return (newValue / newMax) * 100;
+  };
 
   const writeInInCart = (pollId: string) =>
     cart.find((i) => i.kind === 'POLL_CUSTOM' && i.poll_id === pollId);
@@ -123,6 +150,18 @@ export default function PollList() {
     setWriteInError('');
   };
 
+  // Re-hydrates the draft from the cart item so an already-added write-in can
+  // be edited instead of forcing remove-then-re-add (#44). Regular vote
+  // amounts re-sync on every render via getAmount()/the cart; a write-in's
+  // draft state only lived in this component's local state, so without this
+  // it silently went stale/uneditable once added.
+  const openWriteInEdit = (poll: Poll, item: { amount_cents: number; label?: string }) => {
+    setWritingIn(poll);
+    setWriteInLabel(item.label ?? '');
+    setWriteInAmount((item.amount_cents / 100).toFixed(2));
+    setWriteInError('');
+  };
+
   const handleWriteIn = () => {
     setWriteInError('');
     if (!writeInLabel.trim()) {
@@ -147,21 +186,38 @@ export default function PollList() {
 
   return (
     <div>
-      <h2 className="font-display text-3xl lowercase text-off-white mb-2">vote in polls</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">vote in polls</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Add votes to your cart. $1 = 1 vote. Votes are cast when you check out.
       </p>
       {polls.map((poll) => {
         const writeIn = writeInInCart(poll.id);
+        const pollUnavailable = stalePollIds.has(poll.id);
         return (
-          <Card key={poll.id} className="mb-4">
-            <h3 className="font-data font-bold text-lg text-off-white mb-1">{poll.title}</h3>
+          <Card
+            key={poll.id}
+            id={`poll-${poll.id}`}
+            className={`mb-4 ${pollUnavailable ? 'opacity-50' : ''}`}
+          >
+            <div className="flex justify-between items-start mb-1">
+              <h3 className="font-data font-bold text-lg text-off-white">{poll.title}</h3>
+              <ShareLinkButton path={`/polls?poll=${poll.id}`} />
+            </div>
             {poll.description && (
               <p className="font-body text-sm text-off-white/55 mb-3">{poll.description}</p>
+            )}
+            {pollUnavailable && (
+              <span
+                className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mb-3"
+                style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
+              >
+                no longer available
+              </span>
             )}
             <div className="space-y-3">
               {poll.options.map((opt) => {
                 const added = inCart(poll.id, opt.id);
+                const optionUnavailable = staleOptionIds.has(opt.id);
                 return (
                   <div key={opt.id} className="flex items-center gap-3">
                     <div className="flex-1">
@@ -173,7 +229,11 @@ export default function PollList() {
                           {fmt(opt.votes_cents)}
                         </span>
                       </div>
-                      <ProgressBar value={opt.votes_cents} max={poll.total_votes_cents || 1} />
+                      <ProgressBar
+                        value={opt.votes_cents}
+                        max={poll.total_votes_cents || 1}
+                        previewPct={previewPctFor(poll, opt)}
+                      />
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <input
@@ -184,22 +244,15 @@ export default function PollList() {
                         value={getAmount(poll.id, opt.id)}
                         onChange={(e) => handleAmountChange(poll, opt, e.target.value)}
                         onBlur={() => handleAmountBlur(poll, opt)}
+                        disabled={optionUnavailable}
                       />
-                      {added ? (
-                        <button
-                          onClick={() => removeFromCart('POLL_VOTE', opt.id)}
-                          className={`btrl-button btrl-button-outline text-sm ${flashKey === `${poll.id}-${opt.id}` ? 'animate-add-flash' : ''}`}
-                        >
-                          remove
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleAdd(poll, opt)}
-                          className="btrl-button text-sm"
-                        >
-                          add
-                        </button>
-                      )}
+                      <AddRemoveButton
+                        added={added}
+                        onAdd={() => handleAdd(poll, opt)}
+                        onRemove={() => removeFromCart('POLL_VOTE', opt.id)}
+                        disabled={optionUnavailable}
+                        flash={flashKey === `${poll.id}-${opt.id}`}
+                      />
                     </div>
                   </div>
                 );
@@ -218,12 +271,20 @@ export default function PollList() {
                         {fmt(writeIn.amount_cents)}
                       </span>
                     </div>
-                    <button
-                      onClick={() => removeFromCart('POLL_CUSTOM', writeIn.target_id)}
-                      className="btrl-button btrl-button-outline text-sm"
-                    >
-                      remove
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openWriteInEdit(poll, writeIn)}
+                        className="btrl-button btrl-button-ghost text-sm"
+                      >
+                        edit
+                      </button>
+                      <button
+                        onClick={() => removeFromCart('POLL_CUSTOM', writeIn.target_id)}
+                        className="btrl-button btrl-button-outline text-sm"
+                      >
+                        remove
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <button
@@ -243,7 +304,10 @@ export default function PollList() {
       )}
 
       {writingIn && (
-        <Modal title="add your own option" onClose={() => setWritingIn(null)}>
+        <Modal
+          title={writeInInCart(writingIn.id) ? 'edit your option' : 'add your own option'}
+          onClose={() => setWritingIn(null)}
+        >
           <p className="font-body text-sm text-off-white/55 mb-3">
             Poll: <strong className="text-off-white">{writingIn.title}</strong>
           </p>
@@ -294,7 +358,7 @@ export default function PollList() {
               cancel
             </button>
             <button onClick={handleWriteIn} className="btrl-button">
-              add to cart
+              {writeInInCart(writingIn.id) ? 'save changes' : 'add to cart'}
             </button>
           </div>
         </Modal>

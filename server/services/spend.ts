@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { MIN_SPEND_CENTS, type ClaimData, type ShippingAddress } from '@dono/shared';
+import { MIN_SPEND_CENTS, type ClaimData } from '@dono/shared';
 
 type Tx = Prisma.TransactionClient;
 
@@ -8,49 +8,54 @@ export async function claimRewardTx(
   donorId: string,
   rewardId: string,
   claimData?: ClaimData | null,
-  shippingAddress?: ShippingAddress | null,
+  quantity = 1,
+  /** The donation whose pledge this claim fulfils (PRD-0002 §T4); null for a wallet claim. */
+  donationId: string | null = null,
 ) {
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw Object.assign(new Error('quantity must be a positive integer'), { status: 400 });
+  }
+
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
   if (!reward || !reward.is_active)
     throw Object.assign(new Error('Reward not found'), { status: 404 });
-  if (reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total) {
+  if (
+    reward.quantity_total !== null &&
+    reward.quantity_claimed + quantity > reward.quantity_total
+  ) {
     throw Object.assign(new Error('Reward sold out'), { status: 400 });
   }
 
+  const totalCost = reward.cost_cents * quantity;
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < reward.cost_cents) {
+  if (!donor || donor.balance_remaining < totalCost) {
     throw Object.assign(new Error('Insufficient balance'), { status: 400 });
   }
 
   const data = claimData || {};
-  const mergedData = reward.type === 'PHYSICAL' ? { ...shippingAddress, ...data } : data;
-  if (reward.type === 'PHYSICAL') {
-    const { name, address, city, country } = mergedData as Record<string, unknown>;
-    if (!name || !address || !city || !country) {
-      throw Object.assign(new Error('Physical rewards require name, address, city, country'), {
-        status: 400,
-      });
-    }
-  }
 
   await tx.donor.update({
     where: { id: donorId },
-    data: { balance_remaining: { decrement: reward.cost_cents } },
+    data: { balance_remaining: { decrement: totalCost } },
   });
-  await tx.rewardClaim.create({
-    data: {
+  // One RewardClaim row per unit — claim_data (e.g. a shoutout message) is
+  // shared across all units in this line item; quantity > 1 is only offered
+  // client-side for fieldless reward types where that's a non-issue.
+  await tx.rewardClaim.createMany({
+    data: Array.from({ length: quantity }, () => ({
       reward_id: reward.id,
       donor_id: donorId,
-      claim_data: JSON.stringify(mergedData),
+      claim_data: JSON.stringify(data),
       status: 'PENDING',
-    },
+      donation_id: donationId,
+    })),
   });
   await tx.reward.update({
     where: { id: reward.id },
-    data: { quantity_claimed: { increment: 1 } },
+    data: { quantity_claimed: { increment: quantity } },
   });
 
-  return { cost: reward.cost_cents };
+  return { cost: totalCost };
 }
 
 export async function votePollTx(
@@ -59,6 +64,8 @@ export async function votePollTx(
   pollId: string,
   pollOptionId: string,
   cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
 ) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -92,6 +99,7 @@ export async function votePollTx(
       poll_option_id: pollOptionId,
       donor_id: donorId,
       amount_cents: cents,
+      donation_id: donationId,
     },
   });
   await tx.pollOption.update({
@@ -141,6 +149,8 @@ export async function proposeCustomEntryTx(
   pollId: string,
   label: string,
   cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
 ) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -210,6 +220,7 @@ export async function proposeCustomEntryTx(
       poll_option_id: option.id,
       donor_id: donorId,
       amount_cents: cents,
+      donation_id: donationId,
     },
   });
 
@@ -223,7 +234,14 @@ export async function proposeCustomEntryTx(
   return { cost: cents, option, entry, status: optionStatus };
 }
 
-export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, cents: number) {
+export async function contributeGoalTx(
+  tx: Tx,
+  donorId: string,
+  goalId: string,
+  cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
+) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
       status: 400,
@@ -248,7 +266,7 @@ export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, 
     data: { balance_remaining: { decrement: cents } },
   });
   await tx.fundContribution.create({
-    data: { goal_id: goal.id, donor_id: donorId, amount_cents: cents },
+    data: { goal_id: goal.id, donor_id: donorId, amount_cents: cents, donation_id: donationId },
   });
   await tx.fundGoal.update({
     where: { id: goal.id },

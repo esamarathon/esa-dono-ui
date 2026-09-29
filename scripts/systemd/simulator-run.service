@@ -1,0 +1,24 @@
+[Unit]
+Description=Run the seeded platform simulator against the demo site
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Path to the esa-dono-ui checkout on this host (contains scripts/run-simulator.sh).
+WorkingDirectory=/home/ubuntu/projects/esa-dono-ui
+ExecStart=/home/ubuntu/projects/esa-dono-ui/scripts/run-simulator.sh
+# Reasonable defaults; override by adding an EnvironmentFile= or Environment=
+# lines here (e.g. Environment=EVENTS=300 or Environment=DONORS=40) — see
+# server/scripts/run-sim.sh for the full list of overridable vars.
+User=ubuntu
+
+# Keep a bounded amount of run history in the journal.
+StandardOutput=journal
+StandardError=journal
+
+# A scheduled container-process upgrade on the host can SIGKILL the backend
+# (and the sim's docker exec session) mid-run. That's an expected, benign
+# interruption — the partial run's data is still valid and the next hour
+# restarts fresh — so don't mark the service failed on exit 137 (SIGKILL).
+SuccessExitStatus=137

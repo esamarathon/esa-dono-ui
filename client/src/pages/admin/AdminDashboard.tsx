@@ -28,11 +28,12 @@ export default function AdminDashboard() {
     { label: 'donations', value: stats.donations },
     { label: 'reward claims', value: stats.claims },
     { label: 'pledges', value: stats.pledges },
+    { label: 'unallocated credits', value: fmt(stats.unallocated_credits_cents ?? 0) },
   ];
 
   return (
     <div>
-      <h1 className="font-display text-4xl lowercase mb-6">dashboard</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">dashboard</h1>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {cards.map((c) => (
           <Card key={c.label} className="text-center">
@@ -42,14 +43,14 @@ export default function AdminDashboard() {
         ))}
       </div>
 
-      {stats.events && stats.events.length > 0 && (
+      {stats.channels && stats.channels.length > 0 && (
         <div className="mt-8">
-          <h2 className="font-display text-2xl lowercase mb-4">per-event totals</h2>
+          <h2 className="font-display text-2xl uppercase mb-4">per-channel totals</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-                  {['event', 'raised', 'donations'].map((h) => (
+                  {['channel', 'raised', 'donations'].map((h) => (
                     <th
                       key={h}
                       className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
@@ -60,7 +61,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {stats.events.map((s) => (
+                {stats.channels.map((s) => (
                   <tr key={s.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                     <td className="px-4 py-2 font-data font-bold text-off-white">{s.name}</td>
                     <td className="px-4 py-2 font-data text-d-yellow">{fmt(s.raised_cents)}</td>

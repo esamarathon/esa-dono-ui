@@ -3,26 +3,51 @@ info:
   title: ESA Dono API
   description: |
     Donation platform with Stripe checkout, wallet balance, pledge (smart cart)
-    auto-fulfillment, rewards, polls, fund goals, and moderator/admin tooling.
+    auto-fulfillment, rewards, polls, fund goals, channels, and moderator/admin tooling.
 
     ## Authentication
 
-    | Method | Mechanism | Used By |
+    Donor auth is held in an **httpOnly `dono_session` cookie** (ADR 0004) so the
+    credential is never readable by JS. The browser sends it automatically.
+    Non-browser/API clients may instead present the donor magic token as
+    `Authorization: Bearer <magic_token>`. Operational keys (admin/moderator) are
+    operator secrets carried as prefixed Bearer credentials. The legacy `?token=`
+    query param and `X-Admin-Key`/`X-Moderator-Key` headers have been removed.
+
+    | Method | Transport | Used By |
     |--------|-----------|---------|
-    | Donor token | `?token=<magic_token>` query param on every request | Donor wallet, spend endpoints, moderator |
-    | Admin key | `X-Admin-Key: <ADMIN_API_KEY>` header | Admin routes; also a fallback for moderator routes |
-    | Moderator key | `X-Moderator-Key: <MODERATOR_API_KEY>` header | Fallback access to moderator routes, independent of donor roles |
-    | Moderator/Admin role | Donor token + `role: MODERATOR` or `role: ADMIN` on donor record | Moderator routes (ADMIN implies MODERATOR access) |
+    | Donor session (browser) | `dono_session` httpOnly cookie (SameSite=Lax) | Donor wallet, spend endpoints, moderator |
+    | Donor token (API) | `Authorization: Bearer <magic_token>` (or `Bearer donor_<magic_token>`) | Scripts / non-browser donor auth |
+    | Admin key | `Authorization: Bearer key_admin_<ADMIN_API_KEY>` | Admin routes; also a fallback for moderator routes |
+    | Moderator key | `Authorization: Bearer key_mod_<MODERATOR_API_KEY>` | Fallback access to moderator routes, independent of donor roles |
+    | Moderator/Admin role | Donor session/token + `role: MODERATOR`/`ADMIN` on donor record | Moderator routes (ADMIN implies MODERATOR access) |
     | Stripe webhook | HMAC signature via `stripe-signature` header | Stripe webhook (skipped when `STRIPE_WEBHOOK_SECRET` unset) |
+
+    A donor logs in by opening a magic link (`GET /api/auth/magic?token=…`, which
+    sets the cookie and redirects) or via OAuth; the token never appears in the
+    SPA URL. `POST /api/auth/session` exchanges a pasted token for the cookie and
+    `POST /api/auth/session/logout` clears it.
 
     ## Rate Limiting
 
     Spend endpoints (`claim`, `vote`, `custom-entry`, `contribute`) are rate-limited:
-    20 requests per minute, keyed by `?token=` or IP. Configurable via `RATE_LIMIT_SPEND`.
+    20 requests per minute, keyed by the donor token (session cookie or
+    `Authorization: Bearer`) or IP. Configurable via `RATE_LIMIT_SPEND`.
+
+    ## Channels
+
+    Every donation routes to exactly one channel (`GET /api/channels` lists the active
+    ones). Rewards, polls, and fund goals may be tied to a specific channel
+    (`channel_id` set) or shared across all channels (`channel_id` null). `POST
+    /api/pledge` requires `channel_id` and rejects any cart item whose incentive
+    belongs to a different channel — incentives cannot be mixed across channels in
+    a single donation. Channels are managed via `/api/admin/channels` and
+    `/api/moderator/channels`; per-channel raised totals are admin-only
+    (`GET /api/admin/stats`).
 
     ## Wallet Discount
 
-    When `POST /api/pledge` receives a valid `?token=` (authenticated donor),
+    When `POST /api/pledge` receives a valid donor session (authenticated donor),
     the donor's `balance_remaining` is applied as a discount on the Stripe
     checkout amount. If the wallet covers the entire pledge total, the pledge
     is fulfilled directly without a Stripe charge. See the pledge endpoint for details.
@@ -42,14 +67,17 @@ tags:
   - name: Health
   - name: Campaign
   - name: Donor
+  - name: Auth
   - name: Rewards
   - name: Polls
   - name: Goals
-  - name: Events
+  - name: Channels
   - name: Pledge
   - name: Webhook
   - name: Admin
   - name: Moderator
+  - name: Tiltify
+    description: Tiltify-compatible read API for kollekt and esa-layouts-v2 (PRD-0002 §R)
 
 paths:
   # ─── Health ───
@@ -95,6 +123,7 @@ paths:
                   description: { type: string }
                   amount_raised:
                     type: object
+                    description: One overall total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
                     properties:
                       value: { type: string, description: 'Dollars formatted string' }
                   goal:
@@ -102,17 +131,32 @@ paths:
                     properties:
                       value: { type: string }
 
+  /campaign/broadcast:
+    get:
+      tags: [Campaign]
+      summary: Get the active site-wide broadcast banner message, if any
+      responses:
+        '200':
+          description: Active broadcast message, or null if none/inactive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, nullable: true }
+                  level:
+                    type: string
+                    nullable: true
+                    enum: [INFO, WARNING, CRITICAL]
+                    description: Banner severity; null uses the original fixed style
+
   # ─── Donor ───
   /donor:
     get:
       tags: [Donor]
       summary: Get current donor profile
-      description: Returns the authenticated donor with nested donations, claims, votes, contributions, and custom entries.
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      description: Returns the authenticated donor with nested donations (including each donation's channel, #53), claims, votes, contributions, and custom entries.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       responses:
         '200':
           description: Donor profile
@@ -120,6 +164,172 @@ paths:
           description: Missing/invalid/expired token
         '403':
           description: Account frozen
+
+  # ─── Auth ───
+  /auth/request-token:
+    post:
+      tags: [Auth]
+      summary: Request a new magic link by email
+      description: |
+        Rotates the donor's magic token (invalidating any prior link) and emails
+        a fresh link. Responds uniformly for existing and unknown emails so the
+        endpoint cannot be used to enumerate donors. Rate-limited by IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Request accepted (regardless of whether the email has donated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { const: true }
+        '400':
+          description: Invalid email address
+        '429':
+          description: Rate limit exceeded
+
+  /auth/session:
+    post:
+      tags: [Auth]
+      summary: Exchange a magic token for an httpOnly session cookie
+      description: |
+        Validates a donor magic token (from a pasted magic link) and sets the
+        `dono_session` httpOnly cookie, so the token never lives in JS-readable
+        storage. Used by the manual "paste your link" login path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200':
+          description: Session cookie set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { const: true }
+                  email: { type: string, format: email }
+        '400':
+          description: Missing token
+        '401':
+          description: Invalid, expired, or frozen
+
+  /auth/session/logout:
+    post:
+      tags: [Auth]
+      summary: Clear the session cookie (logout)
+      description: |
+        Clears the `dono_session` cookie. The magic token itself is not rotated
+        (the same link can sign back in); use request-token to rotate it.
+      responses:
+        '200':
+          description: Session cookie cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { const: true }
+
+  /auth/magic:
+    get:
+      tags: [Auth]
+      summary: Magic-link landing (sets session cookie, redirects to wallet)
+      description: |
+        Magic-link target. Validates the token server-side, sets the
+        `dono_session` httpOnly cookie, and 302s to the wallet — so the token
+        never reaches the SPA or the browser URL/history.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to the wallet (with error query param on failure)
+
+  /auth/providers:
+    get:
+      tags: [Auth]
+      summary: List configured OAuth sign-in providers
+      responses:
+        '200':
+          description: Providers with client credentials configured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: string
+                      enum: [google, discord, twitch]
+
+  /auth/{provider}:
+    get:
+      tags: [Auth]
+      summary: Begin an OAuth sign-in
+      description: |
+        Redirects the browser to the provider's authorize URL and sets a CSRF
+        state cookie. The browser is then redirected back to the callback.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, discord, twitch]
+      responses:
+        '302':
+          description: Redirect to the provider's authorize URL
+        '404':
+          description: Unknown provider
+        '503':
+          description: Provider not configured
+
+  /auth/{provider}/callback:
+    get:
+      tags: [Auth]
+      summary: OAuth sign-in callback
+      description: |
+        Verifies state, exchanges the authorization code for a verified email,
+        upserts the donor (creating an empty one on first sign-in), and
+        redirects to the wallet with a fresh magic token. On failure redirects
+        to the wallet with an `error` query param.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, discord, twitch]
+        - name: code
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to the wallet (with token or error)
+        '404':
+          description: Unknown provider
 
   # ─── Rewards ───
   /rewards:
@@ -134,11 +344,8 @@ paths:
     post:
       tags: [Rewards]
       summary: Claim a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -150,6 +357,11 @@ paths:
               type: object
               properties:
                 claim_data: {}
+                quantity:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                  description: Number of units of this reward to claim in one call. Decrements quantity_total by this amount and creates one RewardClaim row per unit (claim_data is shared across all of them).
       responses:
         '200':
           description: Claim created
@@ -173,11 +385,8 @@ paths:
     post:
       tags: [Polls]
       summary: Propose a custom poll option (funded write-in)
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -210,11 +419,8 @@ paths:
     post:
       tags: [Polls]
       summary: Vote in a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -246,11 +452,8 @@ paths:
     post:
       tags: [Goals]
       summary: Contribute to a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -268,19 +471,76 @@ paths:
         '200':
           description: Contribution recorded
 
-  # ─── Events ───
-  /events:
+  # ─── Auctions ───
+  # Bids are non-binding commitments — no wallet deduction. At close, the
+  # highest bidder is offered the item via a Stripe Checkout Session (24h
+  # window); if unpaid it cascades to the next-highest bidder.
+  /auctions:
     get:
-      tags: [Events]
-      summary: List active events
-      description: |
-        Every donation is routed to exactly one event (for correct overlay
-        routing). Rewards, polls, and fund goals may be tied to a specific
-        event (`event_id` set) or shared across all events (`event_id`
-        null). Used by the /donate event picker.
+      tags: [Auctions]
+      summary: List active auctions
+      parameters:
+        - name: channel_id
+          in: query
+          schema: { type: string }
       responses:
         '200':
-          description: Active events ordered by created_at ascending
+          description: Active auctions ordered by ends_at ascending
+
+  /auctions/{id}:
+    get:
+      tags: [Auctions]
+      summary: Get auction detail with recent bid history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction detail
+        '404':
+          description: Auction not found
+
+  /auctions/{id}/bid:
+    post:
+      tags: [Auctions]
+      summary: Place a bid on an open auction
+      description: |
+        Requires a verified email and at least one prior completed donation.
+        No balance is deducted — bids are commitments settled by the
+        post-close payment cascade.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cents]
+              properties:
+                amount_cents: { type: integer }
+      responses:
+        '200':
+          description: Bid placed
+
+  # ─── Channels ───
+  /channels:
+    get:
+      tags: [Channels]
+      summary: List active channels
+      description: |
+        Every donation is routed to exactly one channel (for correct overlay
+        routing). Rewards, polls, and fund goals may be tied to a specific
+        channel (`channel_id` set) or shared across all channels (`channel_id`
+        null). Used by the /donate channel picker.
+      responses:
+        '200':
+          description: Active channels ordered by created_at ascending
           content:
             application/json:
               schema:
@@ -290,7 +550,336 @@ paths:
                   properties:
                     id: { type: string }
                     name: { type: string }
+                    slug:
+                      type: string
+                      description: Lowercase, URL- and AMQP-routing-safe name (PRD-0002 §S6)
+                    event_id:
+                      type: string
+                      description: Id of the Event this Channel belongs to
                     is_active: { type: boolean }
+
+  # ─── Events ───
+  /events:
+    get:
+      tags: [Events]
+      summary: List active events
+      description: |
+        Public list of active Events, each with its active Channels. The client
+        uses this to drive the /donate event picker. Inactive Events and inactive Channels
+        are omitted, and internal timestamp fields are not exposed.
+      responses:
+        '200':
+          description: Active Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PublicEvent'
+
+  /events/{slug}:
+    get:
+      tags: [Events]
+      summary: Get an active event by slug
+      description: |
+        Looks up one active Event by its slug, with its active Channels. Used by
+        /donate/<event-slug> to preselect an Event. Inactive or unknown slugs
+        both return 404 rather than leaking the existence of an inactive Event.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The Event and its active Channels
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEvent'
+        '404':
+          description: No active Event with that slug
+
+  # ─── Tiltify-compatible read API (PRD-0002 §R, ADR-0010) ───
+  /tiltify/campaigns/{id}:
+    get:
+      tags: [Tiltify]
+      summary: Tiltify campaign (Channel) or team campaign (Event)
+      description: |
+        Public, read-only replacement for ESATiltifyBridge `GET /campaigns/{id}`,
+        read by kollekt and esa-layouts-v2. A Channel has `team_id` = its Event id;
+        an Event has `team_id: null`. `total_amount_raised` is the same number as
+        the `<slug>.fact.updated` message (COMPLETED + REFUNDED donations).
+        Inactive Channels and Events still resolve. Bare object (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltifyCampaign'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/rewards:
+    get:
+      tags: [Tiltify]
+      summary: Rewards of a Tiltify campaign
+      description: |
+        Our Rewards. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyReward'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/targets:
+    get:
+      tags: [Tiltify]
+      summary: Targets of a Tiltify campaign
+      description: |
+        Our FundGoals. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyTarget'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/polls:
+    get:
+      tags: [Tiltify]
+      summary: Polls of a Tiltify campaign
+      description: |
+        Our Polls, with only approved (ACTIVE) options. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyPoll'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/polls/{poll_id}:
+    get:
+      tags: [Tiltify]
+      summary: One poll of a Tiltify campaign
+      description: |
+        The poll, if it is listed under that campaign (see the polls list).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - name: poll_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltifyPoll'
+        '404':
+          description: Unknown campaign id, or the poll is not listed under it
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/milestones:
+    get:
+      tags: [Tiltify]
+      summary: Milestones (always empty)
+      description: |
+        We have no milestones; `[]` for a known campaign id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 0
+                items: { type: object }
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/matches:
+    get:
+      tags: [Tiltify]
+      summary: Donation matches (always empty)
+      description: |
+        We have no donation matches; `[]` for a known campaign id. esa-layouts-v2
+        sends `status` and `limit`, which are ignored.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 0
+                items: { type: object }
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   # ─── Pledge ───
   /pledge:
@@ -299,34 +888,30 @@ paths:
       summary: Create a pending pledge (smart cart)
       description: |
         Creates a pending pledge from cart items and (when Stripe is configured)
-        a Stripe Checkout Session. When a valid donor token is provided via
-        `?token=`, the donor's wallet balance is applied as a discount.
+        a Stripe Checkout Session. When the request carries a valid donor
+        session (cookie or Bearer token), the donor's wallet balance is applied
+        as a discount. Anonymous requests are allowed.
 
-        **Events:** every pledge is routed to exactly one event via the
-        required `event_id` (used to route the donation to the correct
+        **Channels:** every pledge is routed to exactly one channel via the
+        required `channel_id` (used to route the donation to the correct
         overlay). Each cart item's underlying reward/poll/goal must either be
-        shared (its own `event_id` is null) or match the pledge's
-        `event_id` — incentives cannot be mixed across events in a single
+        shared (its own `channel_id` is null) or match the pledge's
+        `channel_id` — incentives cannot be mixed across channels in a single
         transaction.
 
         **Wallet discount flow:**
-        - `?token=` present & valid → donor's `balance_remaining` deducted from Stripe charge
+        - Donor session present & valid → donor's `balance_remaining` deducted from Stripe charge
         - Wallet ≥ pledge total → pledge fulfilled immediately, redirected to wallet
         - Wallet < pledge total → Stripe charges only `total - discount` (min 50 cents)
-        - No `?token=` → no discount applied
-      parameters:
-        - name: token
-          in: query
-          required: false
-          schema: { type: string }
-          description: Optional donor magic token for wallet discount
+        - No donor session → no discount applied
+      security: [{}, { DonorSession: [] }, { DonorBearer: [] }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [items, event_id]
+              required: [items, channel_id]
               properties:
                 email:
                   type: string
@@ -335,9 +920,13 @@ paths:
                 comment:
                   type: string
                   maxLength: 500
-                event_id:
+                display_name:
                   type: string
-                  description: Required. The event this donation is routed to.
+                  maxLength: 60
+                  description: Optional donor-facing display name, carried through to the fulfilled Donation's donor_name (falls back to Stripe's customer name, or null, when omitted)
+                channel_id:
+                  type: string
+                  description: Required. The channel this donation is routed to.
                 top_up_cents:
                   type: integer
                   minimum: 0
@@ -361,6 +950,11 @@ paths:
                       poll_id:
                         type: string
                         description: Required for POLL_VOTE and POLL_CUSTOM
+                      quantity:
+                        type: integer
+                        minimum: 1
+                        default: 1
+                        description: REWARD only — number of units of this reward to claim. amount_cents should be cost_cents * quantity (the line total, not the unit price). Ignored for other kinds.
                       data:
                         description: Claim data for REWARD, { label } for POLL_CUSTOM
       responses:
@@ -405,10 +999,6 @@ paths:
                     enum: [OPEN, FULFILLED, EXPIRED, CANCELLED]
                   donor_email: { type: string, nullable: true }
                   expires_at: { type: string, format: date-time }
-                  magic_token:
-                    type: string
-                    nullable: true
-                    description: Donor's magic token (present when FULFILLED)
                   items:
                     type: array
                     items:
@@ -463,29 +1053,44 @@ paths:
                   donations: { type: integer }
                   claims: { type: integer }
                   pledges: { type: integer }
-                  total_raised_cents: { type: integer }
-                  events:
+                  total_raised_cents:
+                    type: integer
+                    description: Money total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
+                  unallocated_credits_cents:
+                    type: integer
+                    description: Sum of Donor.balance_remaining across all donors — credited but not yet spent on a reward/poll/goal (#59)
+                  channels:
                     type: array
-                    description: Per-event raised totals (admin-only; not shown publicly)
+                    description: Per-channel raised totals (admin-only; not shown publicly)
                     items:
                       type: object
                       properties:
                         id: { type: string }
                         name: { type: string }
-                        raised_cents: { type: integer }
-                        donations: { type: integer }
+                        slug: { type: string }
+                        event_id: { type: string }
+                        raised_cents:
+                          type: integer
+                          description: Same money-total rule as total_raised_cents
+                        donations:
+                          type: integer
+                          description: Count of all the Channel's donations, whatever their status
 
-  /admin/events:
+  /admin/channels:
     get:
       tags: [Admin]
-      summary: List all events
+      summary: List all channels
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All events ordered by created_at ascending
+          description: All channels ordered by created_at ascending
     post:
       tags: [Admin]
-      summary: Create an event
+      summary: Create a channel
+      description: |
+        Creates a Channel on an Event. `slug` is optional; when omitted it is
+        derived from `name` (and made unique across Events and Channels).
+        `event_id` is optional while exactly one Event exists, otherwise required.
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -496,17 +1101,28 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and routing-safe name; derived from `name` when omitted.
+                event_id:
+                  type: string
+                  description: Optional. The Event this Channel belongs to; defaults to the only Event when one exists.
                 is_active: { type: boolean, default: true }
       responses:
         '200':
-          description: Event created
+          description: Channel created
+        '400':
+          description: Missing name, invalid slug, or unknown/ambiguous event_id
         '409':
-          description: Event name already exists
+          description: Channel name already exists, or the slug is already used by another event or channel
 
-  /admin/events/{id}:
+  /admin/channels/{id}:
     put:
       tags: [Admin]
-      summary: Update an event
+      summary: Update a channel
+      description: |
+        A Channel's `slug` cannot change while it is active, and the primary
+        Channel of an active Event cannot be deactivated or moved to another Event.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -520,13 +1136,23 @@ paths:
               type: object
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Channel is inactive.
+                event_id: { type: string }
                 is_active: { type: boolean }
       responses:
         '200':
-          description: Event updated
+          description: Channel updated
+        '400':
+          description: Empty name, invalid slug, or unknown event_id
+        '404':
+          description: Channel not found
+        '409':
+          description: Slug change on an active channel, deactivating/moving the primary channel of an active event, duplicate name, or slug already in use
     delete:
       tags: [Admin]
-      summary: Deactivate an event
+      summary: Deactivate a channel
       description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
       security: [{ AdminKey: [] }]
       parameters:
@@ -536,16 +1162,231 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Event deactivated
+          description: Channel deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  channel: { type: object, description: The deactivated Channel row }
+
+  /admin/events:
+    get:
+      tags: [Admin]
+      summary: List all events
+      description: Admin view — unlike the public `/events`, this includes inactive Events.
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+    post:
+      tags: [Admin]
+      summary: Create an event
+      description: |
+        Creates an Event. `slug` is optional; when omitted it is derived from
+        `name` and made unique across Events and Channels. New Events start
+        inactive — activating one requires a primary Channel of that same Event.
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and AMQP-routing-safe name; derived from `name` when omitted.
+                is_active:
+                  type: boolean
+                  default: false
+                  description: Must be a boolean when present. Activating on create requires primary_channel_id.
+                primary_channel_id:
+                  type: string
+                  nullable: true
+                  description: Channel that receives donations naming no Channel; must be a Channel of this Event and active while the Event is active.
+      responses:
+        '200':
+          description: The created Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Missing name, invalid slug, or non-boolean is_active
+        '409':
+          description: Name or slug already in use (by an Event or a Channel), or activation without a valid primary Channel
+
+  /admin/events/{id}:
+    put:
+      tags: [Admin]
+      summary: Update an event
+      description: |
+        Updates an Event's name, slug, is_active, or primary_channel_id. A slug
+        can only change while the Event is inactive. Activating requires an
+        active primary Channel belonging to this Event, and the primary Channel
+        of an active Event cannot be cleared.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Event is inactive.
+                is_active: { type: boolean }
+                primary_channel_id:
+                  type: string
+                  nullable: true
+                  description: Set null only while the Event is inactive.
+      responses:
+        '200':
+          description: The updated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Empty name, invalid slug, non-boolean is_active, or a primary Channel belonging to another Event
+        '404':
+          description: Event not found
+        '409':
+          description: Slug change on an active event, activation without an active primary channel of this event, clearing the primary channel of an active event, or duplicate name/slug
+    delete:
+      tags: [Admin]
+      summary: Deactivate an event
+      description: Soft-delete — sets is_active false rather than removing the row, since Channels/incentives/donations/pledges may still reference it.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The deactivated Event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event: { $ref: '#/components/schemas/Event' }
+        '404':
+          description: Event not found
 
   /admin/donations:
     get:
       tags: [Admin]
       summary: List all donations
       security: [{ AdminKey: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated status filter (#63), e.g. "REFUNDED,CHARGEBACK"
+          schema: { type: string }
       responses:
         '200':
-          description: Donations with donor email, ordered by created_at descending
+          description: Donations (all Donation fields incl. status, refund_id, external_id, channel_id, event_id, hidden_from_overlay, moderation flags) with donor email and channel (id, name, slug, event_id), ordered by created_at descending
+
+  /admin/donations/{id}/status:
+    patch:
+      tags: [Admin]
+      summary: Set a donation's lifecycle status (#63)
+      description: >-
+        Moving into REFUNDED/CHARGEBACK claws back whatever of the donation's
+        amount is still sitting in the donor's unspent balance_remaining
+        (capped there), records a linked BalanceAdjustment, and stamps
+        Donation.refund_id. Once a donation has a refund_id it is terminal —
+        no further status changes are allowed.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [PENDING, COMPLETED, REFUNDED, CHARGEBACK]
+                reason: { type: string }
+      responses:
+        '200':
+          description: Donation updated
+        '400':
+          description: Invalid status, unchanged status, or donation already refunded/charged back
+        '404':
+          description: Donation not found
+
+  /admin/donations/{id}/channel:
+    patch:
+      tags: [Admin]
+      summary: Assign an unassigned donation to a channel
+      description: >-
+        Records the Channel and Event of a donation that arrived with neither
+        (PRD-0002 §E6). Fails with 409 if the donation already has a Channel,
+        so an assignment cannot be silently overwritten. Emits one
+        `donation.created` webhook on success.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel_id]
+              properties:
+                channel_id:
+                  {
+                    type: string,
+                    description: The Channel to assign; its Event is set on the donation too.,
+                  }
+      responses:
+        '200':
+          description: The updated donation row (all Donation fields, with channel_id and event_id set)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  id: { type: string }
+                  channel_id: { type: string, nullable: true }
+                  event_id: { type: string, nullable: true }
+        '400':
+          description: Missing channel_id, or the channel does not exist
+        '404':
+          description: Donation not found
+        '409':
+          description: The donation already has a Channel or an Event (a donation is never reassigned)
 
   /admin/claims:
     get:
@@ -610,7 +1451,7 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean, default: true }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward created
@@ -638,7 +1479,7 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward updated
@@ -658,7 +1499,14 @@ paths:
   /admin/simulate-donation:
     post:
       tags: [Admin]
-      summary: Simulate a donation (no real money)
+      summary: Add a donation (manual entry / no real payment) — dev simulation or a real donation received externally (#62)
+      description: |
+        Credits a donor's wallet balance and sends a magic link exactly as if
+        a real Stripe donation had completed. Used both for dev/test
+        simulations and for recording a real donation received outside
+        Stripe (e.g. at an external event) — pass `external_id` with that
+        platform's own reference for dedup/traceability, and `occurred_at`
+        to backdate it to when it was actually received.
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -673,9 +1521,24 @@ paths:
                 amount_cents: { type: integer, minimum: 100 }
                 comment: { type: string }
                 pledge_token: { type: string }
+                channel_id:
+                  type: string
+                  nullable: true
+                  description: Optional channel to attribute this donation to (bypasses the pledge flow's required-channel check).
+                event_id:
+                  type: string
+                  nullable: true
+                  description: Optional event to attribute this donation to; routes to that event's primary channel when channel_id is omitted.
+                external_id:
+                  type: string
+                  description: Optional caller-supplied reference (e.g. an external platform's own transaction id) for dedup/traceability. Falls back to an auto-generated sim-<uuid> when omitted. Must be unique — reusing one returns 409.
+                occurred_at:
+                  type: string
+                  format: date-time
+                  description: Optional; backdates the created Donation's created_at to when the donation actually occurred (e.g. on the external platform). Defaults to now.
       responses:
         '200':
-          description: Donation simulated
+          description: Donation added
           content:
             application/json:
               schema:
@@ -689,7 +1552,18 @@ paths:
                       id: { type: string }
                       email: { type: string }
                       balance_remaining: { type: integer }
+                  donation:
+                    type: object
+                    description: The created Donation, with the Channel and Event the routing rules resolved to (both null when unassigned).
+                    properties:
+                      id: { type: string }
+                      channel_id: { type: string, nullable: true }
+                      event_id: { type: string, nullable: true }
                   pledge: { type: object, nullable: true }
+        '400':
+          description: Missing/invalid email, amount_cents, external_id, occurred_at, or an unknown channel_id/event_id
+        '409':
+          description: A donation with the given external_id already exists
 
   /admin/donors:
     get:
@@ -708,6 +1582,33 @@ paths:
       responses:
         '200':
           description: Paginated donor list (capped at 50)
+
+    post:
+      tags: [Admin]
+      summary: Create a donor account without a prior donation
+      description: >-
+        Lets an admin provision a donor record ahead of time (e.g. to grant
+        MODERATOR/ADMIN role before the person has donated). The donor can
+        later log in via a regenerated magic-link token or via SSO with a
+        matching email.
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+                role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+      responses:
+        '200':
+          description: Donor created
+        '400':
+          description: Missing email or invalid role
+        '409':
+          description: Donor with this email already exists
 
   /admin/donors/{id}:
     get:
@@ -856,6 +1757,55 @@ paths:
                   balance_after: { type: integer }
                   adjustment: { type: object }
 
+  /admin/donors/sweep-credits:
+    post:
+      tags: [Admin]
+      summary: Bulk credit sweep-out (#60)
+      description: |
+        Zeros balance_remaining for every donor with a positive balance,
+        optionally filtered to a balance range. Two-step confirmation:
+        omit/false `confirm` for a dry-run preview (nothing written);
+        `confirm: true` to actually perform the sweep. Each swept donor gets
+        a FREEZE_ZERO BalanceAdjustment whose reason references the donor's
+        most recent donation's self-reported donor_name (or "Anonymous").
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                min_balance_cents: { type: integer, minimum: 0 }
+                max_balance_cents: { type: integer, minimum: 0 }
+                confirm:
+                  type: boolean
+                  description: Must be true to actually perform the sweep; otherwise a preview is returned.
+      responses:
+        '200':
+          description: Preview (confirm omitted/false) or sweep result (confirm true)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preview: { type: boolean, description: 'true only on the dry-run response' }
+                  success:
+                    { type: boolean, description: 'true only on the executed-sweep response' }
+                  donor_count: { type: integer }
+                  total_cents: { type: integer }
+                  sample:
+                    type: array
+                    description: First 10 matching donors (preview only)
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        balance_remaining: { type: integer }
+                        donor_name: { type: string, nullable: true }
+        '400':
+          description: Invalid min_balance_cents/max_balance_cents
+
   /admin/donors/{id}/reverse-spend:
     post:
       tags: [Admin]
@@ -915,7 +1865,7 @@ paths:
                 allow_custom_entries: { type: boolean, default: false }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll created
@@ -943,7 +1893,7 @@ paths:
                 allow_custom_entries: { type: boolean }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll updated
@@ -984,6 +1934,29 @@ paths:
           description: Option created
 
   /admin/polls/options/{id}:
+    patch:
+      tags: [Admin]
+      summary: Edit a poll option label
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        '200':
+          description: Option updated
+        '400':
+          description: label is required
     delete:
       tags: [Admin]
       summary: Refund and remove a poll option
@@ -1069,6 +2042,398 @@ paths:
         '200':
           description: Deleted
 
+  /admin/feature-flags:
+    get:
+      tags: [Admin]
+      summary: List all feature flags
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Feature flags ordered by name
+    post:
+      tags: [Admin]
+      summary: Create a feature flag (disabled by default)
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Flag created
+        '400':
+          description: name is required
+        '409':
+          description: Flag name already exists
+
+  /admin/feature-flags/{name}:
+    get:
+      tags: [Admin]
+      summary: Get a feature flag by name
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Feature flag
+        '404':
+          description: Feature flag not found
+    patch:
+      tags: [Admin]
+      summary: Toggle or update a feature flag
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_enabled: { type: boolean }
+                description: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Flag updated
+        '400':
+          description: No fields to update
+    delete:
+      tags: [Admin]
+      summary: Delete a feature flag
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '404':
+          description: Feature flag not found
+
+  /admin/broadcast:
+    get:
+      tags: [Admin]
+      summary: Get the current site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Current broadcast (empty message/inactive if none set)
+    put:
+      tags: [Admin]
+      summary: Set or clear the site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  description: Banner text; an empty/blank string clears the banner
+                level:
+                  type: string
+                  nullable: true
+                  enum: [INFO, WARNING, CRITICAL]
+                  description: Optional severity level; omit/null for the original fixed style (#68)
+      responses:
+        '200':
+          description: Broadcast updated (or cleared)
+        '400':
+          description: message must be a string, or level is not a recognized value
+    delete:
+      tags: [Admin]
+      summary: Clear the site-wide broadcast banner
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Cleared
+
+  /admin/destinations:
+    get:
+      tags: [Admin]
+      summary: List Destinations
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All endpoints ordered by created_at descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookDestination'
+    post:
+      tags: [Admin]
+      summary: Create a Destination
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination_type:
+                  type: string
+                  enum: [HTTP, RABBITMQ]
+                  default: HTTP
+                url: { type: string, format: uri, description: 'Required for HTTP endpoints' }
+                secret: { type: string, description: 'Optional. Auto-generated if omitted.' }
+                event_types:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      [
+                        donation.created,
+                        donation.moderated,
+                        donation.hidden,
+                        donation.unhidden,
+                        incentive.created,
+                        incentive.enabled,
+                        incentive.disabled,
+                        incentive.value_changed,
+                      ]
+                verify_ssl: { type: boolean, default: true }
+                description: { type: string }
+                amqp_url:
+                  {
+                    type: string,
+                    description: 'Required for RabbitMQ endpoints. Must be amqp:// or amqps://',
+                  }
+                amqp_exchange:
+                  {
+                    type: string,
+                    description: "Default '' for NATIVE (the default exchange); 'tiltify' for TILTIFY",
+                  }
+                amqp_routing_key:
+                  { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
+                payload_format:
+                  type: string
+                  enum: [NATIVE, TILTIFY]
+                  default: NATIVE
+                  description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
+      responses:
+        '201':
+          description: Endpoint created (secret included on creation only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDestination'
+        '400':
+          description: Validation error
+
+  /admin/destinations/{id}:
+    delete:
+      tags: [Admin]
+      summary: Delete a Destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '404':
+          description: Endpoint not found
+
+    put:
+      tags: [Admin]
+      summary: Update a Destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                destination_type: { type: string, enum: [HTTP, RABBITMQ] }
+                url: { type: string, format: uri }
+                event_types:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      [
+                        donation.created,
+                        donation.moderated,
+                        donation.hidden,
+                        donation.unhidden,
+                        incentive.created,
+                        incentive.enabled,
+                        incentive.disabled,
+                        incentive.value_changed,
+                      ]
+                verify_ssl: { type: boolean }
+                is_active: { type: boolean }
+                description: { type: string }
+                amqp_url: { type: string }
+                amqp_exchange: { type: string }
+                amqp_routing_key:
+                  { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
+                payload_format:
+                  type: string
+                  enum: [NATIVE, TILTIFY]
+                  default: NATIVE
+                  description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
+      responses:
+        '200':
+          description: Endpoint updated
+        '400':
+          description: Validation error
+        '404':
+          description: Endpoint not found
+
+  /admin/destinations/{id}/rotate-secret:
+    post:
+      tags: [Admin]
+      summary: Rotate destination secret
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: New secret returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDestination'
+        '404':
+          description: Endpoint not found
+
+  /admin/destinations/{id}/deliveries:
+    get:
+      tags: [Admin]
+      summary: Get delivery log for a Destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Paginated delivery log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookDelivery'
+                  total: { type: integer }
+
+  /admin/destinations/{id}/deliveries/{deliveryId}/requeue:
+    post:
+      tags: [Admin]
+      summary: Requeue a single FAILED delivery
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: deliveryId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Delivery requeued at its original queue position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDelivery'
+        '404':
+          description: Delivery not found
+        '409':
+          description: Delivery is not FAILED, or was never built
+
+  /admin/destinations/{id}/requeue-failed:
+    post:
+      tags: [Admin]
+      summary: Requeue every retained FAILED delivery for a Destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Number of deliveries requeued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requeued: { type: integer }
+                  skipped_unbuilt:
+                    type: integer
+                    description: FAILED rows whose payload was never built; they stay FAILED
+        '404':
+          description: Endpoint not found
+
+  /admin/destinations/{id}/test:
+    post:
+      tags: [Admin]
+      summary: Send a test ping to a Destination
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Test delivery queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  seq: { type: integer }
+        '404':
+          description: Endpoint not found
+
   /admin/goals:
     get:
       tags: [Admin]
@@ -1092,7 +2457,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -1117,7 +2482,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
                 is_complete: { type: boolean }
       responses:
@@ -1158,16 +2523,199 @@ paths:
                   refunded_count: { type: integer }
                   refunded_cents: { type: integer }
 
+  /admin/auctions:
+    get:
+      tags: [Admin]
+      summary: List all auctions
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All auctions ordered by created_at descending
+    post:
+      tags: [Admin]
+      summary: Create an auction
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, type, starting_price_cents, min_increment_cents, ends_at]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type:
+                  type: string
+                  enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM]
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean, default: true }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction created
+
+  /admin/auctions/{id}:
+    put:
+      tags: [Admin]
+      summary: Update an auction
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type: { type: string, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction updated
+    delete:
+      tags: [Admin]
+      summary: Delete an auction (only if it has no bids)
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+        '409':
+          description: Cannot delete an auction with existing bids
+
+  /admin/auctions/{id}/offers:
+    get:
+      tags: [Admin]
+      summary: List the cascade offer history for an auction
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offers ordered by rank ascending
+
+  /admin/auctions/{id}/bids:
+    get:
+      tags: [Admin]
+      summary: List all bids for an auction
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Bids ordered by created_at descending
+
+  /admin/auctions/{id}/reopen:
+    post:
+      tags: [Admin]
+      summary: Reopen a cancelled auction for bidding
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction reopened (status OPEN)
+
+  /admin/auctions/{id}/close:
+    post:
+      tags: [Admin]
+      summary: Force-close an auction ahead of its ends_at
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction closed; rank-1 offer sent, or UNSOLD if no bids
+
+  /admin/auctions/{id}/cancel:
+    post:
+      tags: [Admin]
+      summary: Cancel an auction before settlement
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction cancelled
+
+  /admin/auctions/{id}/skip-offer:
+    post:
+      tags: [Admin]
+      summary: Expire the current cascade offer early and advance to the next bidder
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Advanced to the next offer, or UNSOLD if the list is exhausted
+
+  /admin/auctions/{id}/resend-offer:
+    post:
+      tags: [Admin]
+      summary: Resend the current offer's payment email without advancing the cascade
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offer email resent
+
+  /admin/auction-wins:
+    get:
+      tags: [Admin]
+      summary: List all settled auction wins
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Wins ordered by created_at descending
+
   # ─── Moderator ───
   /moderator/stats:
     get:
       tags: [Moderator]
       summary: Moderator dashboard stats
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Moderator stats
@@ -1185,22 +2733,24 @@ paths:
     get:
       tags: [Moderator]
       summary: List all events
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: All events ordered by created_at ascending
+          description: All Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
     post:
       tags: [Moderator]
       summary: Create an event
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      description: |
+        Creates an Event. `slug` is optional; when omitted it is derived from
+        `name` and made unique across Events and Channels. New Events start
+        inactive — activating one requires a primary Channel of that same Event.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -1210,22 +2760,28 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
-                is_active: { type: boolean, default: true }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and AMQP-routing-safe name; derived from `name` when omitted.
+                is_active: { type: boolean, default: false }
+                primary_channel_id: { type: string, nullable: true }
       responses:
         '200':
-          description: Event created
+          description: The created Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Missing name, invalid slug, or non-boolean is_active
         '409':
-          description: Event name already exists
+          description: Name or slug already in use, or activation without a valid primary Channel
 
   /moderator/events/{id}:
     put:
       tags: [Moderator]
       summary: Update an event
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1237,47 +2793,151 @@ paths:
               type: object
               properties:
                 name: { type: string }
+                slug: { type: string }
                 is_active: { type: boolean }
+                primary_channel_id: { type: string, nullable: true }
       responses:
         '200':
-          description: Event updated
+          description: The updated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Empty name, invalid slug, non-boolean is_active, or a primary Channel belonging to another Event
+        '404':
+          description: Event not found
+        '409':
+          description: Slug change on an active event, activation without an active primary channel, clearing the primary channel of an active event, or duplicate name/slug
     delete:
       tags: [Moderator]
       summary: Deactivate an event
-      description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
+      description: Soft-delete — sets is_active false rather than removing the row, since Channels/incentives/donations/pledges may still reference it.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
           schema: { type: string }
       responses:
         '200':
-          description: Event deactivated
+          description: The deactivated Event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event: { $ref: '#/components/schemas/Event' }
+        '404':
+          description: Event not found
+
+  /moderator/channels:
+    get:
+      tags: [Moderator]
+      summary: List all channels
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      responses:
+        '200':
+          description: All channels ordered by created_at ascending
+    post:
+      tags: [Moderator]
+      summary: Create a channel
+      description: |
+        Creates a Channel on an Event. `slug` is optional; when omitted it is
+        derived from `name` (and made unique across Events and Channels).
+        `event_id` is optional while exactly one Event exists, otherwise required.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and routing-safe name; derived from `name` when omitted.
+                event_id:
+                  type: string
+                  description: Optional. The Event this Channel belongs to; defaults to the only Event when one exists.
+                is_active: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Channel created
+        '400':
+          description: Missing name, invalid slug, or unknown/ambiguous event_id
+        '409':
+          description: Channel name already exists, or the slug is already used by another event or channel
+
+  /moderator/channels/{id}:
+    put:
+      tags: [Moderator]
+      summary: Update a channel
+      description: |
+        A Channel's `slug` cannot change while it is active, and the primary
+        Channel of an active Event cannot be deactivated or moved to another Event.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Channel is inactive.
+                event_id: { type: string }
+                is_active: { type: boolean }
+      responses:
+        '200':
+          description: Channel updated
+        '400':
+          description: Empty name, invalid slug, or unknown event_id
+        '404':
+          description: Channel not found
+        '409':
+          description: Slug change on an active channel, deactivating/moving the primary channel of an active event, duplicate name, or slug already in use
+    delete:
+      tags: [Moderator]
+      summary: Deactivate a channel
+      description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Channel deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  channel: { type: object, description: The deactivated Channel row }
 
   /moderator/polls:
     get:
       tags: [Moderator]
       summary: List all polls
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Polls with options and custom entries
     post:
       tags: [Moderator]
       summary: Create a poll
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -1299,7 +2959,7 @@ paths:
                 allow_custom_entries: { type: boolean, default: false }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll created
@@ -1308,11 +2968,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1330,18 +2987,15 @@ paths:
                 allow_custom_entries: { type: boolean }
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Poll updated
     delete:
       tags: [Moderator]
       summary: Delete a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1354,11 +3008,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Add a poll option
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1377,14 +3028,34 @@ paths:
           description: Option created
 
   /moderator/polls/options/{id}:
+    patch:
+      tags: [Moderator]
+      summary: Edit a poll option label
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+      responses:
+        '200':
+          description: Option updated
+        '400':
+          description: label is required
     delete:
       tags: [Moderator]
       summary: Delete a poll option
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1397,11 +3068,8 @@ paths:
     get:
       tags: [Moderator]
       summary: List custom entries for a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1417,11 +3085,8 @@ paths:
       description: |
         APPROVED: credits option tally (`votes_cents`, `total_votes_cents`).
         REJECTED: refunds donor balance, marks option REJECTED, writes BalanceAdjustment.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1441,26 +3106,50 @@ paths:
         '200':
           description: Entry updated
 
+  /moderator/uploads:
+    post:
+      tags: [Moderator]
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      summary: Upload a reward image
+      description: >
+        Accepts jpeg/png/webp/gif up to 8 MB. Resizes to ≤800 px wide and
+        re-encodes to webp (~quality 80) before storing. Returns the URL to
+        store in reward.image_url.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Upload succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, example: /api/uploads/uuid.webp }
+        '400':
+          description: Invalid file type or size exceeded
+
   /moderator/rewards:
     get:
       tags: [Moderator]
       summary: List all rewards
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Rewards ordered by created_at descending
     post:
       tags: [Moderator]
       summary: Create a reward
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -1476,7 +3165,8 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean, default: true }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                image_url: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward created
@@ -1485,11 +3175,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1507,18 +3194,16 @@ paths:
                 quantity_total: { type: integer, nullable: true }
                 is_active: { type: boolean }
                 custom_type_label: { type: string }
-                event_id: { type: string, nullable: true }
+                image_url: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
       responses:
         '200':
           description: Reward updated
     delete:
       tags: [Moderator]
       summary: Delete a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1531,69 +3216,39 @@ paths:
     get:
       tags: [Moderator]
       summary: List all reward claims
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Claims with reward details (no donor email)
-
-  /moderator/claims/{id}:
-    patch:
-      tags: [Moderator]
-      summary: Update claim status
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [status]
-              properties:
-                status:
-                  type: string
-                  enum: [PENDING, FULFILLED]
-      responses:
-        '200':
-          description: Claim updated
+          description: Claims with reward details and a human-readable donor_name (from the donor's most recent donation; never donor email or id)
 
   /moderator/donations:
     get:
       tags: [Moderator]
       summary: List all donations (regardless of donor), for moderation review
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Donations with donor name (no donor email) and moderation status
+          description: Donations with donor name (no donor email), channel (id, name, slug, event_id), event_id, status, hidden_from_overlay, moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
 
   /moderator/donations/{id}:
     patch:
       tags: [Moderator]
-      summary: Mark (or unmark) a donation as moderated
+      summary: Moderate a donation and/or hide it from the stream overlay
       description: |
-        Sets `moderated`, `moderated_at`, and `moderated_by` so downstream
-        tools (exports, leaderboards, Discord role sync, etc.) can rely on
-        which donations a human has reviewed.
+        Accepts `moderated` and/or `hidden_from_overlay`; at least one is
+        required (400 otherwise).
+
+        `moderated` sets `moderated`, `moderated_at`, and `moderated_by` so
+        downstream tools (exports, leaderboards, Discord role sync, etc.) can
+        rely on which donations a human has reviewed. It is a review flag only
+        and does not republish to Tiltify destinations.
+
+        `hidden_from_overlay` hides the donation from the stream overlay. It
+        publishes native `donation.hidden`/`donation.unhidden` messages and
+        republishes the Tiltify donation (as "Anonymous" without `completed_at`
+        when hidden).
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1604,35 +3259,30 @@ paths:
           application/json:
             schema:
               type: object
-              required: [moderated]
+              description: At least one of moderated / hidden_from_overlay is required.
               properties:
                 moderated: { type: boolean }
+                hidden_from_overlay: { type: boolean }
       responses:
         '200':
           description: Donation updated
         '400':
-          description: moderated must be a boolean
+          description: Neither moderated nor hidden_from_overlay provided, or a value is not a boolean
+        '404':
+          description: Donation not found
 
   /moderator/goals:
     get:
       tags: [Moderator]
       summary: List all fund goals
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Goals ordered by created_at descending
     post:
       tags: [Moderator]
       summary: Create a fund goal
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -1644,7 +3294,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -1654,11 +3304,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1672,7 +3319,7 @@ paths:
                 title: { type: string }
                 description: { type: string }
                 target_cents: { type: integer }
-                event_id: { type: string, nullable: true }
+                channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
                 is_complete: { type: boolean }
       responses:
@@ -1681,11 +3328,8 @@ paths:
     delete:
       tags: [Moderator]
       summary: Delete a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -1694,10 +3338,369 @@ paths:
         '200':
           description: Deleted
 
+  /moderator/auctions:
+    get:
+      tags: [Moderator]
+      summary: List all auctions
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      responses:
+        '200':
+          description: All auctions ordered by created_at descending
+    post:
+      tags: [Moderator]
+      summary: Create an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, type, starting_price_cents, min_increment_cents, ends_at]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type:
+                  type: string
+                  enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM]
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean, default: true }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction created
+
+  /moderator/auctions/{id}:
+    put:
+      tags: [Moderator]
+      summary: Update an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                type: { type: string, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+                custom_type_label: { type: string }
+                image_url: { type: string, nullable: true }
+                starting_price_cents: { type: integer }
+                min_increment_cents: { type: integer }
+                ends_at: { type: string, format: date-time }
+                is_active: { type: boolean }
+                channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Auction updated
+
+  /moderator/auctions/{id}/offers:
+    get:
+      tags: [Moderator]
+      summary: List the cascade offer history for an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offers ordered by rank ascending (never includes donor email)
+
+  /moderator/auctions/{id}/bids:
+    get:
+      tags: [Moderator]
+      summary: List all bids for an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Bids ordered by created_at descending (never includes donor email)
+
+  /moderator/auctions/{id}/reopen:
+    post:
+      tags: [Moderator]
+      summary: Reopen a cancelled auction for bidding
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction reopened (status OPEN)
+
+  /moderator/auctions/{id}/close:
+    post:
+      tags: [Moderator]
+      summary: Force-close an auction ahead of its ends_at
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction closed; rank-1 offer sent, or UNSOLD if no bids
+
+  /moderator/auctions/{id}/cancel:
+    post:
+      tags: [Moderator]
+      summary: Cancel an auction before settlement
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Auction cancelled
+
+  /moderator/auctions/{id}/skip-offer:
+    post:
+      tags: [Moderator]
+      summary: Expire the current cascade offer early and advance to the next bidder
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Advanced to the next offer, or UNSOLD if the list is exhausted
+
+  /moderator/auctions/{id}/resend-offer:
+    post:
+      tags: [Moderator]
+      summary: Resend the current offer's payment email without advancing the cascade
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Offer email resent
+
 components:
   securitySchemes:
     AdminKey:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer key_admin_<ADMIN_API_KEY>`, or a donor session/token whose role is ADMIN.'
+    ModeratorKey:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer key_mod_<MODERATOR_API_KEY>`. Moderator routes also accept a donor session/token whose role is MODERATOR or ADMIN.'
+    DonorSession:
       type: apiKey
-      in: header
-      name: X-Admin-Key
-      description: Admin API key matching `ADMIN_API_KEY` env var
+      in: cookie
+      name: dono_session
+      description: httpOnly session cookie holding the donor magic token (set by /auth/magic, /auth/session or OAuth).
+    DonorBearer:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
+  schemas:
+    TiltifyAmount:
+      type: object
+      properties:
+        currency: { type: string, example: USD, description: Upper-case currency code }
+        value: { type: string, example: '12.50', description: Decimal string with 2 places }
+    TiltifyCampaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        team_id:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: The Event id for a Channel; null for an Event,
+          }
+        currency_code: { type: string }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        total_amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        status: { type: string, enum: [published, retired] }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyReward:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        active: { type: boolean }
+        amount: { $ref: '#/components/schemas/TiltifyAmount' }
+        quantity: { type: integer, nullable: true }
+        quantity_remaining:
+          { type: integer, nullable: true, description: null when stock is unlimited }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyTarget:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        active: { type: boolean }
+        amount: { $ref: '#/components/schemas/TiltifyAmount' }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyPoll:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        active: { type: boolean, description: Active and not past its end time }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        options:
+          type: array
+          description: Approved options only
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+    Event:
+      type: object
+      description: A charity event (a marathon, or a one-day stream event) that owns Channels.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug:
+          type: string
+          description: Lowercase, URL- and AMQP-routing-safe name; unique across Events and Channels (PRD-0002 §S6)
+        is_active: { type: boolean }
+        primary_channel_id:
+          {
+            type: string,
+            nullable: true,
+            description: 'Where a donation that names no Channel is routed; must be a Channel of this Event',
+          }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PublicEvent:
+      type: object
+      description: The public view of an active Event (routes/events.ts); no is_active or timestamps.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        primary_channel_id: { type: string, nullable: true }
+        channels:
+          type: array
+          description: Only this Event's active Channels, oldest first
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              slug: { type: string }
+              event_id: { type: string }
+              is_active: { type: boolean }
+    WebhookDestination:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        secret:
+          {
+            type: string,
+            description: 'Returned in full by the admin API (create, list, update); see #127. Use rotate-secret to replace it.',
+          }
+        is_active: { type: boolean }
+        event_types:
+          type: array
+          items:
+            type: string
+            enum:
+              [
+                donation.created,
+                donation.moderated,
+                donation.hidden,
+                donation.unhidden,
+                incentive.created,
+                incentive.enabled,
+                incentive.disabled,
+                incentive.value_changed,
+              ]
+        verify_ssl: { type: boolean }
+        description: { type: string, nullable: true }
+        destination_type:
+          type: string
+          enum: [HTTP, RABBITMQ]
+          default: HTTP
+        amqp_url:
+          {
+            type: string,
+            nullable: true,
+            description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
+          }
+        amqp_exchange:
+          {
+            type: string,
+            description: "Default '' for NATIVE (the default exchange); 'tiltify' for TILTIFY",
+          }
+        amqp_routing_key:
+          {
+            type: string,
+            nullable: true,
+            description: 'Required for NATIVE RabbitMQ Destinations only',
+          }
+        payload_format:
+          type: string
+          enum: [NATIVE, TILTIFY]
+          default: NATIVE
+          description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: string }
+        seq: { type: integer }
+        message_id: { type: string }
+        destination_id: { type: string }
+        event_type: { type: string }
+        routing_key:
+          {
+            type: string,
+            nullable: true,
+            description: "Per-message AMQP routing key (TILTIFY: <channel-slug>.donation); null uses the Destination's key",
+          }
+        payload: { type: string }
+        status:
+          type: string
+          enum: [PENDING, SUCCESS, FAILED]
+        attempts: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        last_status_code: { type: integer, nullable: true }
+        last_error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

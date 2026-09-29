@@ -1,0 +1,24 @@
+[Unit]
+Description=Reset the demo site to a clean baseline (destroy DB volume + re-seed)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Path to the esa-dono-ui checkout on this host (contains scripts/reset-demo.sh).
+WorkingDirectory=/home/ubuntu/projects/esa-dono-ui
+# Safety fuse — reset-demo.sh refuses to run 'docker compose down -v' without it.
+Environment=DEMO_RESET_ALLOWED=1
+# Provide ADMIN_API_KEY (+ APP_BASE_URL etc.) for the seeding step. The .env
+# last-occurrence of ADMIN_API_KEY is the active key, so this matches the
+# running backend.
+EnvironmentFile=/home/ubuntu/projects/esa-dono-ui/.env
+ExecStart=/home/ubuntu/projects/esa-dono-ui/scripts/reset-demo.sh
+# Reasonable defaults; override by adding an Environment= line here (e.g.
+# Environment=ADMIN_API_KEY=...) if the key is not in the .env. See
+# scripts/reset-demo.sh for the optional positional args.
+User=ubuntu
+
+# Keep a bounded amount of run history in the journal.
+StandardOutput=journal
+StandardError=journal

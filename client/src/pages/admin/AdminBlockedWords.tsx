@@ -37,7 +37,7 @@ export default function AdminBlockedWords() {
 
   return (
     <div className="max-w-xl mx-auto">
-      <h1 className="font-display text-4xl lowercase mb-6">blocked words</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">blocked words</h1>
       <p className="font-body text-sm text-off-white/55 mb-4">
         Words in this list are blocked from custom poll entries. Whole-word, case-insensitive
         matching.

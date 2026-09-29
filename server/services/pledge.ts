@@ -1,11 +1,14 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
-import { MIN_SPEND_CENTS, type ShippingAddress } from '@dono/shared';
+import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
+import { withSpan } from '../lib/tracing.js';
 import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
@@ -16,36 +19,53 @@ interface PledgeItemInput {
   amount_cents?: number;
   poll_id?: string | null;
   data?: unknown;
+  quantity?: number;
 }
 
 interface CreatePledgeInput {
   email?: string | null;
   comment?: string | null;
+  display_name?: string | null;
   items: PledgeItemInput[];
   top_up_cents?: number;
-  event_id?: string | null;
+  channel_id?: string | null;
 }
 
 const COMMENT_MAX_LENGTH = 500;
+const DISPLAY_NAME_MAX_LENGTH = 60;
 
 /**
  * Create a pending pledge from cart items.
  * Validates each item against live state, computes total, persists.
  * Returns { pledge_token, total_cents, donate_url }.
  *
- * Every pledge is routed to exactly one event: `event_id` is required and
- * must reference an active Event. Each cart item's underlying incentive
- * must either be shared (its own `event_id` is null) or belong to the same
- * event as the pledge — incentives cannot be mixed across events in a
+ * Every pledge is routed to exactly one channel: `channel_id` is required and
+ * must reference an active Channel. Each cart item's underlying incentive
+ * must either be shared (its own `channel_id` is null) or belong to the same
+ * channel as the pledge — incentives cannot be mixed across channels in a
  * single transaction. This is what lets the amount be routed to the correct
- * event overlay.
+ * channel overlay.
  */
 export async function createPledge({
   email,
   comment,
+  display_name,
   items,
   top_up_cents,
-  event_id,
+  channel_id,
+}: CreatePledgeInput) {
+  return withSpan('pledge.create', async () => {
+    return createPledgeInner({ email, comment, display_name, items, top_up_cents, channel_id });
+  });
+}
+
+async function createPledgeInner({
+  email,
+  comment,
+  display_name,
+  items,
+  top_up_cents,
+  channel_id,
 }: CreatePledgeInput) {
   if (!items || !Array.isArray(items)) {
     throw Object.assign(new Error('At least one item required'), { status: 400 });
@@ -62,12 +82,12 @@ export async function createPledge({
     });
   }
 
-  if (!event_id || typeof event_id !== 'string') {
-    throw Object.assign(new Error('event_id is required'), { status: 400 });
+  if (!channel_id || typeof channel_id !== 'string') {
+    throw Object.assign(new Error('channel_id is required'), { status: 400 });
   }
-  const event = await prisma.event.findUnique({ where: { id: event_id } });
-  if (!event || !event.is_active) {
-    throw Object.assign(new Error('Event not found or inactive'), { status: 404 });
+  const channel = await prisma.channel.findUnique({ where: { id: channel_id } });
+  if (!channel || !channel.is_active) {
+    throw Object.assign(new Error('Channel not found or inactive'), { status: 404 });
   }
 
   let commentValue: string | null = null;
@@ -85,18 +105,37 @@ export async function createPledge({
     }
   }
 
+  // Donor-facing display name (#54) — carried through to the fulfilled
+  // Donation's donor_name. Optional: falls back to the existing sources
+  // (Stripe customer_details.name, or null for a wallet-covered checkout
+  // that never had a name to draw from at all).
+  let displayNameValue: string | null = null;
+  if (display_name != null && display_name.trim().length > 0) {
+    displayNameValue = display_name.trim();
+    if (displayNameValue.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw Object.assign(
+        new Error(`Display name exceeds maximum of ${DISPLAY_NAME_MAX_LENGTH} characters`),
+        { status: 400 },
+      );
+    }
+    const blockedError = await checkBlockedWords(displayNameValue);
+    if (blockedError) {
+      throw Object.assign(new Error(blockedError), { status: 400 });
+    }
+  }
+
   // Validate all items against live data
   let totalCents = 0;
   let requiresShipping = false;
 
-  // An incentive with a null event_id is "shared" and may be added to any
-  // event's cart. An incentive tied to a specific event may only be added
-  // when it matches the pledge's event — incentives cannot be mixed across
-  // events in a single transaction.
-  const assertEventMatch = (incentiveEventId: string | null, label: string) => {
-    if (incentiveEventId && incentiveEventId !== event_id) {
+  // An incentive with a null channel_id is "shared" and may be added to any
+  // channel's cart. An incentive tied to a specific channel may only be added
+  // when it matches the pledge's channel — incentives cannot be mixed across
+  // channels in a single transaction.
+  const assertChannelMatch = (incentiveChannelId: string | null, label: string) => {
+    if (incentiveChannelId && incentiveChannelId !== channel_id) {
       throw Object.assign(
-        new Error(`${label} belongs to a different event and cannot be added to this cart`),
+        new Error(`${label} belongs to a different channel and cannot be added to this cart`),
         { status: 400 },
       );
     }
@@ -110,18 +149,27 @@ export async function createPledge({
     }
 
     if (kind === 'REWARD') {
+      const quantity = item.quantity ?? 1;
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        throw Object.assign(new Error('REWARD quantity must be a positive integer'), {
+          status: 400,
+        });
+      }
       const reward = await prisma.reward.findUnique({ where: { id: target_id } });
       if (!reward || !reward.is_active) {
         throw Object.assign(new Error(`Reward not found: ${target_id}`), { status: 404 });
       }
-      assertEventMatch(reward.event_id, `Reward "${reward.title}"`);
-      if (reward.quantity_total !== null && reward.quantity_claimed >= reward.quantity_total) {
+      assertChannelMatch(reward.channel_id, `Reward "${reward.title}"`);
+      if (
+        reward.quantity_total !== null &&
+        reward.quantity_claimed + quantity > reward.quantity_total
+      ) {
         throw Object.assign(new Error(`Reward sold out: ${reward.title}`), { status: 400 });
       }
       if (reward.type === 'PHYSICAL') {
         requiresShipping = true;
       }
-      totalCents += reward.cost_cents;
+      totalCents += reward.cost_cents * quantity;
     } else if (kind === 'POLL_VOTE') {
       if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
         throw Object.assign(new Error(`POLL_VOTE amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -135,7 +183,7 @@ export async function createPledge({
       if (!poll || !poll.is_active) {
         throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
       }
-      assertEventMatch(poll.event_id, `Poll "${poll.title}"`);
+      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
       if (poll.ends_at && new Date() > poll.ends_at) {
         throw Object.assign(new Error(`Poll has ended: ${poll.title}`), { status: 400 });
       }
@@ -156,7 +204,7 @@ export async function createPledge({
           status: 404,
         });
       }
-      assertEventMatch(goal.event_id, `Goal "${goal.title}"`);
+      assertChannelMatch(goal.channel_id, `Goal "${goal.title}"`);
       totalCents += amount_cents!;
     } else if (kind === 'POLL_CUSTOM') {
       if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
@@ -182,7 +230,7 @@ export async function createPledge({
       if (!poll || !poll.is_active) {
         throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
       }
-      assertEventMatch(poll.event_id, `Poll "${poll.title}"`);
+      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
       if (!poll.allow_custom_entries) {
         throw Object.assign(new Error(`Poll does not allow custom entries: ${poll.title}`), {
           status: 400,
@@ -213,18 +261,20 @@ export async function createPledge({
       pledge_token: pledgeToken,
       donor_email: email || null,
       comment: commentValue,
+      display_name: displayNameValue,
       total_cents: totalCents + topUp,
       top_up_cents: topUp,
       requires_shipping: requiresShipping,
       status: 'OPEN',
       expires_at: expiresAt,
-      event_id,
+      channel_id,
       items: {
         create: items.map((item) => ({
           kind: item.kind,
           target_id: item.target_id,
           poll_id: item.poll_id || null,
           amount_cents: item.amount_cents || 0,
+          quantity: item.kind === 'REWARD' ? (item.quantity ?? 1) : 1,
           data: item.data ? JSON.stringify(item.data) : null,
         })),
       },
@@ -249,7 +299,19 @@ export async function fulfillPledge(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,
-  shippingAddress?: ShippingAddress | null,
+  /** The donation paying for the pledge: its reward claims are linked to it (PRD-0002 §T4). */
+  donationId: string | null = null,
+) {
+  return withSpan('pledge.fulfill', async () => {
+    return fulfillPledgeInner(tx, pledge, donorId, donationId);
+  });
+}
+
+async function fulfillPledgeInner(
+  tx: Prisma.TransactionClient,
+  pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
+  donorId: string,
+  donationId: string | null,
 ) {
   const results: Array<Record<string, unknown>> = [];
   let totalSpent = 0;
@@ -260,11 +322,18 @@ export async function fulfillPledge(
       let result: { cost: number } | undefined;
       if (item.kind === 'REWARD') {
         const data = item.data ? JSON.parse(item.data) : {};
-        result = await claimRewardTx(tx, donorId, item.target_id, data, shippingAddress);
+        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity, donationId);
       } else if (item.kind === 'POLL_VOTE') {
-        result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
+        result = await votePollTx(
+          tx,
+          donorId,
+          item.poll_id!,
+          item.target_id,
+          item.amount_cents,
+          donationId,
+        );
       } else if (item.kind === 'GOAL') {
-        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents);
+        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents, donationId);
       } else if (item.kind === 'POLL_CUSTOM') {
         const data = item.data ? JSON.parse(item.data) : {};
         result = await proposeCustomEntryTx(
@@ -273,6 +342,7 @@ export async function fulfillPledge(
           item.poll_id!,
           data.label,
           item.amount_cents,
+          donationId,
         );
       }
       totalSpent += result!.cost;
@@ -299,18 +369,25 @@ export async function fulfillPledge(
 /**
  * Resolve a pledge token to a pending pledge, or fall back to email-based lookup.
  * Returns the pledge or null.
+ *
+ * Pass the caller's transaction as `db` when calling inside one. With a single
+ * SQLite connection (`lib/prisma.ts`), a query on the global client from inside a
+ * transaction waits for that transaction and times out.
  */
-export async function resolvePledge({
-  pledgeToken,
-  email,
-  amountCents,
-}: {
-  pledgeToken?: string | null;
-  email?: string | null;
-  amountCents: number;
-}) {
+export async function resolvePledge(
+  {
+    pledgeToken,
+    email,
+    amountCents,
+  }: {
+    pledgeToken?: string | null;
+    email?: string | null;
+    amountCents: number;
+  },
+  db: Pick<Prisma.TransactionClient, 'pendingPledge'> = prisma,
+) {
   if (pledgeToken) {
-    const pledge = await prisma.pendingPledge.findUnique({
+    const pledge = await db.pendingPledge.findUnique({
       where: { pledge_token: pledgeToken },
       include: { items: true },
     });
@@ -327,7 +404,7 @@ export async function resolvePledge({
   // Fallback: email-based lookup for newest OPEN pledge within window
   if (email) {
     const cutoff = new Date(Date.now() - PLEDGE_TTL_MS);
-    const pledge = await prisma.pendingPledge.findFirst({
+    const pledge = await db.pendingPledge.findFirst({
       where: {
         donor_email: email.trim().toLowerCase(),
         status: 'OPEN',
@@ -357,8 +434,11 @@ export interface WalletDonor {
  *
  * When an authenticated donor is provided (resolved from a valid magic token),
  * their wallet balance is applied as a discount to the Stripe charge,
- * recorded as wallet_discount_cents on the pledge. If the wallet balance
- * covers the entire pledge, the pledge is fulfilled directly without Stripe —
+ * recorded as wallet_discount_cents on the pledge. The discount only ever
+ * offsets the incentive items — the additional contribution (top_up_cents) is
+ * always charged as real money. If the wallet balance covers the entire
+ * pledge (possible only when there is no additional contribution), the pledge
+ * is fulfilled directly without Stripe —
  * unless the pledge requires shipping (contains a PHYSICAL reward), in which
  * case Stripe Checkout is always used to collect a shipping address and charge
  * shipping.
@@ -379,6 +459,7 @@ export async function createCheckoutForPledge(
     select: {
       id: true,
       total_cents: true,
+      top_up_cents: true,
       donor_email: true,
       comment: true,
       requires_shipping: true,
@@ -392,10 +473,16 @@ export async function createCheckoutForPledge(
 
   let walletDiscountCents = 0;
   if (donor && donor.balance_remaining > 0) {
-    walletDiscountCents = Math.min(donor.balance_remaining, pledge.total_cents);
+    // The additional contribution (top_up_cents) always comes from real
+    // money: the donor's wallet balance only offsets the incentive items,
+    // never the additional contribution itself.
+    const walletCoverableCents = pledge.total_cents - pledge.top_up_cents;
+    walletDiscountCents = Math.min(donor.balance_remaining, walletCoverableCents);
+
     const projectedCharge = pledge.total_cents - walletDiscountCents;
     if (projectedCharge > 0 && projectedCharge < STRIPE_MIN_CHARGE_CENTS) {
-      walletDiscountCents = pledge.total_cents - STRIPE_MIN_CHARGE_CENTS;
+      walletDiscountCents = Math.max(0, pledge.total_cents - STRIPE_MIN_CHARGE_CENTS);
+      walletDiscountCents = Math.min(walletDiscountCents, walletCoverableCents);
     }
 
     // Wallet covers everything — fulfill directly, no Stripe charge. Physical
@@ -412,15 +499,36 @@ export async function createCheckoutForPledge(
           include: { items: true },
         });
 
-        await prisma.$transaction(async (tx) => {
-          await fulfillPledge(tx, fullPledge, donor.id);
+        // Wallet fully covers the pledge, so no Stripe/webhook event ever
+        // fires and processDonation() is never reached. Create the Donation
+        // row here (external_id = wallet-<uuid>) so this shows up in the
+        // donor's history like any other donation (#43). amount_cents is the
+        // wallet spend that fulfilled the pledge (the full total).
+        const walletExternalId = `wallet-${crypto.randomUUID()}`;
+        await withWebhooks(async (tx, emit, tiltify) => {
+          // Same routing as every other donation: the pledge's Channel and its Event.
+          const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
+          const created = await tx.donation.create({
+            data: {
+              external_id: walletExternalId,
+              donor_id: donor.id,
+              amount_cents: pledge.total_cents,
+              comment: fullPledge.comment ?? null,
+              donor_name: fullPledge.display_name ?? null,
+              channel_id: route.channelId,
+              event_id: route.eventId,
+            },
+          });
+          await fulfillPledge(tx, fullPledge, donor.id, created.id);
           await tx.pendingPledge.update({
             where: { pledge_token: pledgeToken },
             data: {
               wallet_discount_cents: pledge.total_cents,
               status: 'FULFILLED',
+              fulfilled_by_donation_id: created.id,
             },
           });
+          await publishRoutedDonation(emit, tiltify, created);
         });
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>

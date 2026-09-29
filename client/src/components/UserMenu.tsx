@@ -8,7 +8,7 @@ function fmt(cents: number) {
 }
 
 const menuLinkClass =
-  'block px-3 py-2 rounded-sm font-data font-bold text-sm tracking-wider lowercase text-off-white/80 hover:text-off-white hover:bg-white/5';
+  'block px-3 py-2 rounded-sm font-data font-bold text-sm tracking-wider uppercase text-off-white/80 hover:text-off-white hover:bg-white/5';
 
 export default function UserMenu({
   donor,

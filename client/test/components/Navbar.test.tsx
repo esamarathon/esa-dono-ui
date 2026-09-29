@@ -9,13 +9,25 @@ vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
-vi.mock('../../src/api/events', () => ({ getEvents: vi.fn() }));
+vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
+vi.mock('../../src/api/pledge', () => ({ createPledge: vi.fn(), getPledge: vi.fn() }));
+vi.mock('../../src/api/featureFlags', () => ({ getFeatureFlags: vi.fn() }));
+vi.mock('../../src/lib/tracing', () => ({
+  track: vi.fn(),
+  trackAsync: vi.fn((_n: string, fn: () => unknown) => fn()),
+  identifyDonor: vi.fn(),
+}));
+vi.mock('../../src/utils/authToken', () => ({
+  isSessionActive: () => localStorage.getItem('donor_session_active') === '1',
+  endSession: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getDonor } from '../../src/api/donor';
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
-import { getEvents } from '../../src/api/events';
+import { getChannels } from '../../src/api/channels';
+import { getFeatureFlags } from '../../src/api/featureFlags';
 
 function renderNavbar() {
   return render(
@@ -47,10 +59,12 @@ describe('Navbar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
-    vi.mocked(getEvents).mockResolvedValue([]);
+    vi.mocked(getChannels).mockResolvedValue([]);
+    vi.mocked(getFeatureFlags).mockResolvedValue({});
   });
 
   it('shows a plain login link when no donor token is present', async () => {
@@ -60,7 +74,7 @@ describe('Navbar', () => {
   });
 
   it('combines wallet/logout into a user dropdown for a plain USER donor, hiding moderate/admin', async () => {
-    localStorage.setItem('donor_token', 'test-token');
+    localStorage.setItem('donor_session_active', '1');
     vi.mocked(getDonor).mockResolvedValue(donor({ role: 'USER' }));
 
     renderNavbar();
@@ -78,7 +92,7 @@ describe('Navbar', () => {
   });
 
   it('shows moderate but not admin for a MODERATOR donor', async () => {
-    localStorage.setItem('donor_token', 'test-token');
+    localStorage.setItem('donor_session_active', '1');
     vi.mocked(getDonor).mockResolvedValue(donor({ role: 'MODERATOR' }));
 
     renderNavbar();
@@ -91,7 +105,7 @@ describe('Navbar', () => {
   });
 
   it('shows both moderate and admin for an ADMIN donor', async () => {
-    localStorage.setItem('donor_token', 'test-token');
+    localStorage.setItem('donor_session_active', '1');
     vi.mocked(getDonor).mockResolvedValue(donor({ role: 'ADMIN' }));
 
     renderNavbar();
@@ -101,5 +115,33 @@ describe('Navbar', () => {
 
     expect(await screen.findByText('moderate')).toBeDefined();
     expect(await screen.findByText('admin')).toBeDefined();
+  });
+
+  it('shows a cart badge when items are in the cart', async () => {
+    sessionStorage.setItem(
+      'donation_cart_v1',
+      JSON.stringify({
+        cart: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }],
+        topUp: '',
+        comment: '',
+        channelId: null,
+      }),
+    );
+
+    renderNavbar();
+
+    expect(await screen.findByText(/1/)).toBeDefined();
+  });
+
+  it('hides the auctions nav link when the auctions feature flag is disabled/absent', async () => {
+    renderNavbar();
+    await screen.findByText('login');
+    expect(screen.queryByText('auctions')).toBeNull();
+  });
+
+  it('shows the auctions nav link when the auctions feature flag is enabled', async () => {
+    vi.mocked(getFeatureFlags).mockResolvedValue({ auctions: true });
+    renderNavbar();
+    expect(await screen.findByText('auctions')).toBeDefined();
   });
 });

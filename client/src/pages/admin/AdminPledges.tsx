@@ -31,7 +31,7 @@ export default function AdminPledges() {
 
   return (
     <div>
-      <h1 className="font-display text-4xl lowercase mb-4">pledges</h1>
+      <h1 className="font-display text-4xl uppercase mb-4">pledges</h1>
       <p className="font-body text-sm text-off-white/55 mb-4">
         {pledges.length} total pledges. Each pledge is created when a donor builds a cart, then
         fulfilled when a matching donation arrives.

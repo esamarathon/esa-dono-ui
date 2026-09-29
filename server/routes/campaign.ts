@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
+import { countedDonation } from '../lib/donationTotals.js';
 
 const router = Router();
 
 const STUB_CAMPAIGN = {
   name: 'ESA Charity Marathon',
   description:
-    'A charity speedrunning event raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!',
+    'A charity speedrunning channel raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!',
   goal: { value: '5000.00' },
 };
 
@@ -14,7 +15,10 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const goalCents = Number(process.env.CAMPAIGN_GOAL_CENTS || '500000');
 
+    // Completed and wallet-refunded donations count; chargebacks do not (lib/donationTotals.ts).
+    // Hidden donations still count; hiding is a display decision.
     const { _sum } = await prisma.donation.aggregate({
+      where: countedDonation,
       _sum: { amount_cents: true },
     });
 
@@ -26,6 +30,20 @@ router.get('/', async (_req: Request, res: Response) => {
   } catch (err) {
     console.error('Campaign error:', err);
     res.status(500).json({ error: 'Failed to fetch campaign' });
+  }
+});
+
+router.get('/broadcast', async (_req: Request, res: Response) => {
+  try {
+    const broadcast = await prisma.broadcast.findFirst();
+    res.json(
+      broadcast && broadcast.is_active
+        ? { message: broadcast.message, level: broadcast.level }
+        : { message: null, level: null },
+    );
+  } catch (err) {
+    console.error('Broadcast error:', err);
+    res.status(500).json({ error: 'Failed to fetch broadcast' });
   }
 });
 

@@ -1,25 +1,32 @@
 import type { Request, Response, NextFunction } from 'express';
 import { donorAuth } from './donorAuth.js';
 import { hasModeratorAccess } from '../lib/roles.js';
+import { parseCredential } from '../lib/authHeader.js';
 
 /**
- * Grants moderator-level access via any of:
- *  - `X-Admin-Key` matching `ADMIN_API_KEY` (admin supersedes moderator)
- *  - `X-Moderator-Key` matching `MODERATOR_API_KEY` (operational fallback,
- *    independent of the magic-link/role system)
- *  - an authenticated donor whose role is MODERATOR or ADMIN
+ * Grants moderator-level access via any of (ADR 0004):
+ *  - `Authorization: Bearer key_admin_<key>` matching `ADMIN_API_KEY`
+ *    (admin supersedes moderator)
+ *  - `Authorization: Bearer key_mod_<key>` matching `MODERATOR_API_KEY`
+ *    (operational fallback, independent of the magic-link/role system)
+ *  - an authenticated donor (session cookie or Bearer donor token) whose role
+ *    is MODERATOR or ADMIN
  */
 export async function moderatorAuth(req: Request, res: Response, next: NextFunction) {
-  const adminKey = req.headers['x-admin-key'];
-  if (adminKey && process.env.ADMIN_API_KEY && adminKey === process.env.ADMIN_API_KEY) {
+  const cred = parseCredential(req);
+
+  if (
+    cred?.kind === 'admin-key' &&
+    process.env.ADMIN_API_KEY &&
+    cred.key === process.env.ADMIN_API_KEY
+  ) {
     return next();
   }
 
-  const moderatorKey = req.headers['x-moderator-key'];
   if (
-    moderatorKey &&
+    cred?.kind === 'moderator-key' &&
     process.env.MODERATOR_API_KEY &&
-    moderatorKey === process.env.MODERATOR_API_KEY
+    cred.key === process.env.MODERATOR_API_KEY
   ) {
     return next();
   }

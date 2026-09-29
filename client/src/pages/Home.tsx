@@ -1,23 +1,14 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getCampaign } from '../api/campaign';
+import { useCampaign } from '../context/CampaignContext';
 import ProgressBar from '../components/ProgressBar';
 import LoadingSpinner from '../components/LoadingSpinner';
-import type { Campaign } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 }
 
 export default function Home() {
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getCampaign()
-      .then(setCampaign)
-      .catch(() => setError('Failed to load campaign data.'));
-  }, []);
+  const { campaign, raisedCents, goalCents, error } = useCampaign();
 
   if (error)
     return (
@@ -27,24 +18,13 @@ export default function Home() {
     );
   if (!campaign) return <LoadingSpinner />;
 
-  const raised = campaign.amount_raised?.value
-    ? Math.round(parseFloat(campaign.amount_raised.value) * 100)
-    : campaign.total_amount_raised?.value
-      ? Math.round(parseFloat(campaign.total_amount_raised.value) * 100)
-      : 0;
-  const goal = campaign.goal?.value
-    ? Math.round(parseFloat(campaign.goal.value) * 100)
-    : campaign.fundraising_goal?.value
-      ? Math.round(parseFloat(campaign.fundraising_goal.value) * 100)
-      : 0;
-
   return (
     <div className="max-w-3xl mx-auto p-8">
       <div className="text-center mb-8">
         <p className="font-mono text-[10px] font-bold tracking-[0.35em] uppercase text-d-yellow mb-2">
           European Speedrunner Assembly
         </p>
-        <h1 className="font-display text-5xl lowercase text-off-white mb-2">
+        <h1 className="font-display text-5xl uppercase text-off-white mb-2">
           {campaign.name ?? campaign.title ?? 'Campaign'}
         </h1>
       </div>
@@ -60,18 +40,18 @@ export default function Home() {
         <div className="flex justify-between mb-2">
           <span className="font-data font-bold text-sm text-off-white/55">raised</span>
           <span className="font-data font-bold text-sm text-d-yellow">
-            {fmt(raised)} / {fmt(goal)}
+            {fmt(raisedCents)} / {fmt(goalCents)}
           </span>
         </div>
-        <ProgressBar value={raised} max={goal} />
+        <ProgressBar value={raisedCents} max={goalCents} />
         <p className="text-center font-data text-sm text-off-white/55 mt-2">
-          {goal > 0 ? `${Math.round((raised / goal) * 100)}% of goal` : ''}
+          {goalCents > 0 ? `${Math.round((raisedCents / goalCents) * 100)}% of goal` : ''}
         </p>
 
         {/* Primary CTA — incentive cart wizard */}
         <Link
           to="/donate"
-          className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide lowercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
+          className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
           style={{ background: 'var(--d-yellow)' }}
         >
           contribute now

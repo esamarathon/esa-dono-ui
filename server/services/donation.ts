@@ -1,10 +1,11 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
-import type { ShippingAddress } from '@dono/shared';
-import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
+import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
   externalId: string;
@@ -14,8 +15,13 @@ interface ProcessDonationOptions {
   comment?: string | null;
   pledgeToken?: string | null;
   shippingCents?: number;
-  shippingAddress?: ShippingAddress | null;
+  channelId?: string | null;
+  /** Route to this Event's primary Channel when no Channel is given (PRD-0002 §E5). */
   eventId?: string | null;
+  /** Backdates Donation.created_at (#62) — e.g. when recording a donation
+   * actually received on an external platform on an earlier date. Defaults
+   * to now when omitted. */
+  occurredAt?: Date | null;
 }
 
 /**
@@ -50,23 +56,58 @@ export async function processDonation({
   comment,
   pledgeToken,
   shippingCents = 0,
-  shippingAddress = null,
+  channelId = null,
   eventId = null,
+  occurredAt = null,
+}: ProcessDonationOptions) {
+  return withSpan('donation.process', async () => {
+    return processDonationInner({
+      externalId,
+      email,
+      donorName,
+      amountCents,
+      comment,
+      pledgeToken,
+      shippingCents,
+      channelId,
+      eventId,
+      occurredAt,
+    });
+  });
+}
+
+async function processDonationInner({
+  externalId,
+  email,
+  donorName,
+  amountCents,
+  comment,
+  pledgeToken,
+  shippingCents = 0,
+  channelId = null,
+  eventId = null,
+  occurredAt = null,
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
   // Shipping is passed through to Stripe, not donated — exclude it from the
   // spendable wallet balance (but keep the full amount in total_donated).
   const creditedCents = amountCents - shippingCents;
 
+  let result: {
+    donor: { id: string; magic_token: string | null; email: string; balance_remaining: number };
+    donation: {
+      id: string;
+      external_id: string;
+      channel_id: string | null;
+      event_id: string | null;
+    };
+    pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
+  } | null = null;
   try {
-    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit, tiltify) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
-      // Donating never grants or changes role. Moderator/admin access is
-      // resolved per-request from ADMIN_EMAILS/MODERATOR_EMAILS allowlists
-      // (see server/lib/roles.ts) or assigned explicitly via the admin API —
-      // never as a side effect of payment.
       const donor = await tx.donor.upsert({
         where: { email: normalizedEmail },
         update: {
@@ -83,6 +124,18 @@ export async function processDonation({
         },
       });
 
+      // Resolve the pledge first: its Channel routes the donation (PRD-0002 §E5).
+      let pledge: Awaited<ReturnType<typeof resolvePledge>> = null;
+      try {
+        pledge = await resolvePledge({ pledgeToken, email: normalizedEmail, amountCents }, tx);
+      } catch (pledgeErr) {
+        console.error('Pledge resolution error (non-fatal):', pledgeErr);
+      }
+      const route = await resolveDonationRoute(tx, {
+        channelId: pledge?.channel_id ?? channelId,
+        eventId,
+      });
+
       const donation = await tx.donation.create({
         data: {
           external_id: externalId,
@@ -90,38 +143,41 @@ export async function processDonation({
           amount_cents: amountCents,
           donor_name: donorName,
           comment: comment ?? null,
-          event_id: eventId ?? null,
+          channel_id: route.channelId,
+          event_id: route.eventId,
+          ...(occurredAt ? { created_at: occurredAt } : {}),
         },
       });
 
-      // Try to resolve and fulfill a pledge
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
-      try {
-        const pledge = await resolvePledge({
-          pledgeToken,
-          email: normalizedEmail,
-          amountCents,
-        });
-        if (pledge) {
-          pledgeResult = await fulfillPledge(tx, pledge, donor.id, shippingAddress);
+      if (pledge) {
+        try {
+          pledgeResult = await fulfillPledge(tx, pledge, donor.id, donation.id);
           await tx.donation.update({
             where: { id: donation.id },
             data: {
               pledge: { connect: { id: pledge.id } },
               ...(pledge.comment ? { comment: pledge.comment } : {}),
-              ...(pledge.event_id ? { event_id: pledge.event_id } : {}),
+              ...(pledge.display_name ? { donor_name: pledge.display_name } : {}),
             },
           });
+        } catch (pledgeErr) {
+          console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
         }
-      } catch (pledgeErr) {
-        console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
+      }
+
+      // An unassigned donation is published when an admin assigns it (§E6).
+      if (route.channelId || route.eventId) {
+        // Re-read: pledge fulfilment may have set the comment and display name.
+        const final = await tx.donation.findUniqueOrThrow({ where: { id: donation.id } });
+        await publishRoutedDonation(emit, tiltify, final);
       }
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
         console.error('Email error:', err),
       );
 
-      return { donor, token: donor.magic_token, pledge: pledgeResult };
+      return { donor, donation, pledge: pledgeResult };
     });
   } catch (err) {
     if ((err as { code?: string }).code === 'P2002') {
@@ -129,6 +185,13 @@ export async function processDonation({
     }
     throw err;
   }
+
+  return {
+    donor: result!.donor,
+    token: result!.donor.magic_token,
+    pledge: result!.pledge,
+    donation: result!.donation,
+  };
 }
 
 /**

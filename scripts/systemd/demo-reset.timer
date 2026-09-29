@@ -1,0 +1,16 @@
+[Unit]
+Description=Reset the demo site overnight for a fresh daily baseline
+
+[Timer]
+# Reset once a day in the small hours, after the last sim run of the previous
+# day and before the first sim run of the new day (simulator-run.timer runs
+# 06:00-22:00 hourly). Adjust to taste — e.g. OnCalendar=*-*-* 03:00:00.
+OnCalendar=*-*-* 04:00:00
+# Run the missed occurrence on boot if the host was down when it was due.
+Persistent=true
+# Spread start time slightly to avoid thundering-herd if multiple timers fire
+# at once on this host.
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

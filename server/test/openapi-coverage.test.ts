@@ -73,10 +73,14 @@ describe('OpenAPI route coverage', () => {
     const { default: rewardsRouter } = await import('../routes/rewards.js');
     const { default: pollsRouter } = await import('../routes/polls.js');
     const { default: goalsRouter } = await import('../routes/goals.js');
+    const { default: channelsRouter } = await import('../routes/channels.js');
     const { default: eventsRouter } = await import('../routes/events.js');
     const { default: pledgeRouter } = await import('../routes/pledge.js');
+    const { default: authRouter } = await import('../routes/auth.js');
     const { default: adminRouter } = await import('../routes/admin.js');
     const { default: moderatorRouter } = await import('../routes/moderator.js');
+    const { default: auctionsRouter } = await import('../routes/auctions.js');
+    const { default: tiltifyRouter } = await import('../routes/tiltify.js');
 
     app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
     app.use(express.json());
@@ -86,10 +90,14 @@ describe('OpenAPI route coverage', () => {
     app.use('/api/rewards', rewardsRouter);
     app.use('/api/polls', pollsRouter);
     app.use('/api/goals', goalsRouter);
+    app.use('/api/channels', channelsRouter);
     app.use('/api/events', eventsRouter);
     app.use('/api/pledge', pledgeRouter);
+    app.use('/api/auth', authRouter);
     app.use('/api/admin', adminRouter);
     app.use('/api/moderator', moderatorRouter);
+    app.use('/api/auctions', auctionsRouter);
+    app.use('/api/tiltify', tiltifyRouter);
 
     const expressRoutes = extractRoutes(app);
 

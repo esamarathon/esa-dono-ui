@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import donorRouter from '../../routes/donor.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -14,13 +15,14 @@ function createApp() {
   return app;
 }
 
-async function makeDonor(email: string) {
+async function makeDonor(email: string, verified = false) {
   const token = crypto.randomBytes(16).toString('hex');
   const donor = await prisma.donor.create({
     data: {
       email,
       magic_token: token,
       token_expires_at: new Date(Date.now() + 60_000),
+      email_verified: verified,
     },
   });
   return { donor, token };
@@ -40,7 +42,9 @@ describe('GET /api/donor', () => {
     const email = `user-${Date.now()}-${Math.random()}@example.com`;
     const { token, donor } = await makeDonor(email);
 
-    const res = await request(createApp()).get('/api/donor').query({ token });
+    const res = await request(createApp())
+      .get('/api/donor')
+      .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('USER');
 
@@ -49,10 +53,12 @@ describe('GET /api/donor', () => {
 
   it('reports the effective ADMIN_EMAILS-resolved role, not the stale persisted role', async () => {
     const email = `admin-${Date.now()}-${Math.random()}@example.com`;
-    const { token, donor } = await makeDonor(email);
+    const { token, donor } = await makeDonor(email, true);
     process.env.ADMIN_EMAILS = email;
 
-    const res = await request(createApp()).get('/api/donor').query({ token });
+    const res = await request(createApp())
+      .get('/api/donor')
+      .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     // Persisted role in the DB is still USER — this is the regression this
     // guards: the route must not silently overwrite req.donor's resolved
@@ -66,13 +72,53 @@ describe('GET /api/donor', () => {
 
   it('reports the effective MODERATOR_EMAILS-resolved role', async () => {
     const email = `mod-${Date.now()}-${Math.random()}@example.com`;
-    const { token, donor } = await makeDonor(email);
+    const { token, donor } = await makeDonor(email, true);
     process.env.MODERATOR_EMAILS = email;
 
-    const res = await request(createApp()).get('/api/donor').query({ token });
+    const res = await request(createApp())
+      .get('/api/donor')
+      .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('MODERATOR');
 
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it("includes each donation's channel (#53)", async () => {
+    const email = `chan-${Date.now()}-${Math.random()}@example.com`;
+    const { token, donor } = await makeDonor(email);
+    const channel = await createTestChannel(prisma, {
+      name: `Main Marathon ${crypto.randomUUID()}`,
+    });
+    const channeled = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 1000,
+        channel_id: channel.id,
+      },
+    });
+    const shared = await prisma.donation.create({
+      data: {
+        external_id: `ext-${crypto.randomUUID()}`,
+        donor_id: donor.id,
+        amount_cents: 500,
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/donor')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+
+    const channeledDonation = res.body.donations.find((d: { id: string }) => d.id === channeled.id);
+    expect(channeledDonation.channel).toMatchObject({ id: channel.id, name: channel.name });
+
+    const sharedDonation = res.body.donations.find((d: { id: string }) => d.id === shared.id);
+    expect(sharedDonation.channel).toBeNull();
+
+    await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+    await prisma.channel.delete({ where: { id: channel.id } });
     await prisma.donor.delete({ where: { id: donor.id } });
   });
 });

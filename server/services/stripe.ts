@@ -81,6 +81,81 @@ export async function createCheckoutSession({
   return { id: session.id, url: session.url };
 }
 
+export interface CreateAuctionCheckoutOptions {
+  amountCents: number;
+  email: string;
+  requiresShipping?: boolean;
+  expiresAt: Date;
+  metadata: Record<string, string>;
+}
+
+/**
+ * Create a Checkout Session for a single step of an auction's payment
+ * cascade. Unlike the donation/pledge flow, there is no pledge_token — the
+ * session is linked back to the auction purely via `metadata.auction_id`,
+ * read by the webhook on both `checkout.session.completed` (settlement) and
+ * `checkout.session.expired` (cascade advance).
+ *
+ * `requiresShipping` mirrors the pledge flow's PHYSICAL-item handling:
+ * Stripe collects the shipping address natively on its own hosted page and
+ * charges the configured shipping rate — the address never reaches this
+ * application or its database.
+ */
+export async function createAuctionCheckoutSession({
+  amountCents,
+  email,
+  requiresShipping = false,
+  expiresAt,
+  metadata,
+}: CreateAuctionCheckoutOptions): Promise<CreateCheckoutResult> {
+  const stripe = getStripe();
+  if (!stripe) {
+    throw new Error('STRIPE_SECRET_KEY is not configured');
+  }
+
+  const currency = process.env.STRIPE_CURRENCY || 'usd';
+  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
+  const shippingRateId = process.env.STRIPE_SHIPPING_RATE_ID || '';
+  const allowedCountries = (process.env.STRIPE_SHIPPING_ALLOWED_COUNTRIES || 'US')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
+
+  // Stripe caps Checkout Session expires_at at 24h out and requires at
+  // least 30 minutes; clamp defensively in case a caller passes something
+  // outside that window.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const requestedSec = Math.floor(expiresAt.getTime() / 1000);
+  const expiresAtSec = Math.min(Math.max(requestedSec, nowSec + 1800), nowSec + 86_400);
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency,
+          unit_amount: amountCents,
+          product_data: { name: 'Auction winning bid' },
+        },
+      },
+    ],
+    metadata,
+    customer_email: email,
+    expires_at: expiresAtSec,
+    success_url: `${baseUrl}/`,
+    cancel_url: `${baseUrl}/`,
+    ...(requiresShipping
+      ? {
+          shipping_address_collection: { allowed_countries: allowedCountries },
+          shipping_options: shippingRateId ? [{ shipping_rate: shippingRateId }] : undefined,
+        }
+      : {}),
+  });
+
+  return { id: session.id, url: session.url };
+}
+
 /**
  * Verify an inbound Stripe webhook signature. Returns the parsed event.
  * When STRIPE_WEBHOOK_SECRET is unset, verification is skipped and the raw body

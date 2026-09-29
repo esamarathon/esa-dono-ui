@@ -17,16 +17,17 @@ describe('API client', () => {
     vi.resetModules();
   });
 
-  it('creates an axios instance with /api base URL', async () => {
+  it('creates an axios instance with /api base URL and withCredentials', async () => {
     await import('../../src/api/client');
     const axios = (await import('axios')).default;
-    expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api' });
+    expect(axios.create).toHaveBeenCalledWith({ baseURL: '/api', withCredentials: true });
   });
 
-  it('registers a request interceptor', async () => {
+  it('does not attach any credential in JS (auth rides an httpOnly cookie)', async () => {
     await import('../../src/api/client');
     const axios = (await import('axios')).default;
     const instance = axios.create();
-    expect(instance.interceptors.request.use).toHaveBeenCalled();
+    // No request interceptor is registered — the browser sends the session cookie.
+    expect(instance.interceptors.request.use).not.toHaveBeenCalled();
   });
 });

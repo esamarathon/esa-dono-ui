@@ -9,21 +9,58 @@ import donorRouter from './routes/donor.js';
 import rewardsRouter from './routes/rewards.js';
 import pollsRouter from './routes/polls.js';
 import goalsRouter from './routes/goals.js';
+import channelsRouter from './routes/channels.js';
 import eventsRouter from './routes/events.js';
 import pledgeRouter from './routes/pledge.js';
+import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
+import auctionsRouter from './routes/auctions.js';
+import feedbackRouter from './routes/feedback.js';
+import tiltifyRouter from './routes/tiltify.js';
+import featureFlagsRouter from './routes/featureFlags.js';
+import { startWebhookDispatcher } from './services/webhooks/dispatcher.js';
 import prisma from './lib/prisma.js';
+import { httpMetrics } from './middleware/httpMetrics.js';
+import { metricsAuth } from './middleware/metricsAuth.js';
+import { apiLimit, metricsLimit } from './middleware/rateLimit.js';
+import { trustProxySetting } from './lib/trustProxy.js';
+import { register } from './lib/metrics.js';
+import { startMetricsRefresh } from './services/metrics.js';
+import { startAuctionScheduler } from './services/auctionScheduler.js';
+import { UPLOADS_DIR, ensureUploadsDir } from './lib/uploads.js';
+import { tracingMiddleware } from './lib/tracing.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Behind reverse proxies (the nginx frontend, maybe more): trust TRUST_PROXY hops
+// so req.ip (rate limiting) and secure-cookie detection reflect the real client.
+app.set('trust proxy', trustProxySetting(process.env.TRUST_PROXY));
+
 app.use(cors());
+// Trace every request (including the raw-body webhook) so donation processing
+// shows up in the same trace. Mounted before express.json()/routes.
+app.use(tracingMiddleware);
 
 // MUST mount webhook BEFORE express.json()
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
 
 app.use(express.json());
+app.use(httpMetrics);
+
+// Serve uploaded reward images — immutable cache headers (random uuid filenames
+// make long-caching safe).  Mounted before API routes so a CDN can later front
+// /api/uploads/ without any code change.
+await ensureUploadsDir();
+app.use(
+  '/api/uploads',
+  express.static(UPLOADS_DIR, {
+    immutable: true,
+    maxAge: '1y',
+    index: false,
+  }),
+);
 
 app.get('/api/health', async (_req: Request, res: Response) => {
   try {
@@ -33,6 +70,15 @@ app.get('/api/health', async (_req: Request, res: Response) => {
     res.status(503).json({ ok: false, db: false, error: (err as Error).message });
   }
 });
+
+app.get('/api/metrics', metricsLimit, metricsAuth, async (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', register.contentType);
+  res.send(await register.metrics());
+});
+
+// Global per-IP limit for everything below (#140). The Stripe webhook, uploads,
+// health and metrics are mounted above and are not counted.
+app.use('/api', apiLimit);
 
 app.get('/api/openapi.yaml', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/x-yaml');
@@ -49,9 +95,20 @@ app.use('/api/donor', donorRouter);
 app.use('/api/rewards', rewardsRouter);
 app.use('/api/polls', pollsRouter);
 app.use('/api/goals', goalsRouter);
+app.use('/api/channels', channelsRouter);
 app.use('/api/events', eventsRouter);
 app.use('/api/pledge', pledgeRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/feature-flags', featureFlagsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
+app.use('/api/auctions', auctionsRouter);
+app.use('/api/feedback', feedbackRouter);
+app.use('/api/tiltify', tiltifyRouter);
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  startWebhookDispatcher();
+});
+startMetricsRefresh();
+startAuctionScheduler();

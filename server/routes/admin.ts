@@ -2,38 +2,77 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
+import { countedDonation, countsTowardTotals } from '../lib/donationTotals.js';
+import { mountIdentityRoutes } from './identityRoutes.js';
+import { assignDonationChannel } from '../services/routing.js';
+import { httpError, sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
+import { deleteUploadByUrl } from '../lib/uploads.js';
 import { processDonation } from '../services/donation.js';
 import { refundGoalContributions, refundPollOptionVotes } from '../services/refund.js';
+import {
+  closeAuctionTx,
+  cancelAuctionTx,
+  reopenAuctionTx,
+  skipCurrentOfferTx,
+  resendCurrentOfferTx,
+} from '../services/auction.js';
+import { invalidateFlagCache } from '../services/featureFlags.js';
 import { TOKEN_TTL_MS } from '../config.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
+import { wakeDispatcher } from '../services/webhooks/dispatcher.js';
+import {
+  isWebhookMessageType,
+  buildIncentiveCreatedPayload,
+  buildIncentiveEnabledPayload,
+  buildIncentiveDisabledPayload,
+  buildIncentiveValueChangedPayload,
+  PAYLOAD_FORMATS,
+  TILTIFY_DEFAULT_EXCHANGE,
+} from '../services/webhooks/delivery.js';
 
 const router = Router();
 router.use(adminAuth);
 
 // Stats
 router.get('/stats', async (req, res) => {
-  const [donorCount, donationCount, claimCount, totalRaised, pledgeCount, events] =
-    await Promise.all([
-      prisma.donor.count(),
-      prisma.donation.count(),
-      prisma.rewardClaim.count(),
-      prisma.donation.aggregate({ _sum: { amount_cents: true } }),
-      prisma.pendingPledge.count(),
-      prisma.event.findMany({ orderBy: { created_at: 'asc' } }),
-    ]);
+  const [
+    donorCount,
+    donationCount,
+    claimCount,
+    totalRaised,
+    pledgeCount,
+    channels,
+    unallocatedCredits,
+  ] = await Promise.all([
+    prisma.donor.count(),
+    prisma.donation.count(),
+    prisma.rewardClaim.count(),
+    // Money totals: completed and wallet-refunded, not chargebacks (lib/donationTotals.ts).
+    prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
+    prisma.pendingPledge.count(),
+    prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
+    // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
+    // on a reward/poll/goal — i.e. the platform's total outstanding
+    // liability to donors, not visible anywhere except by summing every
+    // donor individually.
+    prisma.donor.aggregate({ _sum: { balance_remaining: true } }),
+  ]);
 
-  const perEvent = await Promise.all(
-    events.map(async (event) => {
+  const perChannel = await Promise.all(
+    channels.map(async (channel) => {
       const [sum, count] = await Promise.all([
         prisma.donation.aggregate({
-          where: { event_id: event.id },
+          where: { channel_id: channel.id, ...countedDonation },
           _sum: { amount_cents: true },
         }),
-        prisma.donation.count({ where: { event_id: event.id } }),
+        prisma.donation.count({ where: { channel_id: channel.id } }),
       ]);
       return {
-        id: event.id,
-        name: event.name,
+        id: channel.id,
+        name: channel.name,
+        slug: channel.slug,
+        event_id: channel.event_id,
         raised_cents: sum._sum.amount_cents ?? 0,
         donations: count,
       };
@@ -46,69 +85,122 @@ router.get('/stats', async (req, res) => {
     claims: claimCount,
     pledges: pledgeCount,
     total_raised_cents: totalRaised._sum.amount_cents ?? 0,
-    events: perEvent,
+    unallocated_credits_cents: unallocatedCredits._sum.balance_remaining ?? 0,
+    channels: perChannel,
   });
 });
 
-// Events CRUD
-router.get('/events', async (req, res) => {
-  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/events', async (req, res) => {
-  const { name, is_active } = req.body;
-  if (!name || !String(name).trim()) {
-    return res.status(400).json({ error: 'name is required' });
-  }
-  try {
-    const event = await prisma.event.create({
-      data: { name: String(name).trim(), is_active: is_active ?? true },
-    });
-    res.json(event);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
-    }
-    throw e;
-  }
-});
-
-router.put('/events/:id', async (req, res) => {
-  const { name, is_active } = req.body;
-  try {
-    const event = await prisma.event.update({
-      where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name: String(name).trim() } : {}),
-        ...(is_active !== undefined ? { is_active } : {}),
-      },
-    });
-    res.json(event);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Event name already exists' });
-    }
-    throw e;
-  }
-});
-
-// Soft-delete: events may be referenced by incentives/donations/pledges, so
-// deactivate instead of hard-deleting to preserve those references.
-router.delete('/events/:id', async (req, res) => {
-  const event = await prisma.event.update({
-    where: { id: req.params.id },
-    data: { is_active: false },
-  });
-  res.json({ success: true, event });
-});
+// Channels and Events (routes/identityRoutes.ts)
+mountIdentityRoutes(router);
 
 // Donations
+const DONATION_STATUSES = ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'];
+
 router.get('/donations', async (req, res) => {
+  const { status } = req.query;
+  const statuses = typeof status === 'string' ? status.split(',').filter(Boolean) : [];
+  if (statuses.some((s) => !DONATION_STATUSES.includes(s))) {
+    return res.status(400).json({ error: 'Invalid status filter' });
+  }
   const donations = await prisma.donation.findMany({
-    include: { donor: { select: { email: true } }, event: { select: { id: true, name: true } } },
+    where: statuses.length > 0 ? { status: { in: statuses } } : undefined,
+    include: {
+      donor: { select: { email: true } },
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
+    },
     orderBy: { created_at: 'desc' },
   });
   res.json(donations);
+});
+
+/**
+ * PATCH /admin/donations/:id/channel (PRD-0002 §E6)
+ * Assign an unassigned donation to a Channel (and so its Event), then publish it.
+ */
+router.patch('/donations/:id/channel', async (req, res) => {
+  try {
+    res.json(await assignDonationChannel(req.params.id, req.body?.channel_id));
+  } catch (e) {
+    sendError(res, e, '[donations]');
+  }
+});
+
+/**
+ * PATCH /admin/donations/:id/status (#63)
+ * Sets a donation's lifecycle status. Moving into REFUNDED/CHARGEBACK claws
+ * back whatever of the donation's amount is still sitting in the donor's
+ * unspent balance_remaining (capped there — already-spent credit is not
+ * cascaded through claims/votes/goals; use reverse-spend for that), records
+ * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
+ * has a refund_id it is terminal: no further status changes are allowed.
+ */
+
+router.patch('/donations/:id/status', async (req, res) => {
+  const { status, reason } = req.body;
+  if (!DONATION_STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+
+  try {
+    // One transaction, reading inside it: the checks, the balance clawback, the
+    // status and the totals messages see one state (a double submit cannot claw
+    // back twice).
+    const updated = await withWebhooks(async (tx, _emit, tiltify) => {
+      const donation = await tx.donation.findUnique({
+        where: { id: req.params.id },
+        include: { donor: true },
+      });
+      if (!donation) throw httpError(404, 'Donation not found');
+      if (donation.refund_id) {
+        throw httpError(400, 'Donation is refunded/charged back and cannot change status');
+      }
+      if (donation.status === status) {
+        throw httpError(400, 'Donation already has this status');
+      }
+
+      let refundId: string | undefined;
+      if (status === 'REFUNDED' || status === 'CHARGEBACK') {
+        // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
+        // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
+        // Donation.status value.
+        const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
+        const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
+        await tx.donor.update({
+          where: { id: donation.donor_id },
+          data: { balance_remaining: { decrement: clawback } },
+        });
+        const adjustment = await tx.balanceAdjustment.create({
+          data: {
+            donor_id: donation.donor_id,
+            amount_cents: -clawback,
+            balance_after_cents: donation.donor.balance_remaining - clawback,
+            type: adjustmentType,
+            reason: reason || `Donation ${status.toLowerCase()}`,
+            reference_id: donation.id,
+            created_by: 'admin',
+          },
+        });
+        refundId = adjustment.id;
+      }
+      const row = await tx.donation.update({
+        where: { id: donation.id },
+        data: { status, ...(refundId ? { refund_id: refundId } : {}) },
+        include: {
+          donor: { select: { email: true } },
+          channel: { select: { id: true, name: true, slug: true, event_id: true } },
+        },
+      });
+      // Publish the totals only when they move (PRD-0002 §T7): a chargeback lowers
+      // them; a refund goes to the donor's wallet and does not (lib/donationTotals.ts).
+      if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
+        await tiltify.totals(row.channel_id);
+      }
+      return row;
+    });
+    res.json(updated);
+  } catch (e) {
+    sendError(res, e, '[admin/donations/status]');
+  }
 });
 
 // Claims
@@ -157,19 +249,34 @@ router.post('/rewards', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
-  const reward = await prisma.reward.create({
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active: is_active ?? true,
-      custom_type_label,
-      event_id: event_id || null,
-    },
+  const reward = await withWebhooks(async (tx, emit) => {
+    const created = await tx.reward.create({
+      data: {
+        title,
+        description,
+        type,
+        cost_cents,
+        quantity_total: quantity_total ?? null,
+        is_active: is_active ?? true,
+        custom_type_label,
+        image_url: image_url || null,
+        channel_id: channel_id || null,
+      },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'REWARD',
+        incentiveId: created.id,
+        channelId: created.channel_id,
+        title: created.title,
+        isActive: created.is_active,
+        costCents: created.cost_cents,
+      }),
+    );
+    return created;
   });
   res.json(reward);
 });
@@ -183,40 +290,143 @@ router.put('/rewards/:id', async (req, res) => {
     quantity_total,
     is_active,
     custom_type_label,
-    event_id,
+    image_url,
+    channel_id,
   } = req.body;
-  const reward = await prisma.reward.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active,
-      custom_type_label,
-      event_id: event_id || null,
-    },
+  const prior = await prisma.reward.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Reward not found' });
+
+  if (prior.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(prior.image_url);
+  }
+  const reward = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.reward.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        type,
+        cost_cents,
+        quantity_total: quantity_total ?? null,
+        is_active,
+        custom_type_label,
+        image_url: image_url || null,
+        channel_id: channel_id || null,
+      },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    if (prior.cost_cents !== updated.cost_cents) {
+      const changedFields = ['cost_cents'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'REWARD',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+          changedFields,
+          oldCostCents: prior.cost_cents,
+          newCostCents: updated.cost_cents,
+        }),
+      );
+    }
+    return updated;
   });
   res.json(reward);
 });
 
 router.delete('/rewards/:id', async (req, res) => {
-  await prisma.reward.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    const claims = await prisma.rewardClaim.count({ where: { reward_id: req.params.id } });
+    if (claims > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete a reward with existing claims; deactivate it instead',
+      });
+    }
+    const existing = await prisma.reward.findUnique({
+      where: { id: req.params.id },
+      select: { image_url: true },
+    });
+    await prisma.reward.delete({ where: { id: req.params.id } });
+    await deleteUploadByUrl(existing?.image_url);
+    res.json({ success: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'P2025') return res.status(404).json({ error: 'Reward not found' });
+    if (code === 'P2003') {
+      return res.status(409).json({
+        error: 'Cannot delete a reward with existing claims; deactivate it instead',
+      });
+    }
+    throw err;
+  }
 });
 
-// Simulate donation
+// Add donation (manual entry for real donations received externally, e.g.
+// HEKATHON — #62; also doubles as the dev/test "simulate donation" tool).
 router.post('/simulate-donation', async (req, res) => {
   try {
-    const { email, donor_name, amount_cents, comment, pledge_token, event_id } = req.body;
+    const {
+      email,
+      donor_name,
+      amount_cents,
+      comment,
+      pledge_token,
+      channel_id,
+      event_id,
+      external_id,
+      occurred_at,
+    } = req.body;
     const cents = Number(amount_cents);
     if (!email || !Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
       return res
         .status(400)
         .json({ error: `email and amount_cents (min ${MIN_SPEND_CENTS}) required` });
     }
-    const externalId = `sim-${crypto.randomUUID()}`;
+
+    let occurredAt: Date | null = null;
+    if (occurred_at) {
+      const parsed = new Date(occurred_at);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'occurred_at must be a valid date' });
+      }
+      occurredAt = parsed;
+    }
+
+    // A caller-supplied external_id lets an admin record a real donation
+    // received on another platform using that platform's own reference (for
+    // dedup/traceability) instead of an opaque auto-generated id. Falls back
+    // to a fresh sim-<uuid> for plain dev/test simulations, matching prior
+    // behavior.
+    let externalId: string;
+    if (external_id != null) {
+      externalId = String(external_id).trim();
+      if (!externalId) {
+        return res.status(400).json({ error: 'external_id must not be empty when provided' });
+      }
+    } else {
+      externalId = `sim-${crypto.randomUUID()}`;
+    }
+
     const result = await processDonation({
       externalId,
       email,
@@ -224,12 +434,14 @@ router.post('/simulate-donation', async (req, res) => {
       amountCents: cents,
       comment: comment || null,
       pledgeToken: pledge_token || null,
+      channelId: channel_id || null,
       eventId: event_id || null,
+      occurredAt,
     });
     if ('duplicate' in result) {
-      // sim always uses a fresh externalId, so this branch is unreachable;
-      // narrow the union for TypeScript without altering behavior.
-      throw new Error('Duplicate donation');
+      return res
+        .status(409)
+        .json({ error: `A donation with external_id "${externalId}" already exists` });
     }
     res.json({
       success: true,
@@ -240,10 +452,14 @@ router.post('/simulate-donation', async (req, res) => {
         balance_remaining: result.donor.balance_remaining,
       },
       pledge: result.pledge || null,
+      donation: {
+        id: result.donation.id,
+        channel_id: result.donation.channel_id,
+        event_id: result.donation.event_id,
+      },
     });
   } catch (err) {
-    console.error('Simulate donation error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, '[simulate-donation]');
   }
 });
 
@@ -261,6 +477,27 @@ router.get('/donors', async (req, res) => {
     prisma.donor.count({ where }),
   ]);
   res.json({ donors, total });
+});
+
+router.post('/donors', async (req, res) => {
+  const { email, role } = req.body;
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  if (role && !['USER', 'MODERATOR', 'ADMIN'].includes(role)) {
+    return res.status(400).json({ error: 'role must be USER, MODERATOR, or ADMIN' });
+  }
+  try {
+    const donor = await prisma.donor.create({
+      data: { email: String(email).trim().toLowerCase(), role: role || 'USER' },
+    });
+    res.json(donor);
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2002') {
+      return res.status(409).json({ error: 'Donor with this email already exists' });
+    }
+    throw e;
+  }
 });
 
 router.get('/donors/:id', async (req, res) => {
@@ -367,6 +604,98 @@ router.post('/donors/:id/adjust-balance', async (req, res) => {
     balance_after: balanceAfter,
     adjustment: cents,
   });
+});
+
+/**
+ * POST /admin/donors/sweep-credits
+ * Bulk credit sweep-out (#60): zeros balance_remaining for every donor
+ * matching an optional balance-range filter. Two-step confirmation:
+ *   - confirm omitted/false → dry-run PREVIEW only (donor_count, total_cents,
+ *     and a small sample) — nothing is written.
+ *   - confirm: true → actually performs the sweep.
+ * This mirrors the client's own "are you sure?" dialog with a
+ * server-enforced confirmation, so a bulk zero-out can never happen from a
+ * single accidental request.
+ *
+ * Each swept donor gets a FREEZE_ZERO BalanceAdjustment. Donor has no name
+ * field (see #57) — reason references the donor's most recent donation's
+ * self-reported donor_name (or "Anonymous") so the audit trail is
+ * human-readable instead of just a bare donor id.
+ */
+router.post('/donors/sweep-credits', async (req, res) => {
+  const { min_balance_cents, max_balance_cents, confirm } = req.body;
+
+  const where: {
+    balance_remaining: { gt: number; gte?: number; lte?: number };
+  } = { balance_remaining: { gt: 0 } };
+  if (min_balance_cents != null) {
+    const min = Number(min_balance_cents);
+    if (!Number.isInteger(min) || min < 0) {
+      return res.status(400).json({ error: 'min_balance_cents must be a non-negative integer' });
+    }
+    where.balance_remaining.gte = min;
+  }
+  if (max_balance_cents != null) {
+    const max = Number(max_balance_cents);
+    if (!Number.isInteger(max) || max < 0) {
+      return res.status(400).json({ error: 'max_balance_cents must be a non-negative integer' });
+    }
+    where.balance_remaining.lte = max;
+  }
+
+  const donors = await prisma.donor.findMany({
+    where,
+    select: {
+      id: true,
+      balance_remaining: true,
+      donations: {
+        orderBy: { created_at: 'desc' },
+        take: 1,
+        select: { donor_name: true },
+      },
+    },
+  });
+
+  const totalCents = donors.reduce((sum, d) => sum + d.balance_remaining, 0);
+
+  if (confirm !== true) {
+    return res.json({
+      preview: true,
+      donor_count: donors.length,
+      total_cents: totalCents,
+      sample: donors.slice(0, 10).map((d) => ({
+        id: d.id,
+        balance_remaining: d.balance_remaining,
+        donor_name: d.donations[0]?.donor_name ?? null,
+      })),
+    });
+  }
+
+  if (donors.length > 0) {
+    await prisma.$transaction(
+      donors.flatMap((d) => {
+        const displayName = d.donations[0]?.donor_name || 'Anonymous';
+        return [
+          prisma.donor.update({
+            where: { id: d.id },
+            data: { balance_remaining: { decrement: d.balance_remaining } },
+          }),
+          prisma.balanceAdjustment.create({
+            data: {
+              donor_id: d.id,
+              amount_cents: -d.balance_remaining,
+              balance_after_cents: 0,
+              type: 'FREEZE_ZERO',
+              reason: `Bulk credit sweep (${displayName})`,
+              created_by: 'admin',
+            },
+          }),
+        ];
+      }),
+    );
+  }
+
+  res.json({ success: true, donor_count: donors.length, total_cents: totalCents });
 });
 
 router.post('/donors/:id/reverse-spend', async (req, res) => {
@@ -545,23 +874,36 @@ router.post('/polls', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
-  const poll = await prisma.poll.create({
-    data: {
-      title,
-      description,
-      is_active: is_active ?? true,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
-      options: options?.length
-        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
-        : undefined,
-    },
-    include: { options: true },
+  const poll = await withWebhooks(async (tx, emit) => {
+    const created = await tx.poll.create({
+      data: {
+        title,
+        description,
+        is_active: is_active ?? true,
+        ends_at: ends_at ? new Date(ends_at) : null,
+        allow_custom_entries: allow_custom_entries ?? false,
+        max_entry_chars: max_entry_chars ?? null,
+        auto_approve: auto_approve ?? true,
+        channel_id: channel_id || null,
+        options: options?.length
+          ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+          : undefined,
+      },
+      include: { options: true },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'POLL',
+        incentiveId: created.id,
+        channelId: created.channel_id,
+        title: created.title,
+        isActive: created.is_active,
+        endsAt: created.ends_at,
+      }),
+    );
+    return created;
   });
   res.json(poll);
 });
@@ -575,21 +917,67 @@ router.put('/polls/:id', async (req, res) => {
     allow_custom_entries,
     max_entry_chars,
     auto_approve,
-    event_id,
+    channel_id,
   } = req.body;
-  const poll = await prisma.poll.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      is_active,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      event_id: event_id || null,
-    },
-    include: { options: true },
+
+  const prior = await prisma.poll.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Poll not found' });
+
+  const poll = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.poll.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        is_active,
+        ends_at: ends_at ? new Date(ends_at) : null,
+        allow_custom_entries: allow_custom_entries ?? false,
+        max_entry_chars: max_entry_chars ?? null,
+        auto_approve: auto_approve ?? true,
+        channel_id: channel_id || null,
+      },
+      include: { options: true },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    const oldEndsAt = prior.ends_at ? new Date(prior.ends_at) : null;
+    const newEndsAt = updated.ends_at ? new Date(updated.ends_at) : null;
+    const oldEndsMs = oldEndsAt ? oldEndsAt.getTime() : null;
+    const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
+    if (oldEndsMs !== newEndsMs) {
+      const changedFields = ['ends_at'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'POLL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+          changedFields,
+          oldEndsAt,
+          newEndsAt,
+        }),
+      );
+    }
+    return updated;
   });
   res.json(poll);
 });
@@ -602,6 +990,18 @@ router.delete('/polls/:id', async (req, res) => {
 router.post('/polls/:id/options', async (req, res) => {
   const option = await prisma.pollOption.create({
     data: { poll_id: req.params.id, label: req.body.label },
+  });
+  res.json(option);
+});
+
+router.patch('/polls/options/:id', async (req, res) => {
+  const { label } = req.body;
+  if (!label || !String(label).trim()) {
+    return res.status(400).json({ error: 'label is required' });
+  }
+  const option = await prisma.pollOption.update({
+    where: { id: req.params.id },
+    data: { label: String(label).trim() },
   });
   res.json(option);
 });
@@ -676,45 +1076,114 @@ router.get('/goals', async (req, res) => {
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, event_id } = req.body;
-  const goal = await prisma.fundGoal.create({
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active: is_active ?? true,
-      event_id: event_id || null,
-    },
+  const { title, description, target_cents, is_active, channel_id } = req.body;
+  const goal = await withWebhooks(async (tx, emit) => {
+    const created = await tx.fundGoal.create({
+      data: {
+        title,
+        description,
+        target_cents,
+        is_active: is_active ?? true,
+        channel_id: channel_id || null,
+      },
+    });
+    await emit('incentive.created', () =>
+      buildIncentiveCreatedPayload({
+        incentiveKind: 'GOAL',
+        incentiveId: created.id,
+        channelId: created.channel_id,
+        title: created.title,
+        isActive: created.is_active,
+        targetCents: created.target_cents,
+      }),
+    );
+    return created;
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
-  const { title, description, target_cents, is_active, is_complete, event_id } = req.body;
-  const goal = await prisma.fundGoal.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active,
-      is_complete,
-      event_id: event_id || null,
-    },
+  const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
+
+  const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
+  if (!prior) return res.status(404).json({ error: 'Goal not found' });
+
+  const goal = await withWebhooks(async (tx, emit) => {
+    const updated = await tx.fundGoal.update({
+      where: { id: req.params.id },
+      data: {
+        title,
+        description,
+        target_cents,
+        is_active,
+        is_complete,
+        channel_id: channel_id || null,
+      },
+    });
+
+    if (!prior.is_active && updated.is_active) {
+      await emit('incentive.enabled', () =>
+        buildIncentiveEnabledPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    } else if (prior.is_active && !updated.is_active) {
+      await emit('incentive.disabled', () =>
+        buildIncentiveDisabledPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+        }),
+      );
+    }
+
+    if (prior.target_cents !== updated.target_cents) {
+      const changedFields = ['target_cents'];
+      await emit('incentive.value_changed', () =>
+        buildIncentiveValueChangedPayload({
+          incentiveKind: 'GOAL',
+          incentiveId: updated.id,
+          channelId: updated.channel_id,
+          title: updated.title,
+          changedFields,
+          oldTargetCents: prior.target_cents,
+          newTargetCents: updated.target_cents,
+        }),
+      );
+    }
+    return updated;
   });
   res.json(goal);
 });
 
 router.delete('/goals/:id', async (req, res) => {
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
+    if (!prior) return res.status(404).json({ error: 'Goal not found' });
+
+    const result = await withWebhooks(async (tx, emit) => {
       const refund = await refundGoalContributions(tx, req.params.id);
       await tx.fundGoal.update({
         where: { id: req.params.id },
         data: { is_active: false },
       });
+      if (prior.is_active) {
+        await emit('incentive.disabled', () =>
+          buildIncentiveDisabledPayload({
+            incentiveKind: 'GOAL',
+            incentiveId: prior.id,
+            channelId: prior.channel_id,
+            title: prior.title,
+          }),
+        );
+      }
       return refund;
     });
+
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -730,6 +1199,630 @@ router.post('/goals/:id/refund', async (req, res) => {
     const status = (err as { status?: number }).status || 500;
     res.status(status).json({ error: (err as Error).message });
   }
+});
+
+// Auctions CRUD
+router.get('/auctions', async (req, res) => {
+  res.json(
+    await prisma.auction.findMany({
+      orderBy: { created_at: 'desc' },
+      include: { current_offer: true },
+    }),
+  );
+});
+
+router.post('/auctions', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
+    return res.status(400).json({
+      error: 'title, type, starting_price_cents, min_increment_cents, and ends_at are required',
+    });
+  }
+  const auction = await prisma.auction.create({
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      starting_price_cents,
+      min_increment_cents,
+      ends_at: new Date(ends_at),
+      is_active: is_active ?? true,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.put('/auctions/:id', async (req, res) => {
+  const {
+    title,
+    description,
+    type,
+    custom_type_label,
+    image_url,
+    starting_price_cents,
+    min_increment_cents,
+    ends_at,
+    is_active,
+    channel_id,
+  } = req.body;
+  const existing = await prisma.auction.findUnique({
+    where: { id: req.params.id },
+    select: { image_url: true, status: true },
+  });
+  if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  if (existing.image_url !== (image_url || null)) {
+    await deleteUploadByUrl(existing.image_url);
+  }
+  const auction = await prisma.auction.update({
+    where: { id: req.params.id },
+    data: {
+      title,
+      description,
+      type,
+      custom_type_label,
+      image_url: image_url || null,
+      // Pricing/deadline are only safe to change while bidding is still open.
+      ...(existing.status === 'OPEN'
+        ? {
+            starting_price_cents,
+            min_increment_cents,
+            ends_at: ends_at ? new Date(ends_at) : undefined,
+          }
+        : {}),
+      is_active,
+      channel_id: channel_id || null,
+    },
+  });
+  res.json(auction);
+});
+
+router.delete('/auctions/:id', async (req, res) => {
+  try {
+    const bidCount = await prisma.bid.count({ where: { auction_id: req.params.id } });
+    if (bidCount > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete an auction with existing bids; cancel or deactivate it instead',
+      });
+    }
+    const existing = await prisma.auction.findUnique({
+      where: { id: req.params.id },
+      select: { image_url: true },
+    });
+    await prisma.auction.delete({ where: { id: req.params.id } });
+    await deleteUploadByUrl(existing?.image_url);
+    res.json({ success: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === 'P2025') return res.status(404).json({ error: 'Auction not found' });
+    if (code === 'P2003') {
+      return res.status(409).json({
+        error: 'Cannot delete an auction with existing bids; cancel or deactivate it instead',
+      });
+    }
+    throw err;
+  }
+});
+
+router.get('/auctions/:id/offers', async (req, res) => {
+  const offers = await prisma.auctionOffer.findMany({
+    where: { auction_id: req.params.id },
+    include: { donor: { select: { email: true, id: true } } },
+    orderBy: { rank: 'asc' },
+  });
+  res.json(offers);
+});
+
+router.get('/auctions/:id/bids', async (req, res) => {
+  const bids = await prisma.bid.findMany({
+    where: { auction_id: req.params.id },
+    include: { donor: { select: { email: true, id: true } } },
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(bids);
+});
+
+router.post('/auctions/:id/reopen', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => reopenAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/close', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => closeAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/cancel', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => cancelAuctionTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/skip-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => skipCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/auctions/:id/resend-offer', async (req, res) => {
+  try {
+    const result = await prisma.$transaction((tx) => resendCurrentOfferTx(tx, req.params.id));
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/auction-wins', async (req, res) => {
+  res.json(
+    await prisma.auctionWin.findMany({
+      include: { auction: true, donor: { select: { email: true } } },
+      orderBy: { created_at: 'desc' },
+    }),
+  );
+});
+
+// Webhook endpoints
+router.get('/destinations', async (req, res) => {
+  const endpoints = await prisma.webhookDestination.findMany({
+    orderBy: { created_at: 'desc' },
+  });
+  res.json(
+    endpoints.map((ep) => ({
+      ...ep,
+      event_types: JSON.parse(ep.event_types),
+    })),
+  );
+});
+
+/**
+ * PRD-0002 §T1: the Tiltify format is RabbitMQ-only (no consumer reads a bare
+ * Tiltify body over HTTP). Returns an error message, or null when valid.
+ */
+function payloadFormatError(destType: string, format: unknown): string | null {
+  if (!(PAYLOAD_FORMATS as readonly unknown[]).includes(format)) {
+    return 'payload_format must be NATIVE or TILTIFY';
+  }
+  if (format === 'TILTIFY' && destType !== 'RABBITMQ') {
+    return 'payload_format TILTIFY requires destination_type RABBITMQ';
+  }
+  return null;
+}
+
+router.post('/destinations', async (req, res) => {
+  const {
+    url,
+    secret,
+    event_types,
+    verify_ssl,
+    description,
+    destination_type,
+    amqp_url,
+    amqp_exchange,
+    amqp_routing_key,
+    payload_format,
+  } = req.body;
+
+  const destType = destination_type ?? 'HTTP';
+  const format = payload_format ?? 'NATIVE';
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
+
+  if (destType === 'HTTP') {
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'url is required for HTTP endpoints' });
+    }
+    try {
+      new URL(url);
+    } catch {
+      return res.status(400).json({ error: 'url must be a valid URL' });
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return res.status(400).json({ error: 'url must use http or https' });
+    }
+  } else if (destType === 'RABBITMQ') {
+    if (!amqp_url || typeof amqp_url !== 'string') {
+      return res.status(400).json({ error: 'amqp_url is required for RabbitMQ endpoints' });
+    }
+    if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+      return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
+    }
+    // A TILTIFY Destination computes the routing key per message (§T3).
+    if (format === 'NATIVE' && (!amqp_routing_key || typeof amqp_routing_key !== 'string')) {
+      return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
+    }
+  } else {
+    return res.status(400).json({ error: 'destination_type must be HTTP or RABBITMQ' });
+  }
+
+  if (event_types && !Array.isArray(event_types)) {
+    return res.status(400).json({ error: 'event_types must be an array' });
+  }
+  if (event_types && !event_types.every(isWebhookMessageType)) {
+    return res.status(400).json({ error: 'event_types contains invalid event type' });
+  }
+
+  const generatedSecret = secret || crypto.randomBytes(32).toString('hex');
+  const destination = await prisma.webhookDestination.create({
+    data: {
+      url: url ?? '',
+      secret: generatedSecret,
+      event_types: JSON.stringify(event_types ?? []),
+      verify_ssl: verify_ssl ?? true,
+      description: description ?? null,
+      destination_type: destType,
+      amqp_url: amqp_url ?? null,
+      amqp_exchange: amqp_exchange ?? (format === 'TILTIFY' ? TILTIFY_DEFAULT_EXCHANGE : ''),
+      amqp_routing_key: amqp_routing_key ?? null,
+      payload_format: format,
+    },
+  });
+  res.status(201).json({
+    ...destination,
+    event_types: JSON.parse(destination.event_types),
+  });
+});
+
+router.put('/destinations/:id', async (req, res) => {
+  const {
+    url,
+    event_types,
+    verify_ssl,
+    is_active,
+    description,
+    destination_type,
+    amqp_url,
+    amqp_exchange,
+    amqp_routing_key,
+    payload_format,
+  } = req.body;
+
+  const current = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+    select: { destination_type: true, payload_format: true, amqp_routing_key: true },
+  });
+  if (!current) return res.status(404).json({ error: 'Destination not found' });
+  // Validate the Destination as it will be after the update, not the request alone.
+  const destType = destination_type ?? current.destination_type;
+  const format = payload_format ?? current.payload_format;
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
+  const routingKey = amqp_routing_key !== undefined ? amqp_routing_key : current.amqp_routing_key;
+  if (destType === 'RABBITMQ' && format === 'NATIVE' && !routingKey) {
+    // Without one, every NATIVE message would stall the queue as an endpoint failure.
+    return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
+  }
+
+  if (destType === 'HTTP') {
+    if (url !== undefined) {
+      try {
+        new URL(url);
+      } catch {
+        return res.status(400).json({ error: 'url must be a valid URL' });
+      }
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return res.status(400).json({ error: 'url must use http or https' });
+      }
+    }
+  } else if (destType === 'RABBITMQ') {
+    if (amqp_url !== undefined) {
+      if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+        return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
+      }
+    }
+    if (amqp_routing_key !== undefined && typeof amqp_routing_key !== 'string') {
+      return res.status(400).json({ error: 'amqp_routing_key must be a string' });
+    }
+  } else {
+    return res.status(400).json({ error: 'destination_type must be HTTP or RABBITMQ' });
+  }
+
+  if (event_types !== undefined) {
+    if (!Array.isArray(event_types)) {
+      return res.status(400).json({ error: 'event_types must be an array' });
+    }
+    if (!event_types.every(isWebhookMessageType)) {
+      return res.status(400).json({ error: 'event_types contains invalid event type' });
+    }
+  }
+
+  const endpoint = await prisma.webhookDestination.update({
+    where: { id: req.params.id },
+    data: {
+      ...(url !== undefined ? { url } : {}),
+      ...(event_types !== undefined ? { event_types: JSON.stringify(event_types) } : {}),
+      ...(verify_ssl !== undefined ? { verify_ssl } : {}),
+      ...(is_active !== undefined ? { is_active } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(destination_type !== undefined ? { destination_type: destType } : {}),
+      ...(amqp_url !== undefined ? { amqp_url } : {}),
+      ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
+      ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
+      ...(payload_format !== undefined ? { payload_format } : {}),
+    },
+  });
+  // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.
+  if (endpoint.is_active) wakeDispatcher(endpoint.id);
+  res.json({
+    ...endpoint,
+    event_types: JSON.parse(endpoint.event_types),
+  });
+});
+
+router.post('/destinations/:id/rotate-secret', async (req, res) => {
+  const newSecret = crypto.randomBytes(32).toString('hex');
+  const destination = await prisma.webhookDestination.update({
+    where: { id: req.params.id },
+    data: { secret: newSecret },
+  });
+  res.json({
+    ...destination,
+    event_types: JSON.parse(destination.event_types),
+  });
+});
+
+router.delete('/destinations/:id', async (req, res) => {
+  try {
+    await prisma.webhookDestination.delete({ where: { id: req.params.id } });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'P2025') {
+      return res.status(404).json({ error: 'Webhook endpoint not found' });
+    }
+    throw err;
+  }
+  res.json({ success: true });
+});
+
+/** Wire shape of a delivery row: the Prisma field `message_type` is sent as `event_type` (ADR-0006). */
+function toDeliveryResponse<T extends { message_type: string }>({ message_type, ...rest }: T) {
+  return { ...rest, event_type: message_type };
+}
+
+/** Fields reset when a FAILED delivery is requeued; `seq` and `message_id` are kept. */
+function requeueData() {
+  return {
+    status: 'PENDING',
+    attempts: 0,
+    next_attempt_at: new Date(),
+    last_error: null,
+    last_status_code: null,
+  };
+}
+
+router.get('/destinations/:id/deliveries', async (req, res) => {
+  const { limit = 50, offset = 0 } = req.query;
+  const [deliveries, total] = await Promise.all([
+    prisma.webhookDelivery.findMany({
+      where: { destination_id: req.params.id },
+      orderBy: { seq: 'desc' },
+      take: Number(limit),
+      skip: Number(offset),
+    }),
+    prisma.webhookDelivery.count({ where: { destination_id: req.params.id } }),
+  ]);
+  res.json({
+    deliveries: deliveries.map(toDeliveryResponse),
+    total,
+  });
+});
+
+router.post('/destinations/:id/test', async (req, res) => {
+  const endpoint = await prisma.webhookDestination.findUnique({ where: { id: req.params.id } });
+  if (!endpoint) return res.status(404).json({ error: 'Webhook endpoint not found' });
+
+  const payload = {
+    id: crypto.randomUUID(),
+    type: 'ping',
+    created_at: new Date().toISOString(),
+    data: { message: 'test ping from donation platform' },
+  };
+
+  const seq = await prisma.$transaction(async (tx) => {
+    const row = await tx.webhookDestinationSeq.upsert({
+      where: { destination_id: req.params.id },
+      create: { destination_id: req.params.id, seq: 1 },
+      update: { seq: { increment: 1 } },
+    });
+    await tx.webhookDelivery.create({
+      data: {
+        destination_id: req.params.id,
+        seq: row.seq,
+        message_id: payload.id,
+        message_type: 'ping',
+        payload: JSON.stringify(payload),
+        status: 'PENDING',
+        next_attempt_at: new Date(),
+      },
+    });
+    return row.seq;
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json({ success: true, seq });
+});
+
+router.post('/destinations/:id/deliveries/:deliveryId/requeue', async (req, res) => {
+  const delivery = await prisma.webhookDelivery.findFirst({
+    where: { id: req.params.deliveryId, destination_id: req.params.id },
+  });
+  if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+  if (delivery.status !== 'FAILED') {
+    return res.status(409).json({ error: 'Only FAILED deliveries can be requeued' });
+  }
+  if (delivery.payload === '') {
+    return res.status(409).json({ error: 'This delivery was never built and cannot be resent' });
+  }
+
+  const updated = await prisma.webhookDelivery.update({
+    where: { id: delivery.id },
+    data: requeueData(),
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json(toDeliveryResponse(updated));
+});
+
+router.post('/destinations/:id/requeue-failed', async (req, res) => {
+  const destination = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+  });
+  if (!destination) return res.status(404).json({ error: 'Destination not found' });
+
+  const { count } = await prisma.webhookDelivery.updateMany({
+    where: { destination_id: req.params.id, status: 'FAILED', payload: { not: '' } },
+    data: requeueData(),
+  });
+  // Rows whose payload was never built cannot be resent; report them so the
+  // operator knows some FAILED rows remain.
+  const unbuilt = await prisma.webhookDelivery.count({
+    where: { destination_id: req.params.id, status: 'FAILED', payload: '' },
+  });
+  wakeDispatcher(req.params.id);
+
+  res.json({ requeued: count, skipped_unbuilt: unbuilt });
+});
+
+// Feature Flags CRUD
+router.get('/feature-flags', async (req, res) => {
+  const flags = await prisma.featureFlag.findMany({
+    orderBy: { name: 'asc' },
+  });
+  res.json(flags);
+});
+
+router.get('/feature-flags/:name', async (req, res) => {
+  const flag = await prisma.featureFlag.findUnique({
+    where: { name: req.params.name },
+  });
+  if (!flag) return res.status(404).json({ error: 'Feature flag not found' });
+  res.json(flag);
+});
+
+router.post('/feature-flags', async (req, res) => {
+  const { name, description } = req.body;
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  try {
+    const flag = await prisma.featureFlag.create({
+      data: {
+        name: String(name).trim(),
+        description: description ? String(description).trim() : null,
+        is_enabled: false,
+      },
+    });
+    invalidateFlagCache();
+    res.json(flag);
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2002') {
+      return res.status(409).json({ error: 'Feature flag name already exists' });
+    }
+    throw e;
+  }
+});
+
+router.patch('/feature-flags/:name', async (req, res) => {
+  const { is_enabled, description } = req.body;
+  const updates: Record<string, unknown> = {};
+  if (is_enabled !== undefined) updates.is_enabled = Boolean(is_enabled);
+  if (description !== undefined)
+    updates.description = description ? String(description).trim() : null;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+
+  const flag = await prisma.featureFlag.update({
+    where: { name: req.params.name },
+    data: updates,
+  });
+  invalidateFlagCache();
+  res.json(flag);
+});
+
+router.delete('/feature-flags/:name', async (req, res) => {
+  try {
+    await prisma.featureFlag.delete({
+      where: { name: req.params.name },
+    });
+    invalidateFlagCache();
+    res.json({ success: true });
+  } catch (e) {
+    if ((e as { code?: string }).code === 'P2025') {
+      return res.status(404).json({ error: 'Feature flag not found' });
+    }
+    throw e;
+  }
+});
+
+// Broadcast Banner CRUD
+router.get('/broadcast', async (req, res) => {
+  const broadcast = await prisma.broadcast.findFirst();
+  res.json(broadcast || { id: null, message: '', level: null, is_active: false });
+});
+
+const BROADCAST_LEVELS = ['INFO', 'WARNING', 'CRITICAL'];
+
+router.put('/broadcast', async (req, res) => {
+  const { message, level } = req.body;
+  if (typeof message !== 'string') {
+    return res.status(400).json({ error: 'message must be a string' });
+  }
+  if (level !== undefined && level !== null && !BROADCAST_LEVELS.includes(level)) {
+    return res.status(400).json({ error: 'level must be one of INFO, WARNING, CRITICAL, or null' });
+  }
+  const normalizedLevel = level ?? null;
+  const trimmed = message.trim();
+  if (!trimmed) {
+    // Clear the broadcast
+    await prisma.broadcast.deleteMany();
+    return res.json({ id: null, message: '', level: null, is_active: false });
+  }
+  // Upsert: update if exists, create if not
+  const existing = await prisma.broadcast.findFirst();
+  const broadcast = await prisma.broadcast.upsert({
+    where: { id: existing?.id || 'default' },
+    create: { id: 'default', message: trimmed, level: normalizedLevel, is_active: true },
+    update: { message: trimmed, level: normalizedLevel, is_active: true, updated_at: new Date() },
+  });
+  res.json(broadcast);
+});
+
+router.delete('/broadcast', async (req, res) => {
+  await prisma.broadcast.deleteMany();
+  res.json({ success: true });
 });
 
 export default router;
