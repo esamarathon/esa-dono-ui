@@ -563,6 +563,12 @@ paths:
                   properties:
                     id: { type: string }
                     name: { type: string }
+                    slug:
+                      type: string
+                      description: Lowercase, URL- and AMQP-routing-safe name (PRD-0002 §S6)
+                    event_id:
+                      type: string
+                      description: Id of the Event this Channel belongs to
                     is_active: { type: boolean }
 
   # ─── Pledge ───
@@ -767,6 +773,10 @@ paths:
     post:
       tags: [Admin]
       summary: Create a channel
+      description: |
+        Creates a Channel on an Event. `slug` is optional; when omitted it is
+        derived from `name` (and made unique across Events and Channels).
+        `event_id` is optional while exactly one Event exists, otherwise required.
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -777,17 +787,28 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and routing-safe name; derived from `name` when omitted.
+                event_id:
+                  type: string
+                  description: Optional. The Event this Channel belongs to; defaults to the only Event when one exists.
                 is_active: { type: boolean, default: true }
       responses:
         '200':
           description: Channel created
+        '400':
+          description: Missing name, invalid slug, or unknown/ambiguous event_id
         '409':
-          description: Channel name already exists
+          description: Channel name already exists, or the slug is already used by another event or channel
 
   /admin/channels/{id}:
     put:
       tags: [Admin]
       summary: Update a channel
+      description: |
+        A Channel's `slug` cannot change while it is active, and the primary
+        Channel of an active Event cannot be deactivated or moved to another Event.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -801,10 +822,20 @@ paths:
               type: object
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Channel is inactive.
+                event_id: { type: string }
                 is_active: { type: boolean }
       responses:
         '200':
           description: Channel updated
+        '400':
+          description: Empty name, invalid slug, or unknown event_id
+        '404':
+          description: Channel not found
+        '409':
+          description: Slug change on an active channel, deactivating/moving the primary channel of an active event, duplicate name, or slug already in use
     delete:
       tags: [Admin]
       summary: Deactivate a channel
@@ -832,7 +863,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations with donor email and channel (id, name), ordered by created_at descending
+          description: Donations with donor email, channel (id, name), event_id, hidden_from_overlay and moderation flags, ordered by created_at descending
 
   /admin/donations/{id}/status:
     patch:
@@ -2199,6 +2230,10 @@ paths:
     post:
       tags: [Moderator]
       summary: Create a channel
+      description: |
+        Creates a Channel on an Event. `slug` is optional; when omitted it is
+        derived from `name` (and made unique across Events and Channels).
+        `event_id` is optional while exactly one Event exists, otherwise required.
       parameters:
         - name: token
           in: query
@@ -2213,17 +2248,28 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and routing-safe name; derived from `name` when omitted.
+                event_id:
+                  type: string
+                  description: Optional. The Event this Channel belongs to; defaults to the only Event when one exists.
                 is_active: { type: boolean, default: true }
       responses:
         '200':
           description: Channel created
+        '400':
+          description: Missing name, invalid slug, or unknown/ambiguous event_id
         '409':
-          description: Channel name already exists
+          description: Channel name already exists, or the slug is already used by another event or channel
 
   /moderator/channels/{id}:
     put:
       tags: [Moderator]
       summary: Update a channel
+      description: |
+        A Channel's `slug` cannot change while it is active, and the primary
+        Channel of an active Event cannot be deactivated or moved to another Event.
       parameters:
         - name: token
           in: query
@@ -2240,10 +2286,20 @@ paths:
               type: object
               properties:
                 name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Channel is inactive.
+                event_id: { type: string }
                 is_active: { type: boolean }
       responses:
         '200':
           description: Channel updated
+        '400':
+          description: Empty name, invalid slug, or unknown event_id
+        '404':
+          description: Channel not found
+        '409':
+          description: Slug change on an active channel, deactivating/moving the primary channel of an active event, duplicate name, or slug already in use
     delete:
       tags: [Moderator]
       summary: Deactivate a channel
@@ -2613,7 +2669,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations with donor name (no donor email), channel (id, name), moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
+          description: Donations with donor name (no donor email), channel (id, name), event_id, hidden_from_overlay, moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
 
   /moderator/donations/{id}:
     patch:
@@ -2932,6 +2988,24 @@ components:
       name: X-Admin-Key
       description: Admin API key matching `ADMIN_API_KEY` env var
   schemas:
+    Event:
+      type: object
+      description: A charity event (a marathon, or a one-day stream event) that owns Channels.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug:
+          type: string
+          description: Lowercase, URL- and AMQP-routing-safe name; unique across Events and Channels (PRD-0002 §S6)
+        is_active: { type: boolean }
+        primary_channel_id:
+          {
+            type: string,
+            nullable: true,
+            description: 'Where a donation that names no Channel is routed; must be a Channel of this Event',
+          }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     WebhookDestination:
       type: object
       properties:
@@ -2971,6 +3045,11 @@ components:
         amqp_exchange: { type: string, default: '' }
         amqp_routing_key:
           { type: string, nullable: true, description: 'Required for RabbitMQ endpoints' }
+        payload_format:
+          type: string
+          enum: [NATIVE, TILTIFY]
+          default: NATIVE
+          description: Message payload envelope (PRD-0002). NATIVE is the existing envelope.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     WebhookDelivery:
@@ -2981,6 +3060,12 @@ components:
         message_id: { type: string }
         destination_id: { type: string }
         event_type: { type: string }
+        routing_key:
+          {
+            type: string,
+            nullable: true,
+            description: "Per-message AMQP routing key (TILTIFY: <channel-slug>.donation); null uses the Destination's key",
+          }
         payload: { type: string }
         status:
           type: string

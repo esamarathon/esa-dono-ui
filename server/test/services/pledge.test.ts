@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { createPledge, resolvePledge, createCheckoutForPledge } from '../../services/pledge.js';
 import { processDonation } from '../../services/donation.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -14,11 +15,9 @@ describe('Pledge Service', () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
     process.env.APP_BASE_URL = 'http://localhost:5173';
 
-    const event = await prisma.channel.create({
-      data: { name: `Event A ${crypto.randomUUID()}` },
-    });
+    const event = await createTestChannel(prisma, { name: `Event A ${crypto.randomUUID()}` });
     channelId = event.id;
-    const other = await prisma.channel.create({ data: { name: `Event B ${crypto.randomUUID()}` } });
+    const other = await createTestChannel(prisma, { name: `Event B ${crypto.randomUUID()}` });
     otherEventId = other.id;
   });
 

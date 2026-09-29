@@ -69,11 +69,11 @@ echo "   6 test images uploaded."
 echo "==> Creating channels..."
 C_MAIN=$(curl -sf -X POST $BASE/api/admin/channels \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d '{"name":"Main Marathon","is_active":true}' | jq -r .id)
+  -d '{"name":"Main Marathon","slug":"main-marathon","is_active":true}' | jq -r .id)
 
 C_BONUS=$(curl -sf -X POST $BASE/api/admin/channels \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d '{"name":"Bonus Stream","is_active":true}' | jq -r .id)
+  -d '{"name":"Bonus Stream","slug":"bonus-stream","is_active":true}' | jq -r .id)
 
 echo "   Channels: $C_MAIN (Main Marathon) $C_BONUS (Bonus Stream)"
 

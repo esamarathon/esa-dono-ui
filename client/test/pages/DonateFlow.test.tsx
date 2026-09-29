@@ -53,7 +53,7 @@ describe('DonateFlow (tabbed browse page)', () => {
       JSON.stringify({ cart: [], topUp: '', comment: '', channelId: 'event-1' }),
     );
     vi.mocked(getChannels).mockResolvedValue([
-      { id: 'event-1', name: 'Event One', is_active: true },
+      { id: 'event-1', name: 'Event One', slug: 'event-one', event_id: 'evt-1', is_active: true },
     ]);
     vi.mocked(getPolls).mockResolvedValue([]);
     vi.mocked(getGoals).mockResolvedValue([]);
@@ -61,10 +61,12 @@ describe('DonateFlow (tabbed browse page)', () => {
 
   it('refetches channels when the donate flow mounts, picking up a channel opened after initial load (#46)', async () => {
     vi.mocked(getChannels)
-      .mockResolvedValueOnce([{ id: 'event-1', name: 'Event One', is_active: true }])
+      .mockResolvedValueOnce([
+        { id: 'event-1', name: 'Event One', slug: 'event-one', event_id: 'evt-1', is_active: true },
+      ])
       .mockResolvedValue([
-        { id: 'event-1', name: 'Event One', is_active: true },
-        { id: 'event-2', name: 'New Event', is_active: true },
+        { id: 'event-1', name: 'Event One', slug: 'event-one', event_id: 'evt-1', is_active: true },
+        { id: 'event-2', name: 'New Event', slug: 'new-event', event_id: 'evt-1', is_active: true },
       ]);
     vi.mocked(getRewards).mockResolvedValue([]);
 
@@ -79,8 +81,8 @@ describe('DonateFlow (tabbed browse page)', () => {
       JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
     );
     vi.mocked(getChannels).mockResolvedValue([
-      { id: 'event-1', name: 'Event One', is_active: true },
-      { id: 'event-2', name: 'New Event', is_active: true },
+      { id: 'event-1', name: 'Event One', slug: 'event-one', event_id: 'evt-1', is_active: true },
+      { id: 'event-2', name: 'New Event', slug: 'new-event', event_id: 'evt-1', is_active: true },
     ]);
     vi.mocked(getRewards).mockResolvedValue([]);
 
@@ -97,7 +99,7 @@ describe('DonateFlow (tabbed browse page)', () => {
       JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
     );
     vi.mocked(getChannels).mockResolvedValue([
-      { id: 'event-1', name: 'Event One', is_active: true },
+      { id: 'event-1', name: 'Event One', slug: 'event-one', event_id: 'evt-1', is_active: true },
     ]);
     vi.mocked(getRewards).mockResolvedValue([]);
 

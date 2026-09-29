@@ -6,13 +6,15 @@ guess which concept is meant.
 
 ## Glossary
 
-| Term                | Means                                                                                 | Avoid                             |
-| ------------------- | ------------------------------------------------------------------------------------- | --------------------------------- |
-| **Event**           | A charity event: a marathon, or a one-day stream event. Parent of Channels.           | occasion, campaign, team campaign |
-| **Channel**         | One stream within an Event.                                                           | stream, campaign                  |
-| **Webhook message** | One outbound notification that something happened (for example, a donation was made). | event, webhook event              |
-| **Destination**     | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                  | endpoint, event destination       |
-| **Delivery**        | One queued attempt to send one webhook message to one Destination.                    | job, event delivery               |
+| Term                | Means                                                                                                                                                                | Avoid                             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **Event**           | A charity event: a marathon, or a one-day stream event. Parent of Channels.                                                                                          | occasion, campaign, team campaign |
+| **Channel**         | One stream within an Event.                                                                                                                                          | stream, campaign                  |
+| **Primary channel** | The Channel an Event routes a donation to when the donation names no Channel. An active Event always has an active one.                                              | default channel                   |
+| **Slug**            | The lowercase, URL- and routing-safe name of an Event or Channel (`esa-summer-2025`), unique across both. Used in `/donate/<event>/<channel>` and AMQP routing keys. | handle, key, short name           |
+| **Webhook message** | One outbound notification that something happened (for example, a donation was made).                                                                                | event, webhook event              |
+| **Destination**     | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                                                                                                 | endpoint, event destination       |
+| **Delivery**        | One queued attempt to send one webhook message to one Destination.                                                                                                   | job, event delivery               |
 
 ## "Event" versus "webhook message"
 
@@ -30,3 +32,11 @@ Exceptions, because they are external contracts:
 "Webhook event" is the industry term for these, so outside consumers are not confused by it.
 
 See `docs/adr/0006-webhook-vocabulary.md`.
+
+## Event and Channel identity
+
+- An **Event** contains one or more **Channels**. Every Channel belongs to exactly one Event.
+- Ids are UUIDs.
+- A **slug** cannot change while its Event or Channel is active. Overlays bind to it, and published links contain it.
+
+See `docs/adr/0008-event-channel-identity.md`.

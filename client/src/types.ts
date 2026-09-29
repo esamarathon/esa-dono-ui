@@ -179,6 +179,8 @@ export interface Goal {
 export interface Channel {
   id: string;
   name: string;
+  slug: string;
+  event_id: string;
   is_active: boolean;
 }
 
