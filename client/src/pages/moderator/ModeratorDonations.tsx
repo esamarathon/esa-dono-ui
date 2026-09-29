@@ -25,6 +25,23 @@ export default function ModeratorDonations() {
     await reload();
   };
 
+  const toggleHidden = async (d: AdminDonation) => {
+    // Un-hiding re-adds the donation to the overlay and plays the alert again,
+    // so it asks for confirmation first. Hiding needs none.
+    if (
+      d.hidden_from_overlay &&
+      !window.confirm(
+        'Show this donation on the stream overlay again? The overlay re-adds it and plays the alert.',
+      )
+    ) {
+      return;
+    }
+    await moderatorClient.patch(`/donations/${d.id}`, {
+      hidden_from_overlay: !d.hidden_from_overlay,
+    });
+    await reload();
+  };
+
   const channelName = (d: AdminDonation) => {
     if (!d.channel) return 'shared';
     return channels.find((e) => e.id === d.channel?.id)?.name ?? 'unknown channel';
@@ -92,6 +109,14 @@ export default function ModeratorDonations() {
                 )}
               </div>
               <div className="flex items-center gap-2 sm:shrink-0">
+                {d.hidden_from_overlay && (
+                  <span
+                    className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
+                    style={{ background: 'rgba(208,152,70,.16)', color: 'var(--d-yellow)' }}
+                  >
+                    HIDDEN FROM OVERLAY
+                  </span>
+                )}
                 <span
                   className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
                   style={{
@@ -107,6 +132,13 @@ export default function ModeratorDonations() {
                   style={{ background: d.moderated ? 'var(--d-yellow)' : 'var(--green)' }}
                 >
                   {d.moderated ? 'unmark moderated' : 'mark moderated'}
+                </button>
+                <button
+                  onClick={() => toggleHidden(d)}
+                  className="btrl-button text-xs"
+                  style={{ background: d.hidden_from_overlay ? 'var(--green)' : 'var(--d-yellow)' }}
+                >
+                  {d.hidden_from_overlay ? 'un-hide' : 'hide'}
                 </button>
               </div>
             </div>

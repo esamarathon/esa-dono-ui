@@ -40,3 +40,20 @@ See `docs/adr/0006-webhook-vocabulary.md`.
 - A **slug** cannot change while its Event or Channel is active. Overlays bind to it, and published links contain it.
 
 See `docs/adr/0008-event-channel-identity.md`.
+
+## Tiltify mapping
+
+Destinations with the Tiltify-compatible payload format (ADR-0009) speak Tiltify's words:
+
+| Tiltify                         | Ours                                            |
+| ------------------------------- | ----------------------------------------------- |
+| team campaign (`team_event_id`) | **Event**                                       |
+| campaign (`campaign_id`)        | **Channel**                                     |
+| donation                        | **Donation** (routed to a Channel)              |
+| reward claim                    | **RewardClaim** (one per unit)                  |
+| poll / poll option              | **Poll** / **PollOption**                       |
+| target                          | **FundGoal** (goal)                             |
+| fact (`total_amount_raised`)    | the money total of a Channel or an Event        |
+| `donor_name: "Anonymous"`       | no display name, **or** hidden from the overlay |
+
+**Hidden from overlay** (`hidden_from_overlay`) is not the same as **moderated**. Hidden removes the donor's name and message from the stream. Moderated only records that a person reviewed the donation.

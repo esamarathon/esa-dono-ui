@@ -345,6 +345,9 @@ export interface AdminDonation {
   moderated?: boolean;
   moderated_at?: string | null;
   moderated_by?: string | null;
+  // PRD-0002 §N2: hidden donations stay in the totals but are pulled from the
+  // stream overlay until a moderator un-hides them (#116).
+  hidden_from_overlay?: boolean;
   channel?: { id: string; name: string } | null;
   // Routing (#115). Both null means the donation arrived while no single event
   // was active — it stays unassigned until an admin assigns a channel.
@@ -417,6 +420,8 @@ export interface AdminDonorWallet {
 export type WebhookMessageType =
   | 'donation.created'
   | 'donation.moderated'
+  | 'donation.hidden'
+  | 'donation.unhidden'
   | 'incentive.created'
   | 'incentive.enabled'
   | 'incentive.disabled'
@@ -433,6 +438,7 @@ export interface WebhookEndpoint {
   created_at: string;
   updated_at: string;
   destination_type: 'HTTP' | 'RABBITMQ';
+  payload_format: 'NATIVE' | 'TILTIFY';
   amqp_url: string | null;
   amqp_exchange: string;
   amqp_routing_key: string | null;

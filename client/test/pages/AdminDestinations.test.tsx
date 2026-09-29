@@ -29,6 +29,7 @@ const endpoint = {
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   destination_type: 'HTTP',
+  payload_format: 'NATIVE',
   amqp_url: null,
   amqp_exchange: '',
   amqp_routing_key: null,
@@ -187,6 +188,62 @@ describe('AdminDestinations', () => {
         expect.objectContaining({ destination_type: 'RABBITMQ', amqp_url: 'amqp://localhost' }),
       ),
     );
+  });
+
+  it('creates a Tiltify-compatible RabbitMQ destination and hides event types (#116)', async () => {
+    mocks.getDestinations.mockResolvedValue([]);
+    mocks.createDestination.mockResolvedValue({ id: 'ep-4' });
+
+    render(
+      <MemoryRouter>
+        <AdminDestinations />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '+ new endpoint' }));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'RABBITMQ' } });
+    fireEvent.change(screen.getByLabelText('Payload format'), { target: { value: 'TILTIFY' } });
+
+    // Event types and the routing key are ignored for a Tiltify destination.
+    expect(screen.queryByLabelText('donation.created')).toBeNull();
+    expect(screen.queryByPlaceholderText('my.queue.name')).toBeNull();
+    expect(screen.getByText(/sends bare Tiltify-style/)).toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByPlaceholderText('amqps://user:pass@rabbitmq.example.com:5671/vhost'),
+      { target: { value: 'amqp://localhost' } },
+    );
+    expect(screen.getByPlaceholderText('(default exchange)')).toHaveValue('tiltify');
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(mocks.createDestination).toHaveBeenCalledWith(
+        expect.objectContaining({
+          destination_type: 'RABBITMQ',
+          payload_format: 'TILTIFY',
+          amqp_exchange: 'tiltify',
+        }),
+      ),
+    );
+  });
+
+  it('shows a Tiltify badge in the list (#116)', async () => {
+    mocks.getDestinations.mockResolvedValue([
+      {
+        ...endpoint,
+        destination_type: 'RABBITMQ',
+        payload_format: 'TILTIFY',
+        amqp_routing_key: null,
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <AdminDestinations />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Tiltify')).toBeInTheDocument();
   });
 
   it('rotates the endpoint secret after confirmation', async () => {

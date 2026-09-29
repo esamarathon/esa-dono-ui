@@ -23,6 +23,8 @@ import {
 const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
   'donation.moderated',
+  'donation.hidden',
+  'donation.unhidden',
   'incentive.created',
   'incentive.enabled',
   'incentive.disabled',
@@ -31,6 +33,7 @@ const WEBHOOK_MESSAGE_TYPES = [
 
 interface WebhookForm {
   destination_type: 'HTTP' | 'RABBITMQ';
+  payload_format: 'NATIVE' | 'TILTIFY';
   url: string;
   secret: string;
   event_types: WebhookMessageType[];
@@ -43,6 +46,7 @@ interface WebhookForm {
 
 const EMPTY_FORM: WebhookForm = {
   destination_type: 'HTTP',
+  payload_format: 'NATIVE',
   url: '',
   secret: '',
   event_types: [],
@@ -90,6 +94,7 @@ export default function AdminWebhooks() {
   const openEdit = (ep: WebhookEndpoint) => {
     setForm({
       destination_type: ep.destination_type,
+      payload_format: ep.payload_format ?? 'NATIVE',
       url: ep.url,
       secret: ep.secret,
       event_types: ep.event_types as WebhookMessageType[],
@@ -113,12 +118,33 @@ export default function AdminWebhooks() {
     }));
   };
 
+  const isTiltify = form.destination_type === 'RABBITMQ' && form.payload_format === 'TILTIFY';
+
+  const setDestinationType = (destination_type: 'HTTP' | 'RABBITMQ') => {
+    setForm((f) => ({
+      ...f,
+      destination_type,
+      // HTTP is always NATIVE, so a switch back to HTTP never keeps TILTIFY.
+      payload_format: destination_type === 'HTTP' ? 'NATIVE' : f.payload_format,
+    }));
+  };
+
+  const setPayloadFormat = (payload_format: 'NATIVE' | 'TILTIFY') => {
+    setForm((f) => ({
+      ...f,
+      payload_format,
+      // The Tiltify format requires an exchange; default it when left blank.
+      amqp_exchange: payload_format === 'TILTIFY' && !f.amqp_exchange ? 'tiltify' : f.amqp_exchange,
+    }));
+  };
+
   const handleSave = async () => {
     setError('');
     try {
       if (modal === 'create') {
         await createDestination({
           destination_type: form.destination_type,
+          payload_format: form.payload_format,
           url: form.url || undefined,
           secret: form.secret || undefined,
           event_types: form.event_types,
@@ -131,6 +157,7 @@ export default function AdminWebhooks() {
       } else if (modal) {
         await updateDestination(modal.id, {
           destination_type: form.destination_type,
+          payload_format: form.payload_format,
           url: form.url || undefined,
           event_types: form.event_types,
           verify_ssl: form.verify_ssl,
@@ -259,11 +286,24 @@ export default function AdminWebhooks() {
               <>
                 <tr key={ep.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                   <td className="px-4 py-2">
-                    <span className="font-mono text-[10px] uppercase text-off-white/70">
-                      {ep.destination_type === 'RABBITMQ'
-                        ? `MQ ${ep.amqp_routing_key ?? ''}`
-                        : 'HTTP'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[10px] uppercase text-off-white/70">
+                        {ep.destination_type === 'RABBITMQ'
+                          ? `MQ ${ep.amqp_routing_key ?? ''}`
+                          : 'HTTP'}
+                      </span>
+                      {ep.payload_format === 'TILTIFY' && (
+                        <span
+                          className="font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm"
+                          style={{
+                            background: 'rgba(208,152,70,.16)',
+                            color: 'var(--d-yellow)',
+                          }}
+                        >
+                          Tiltify
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
@@ -445,14 +485,37 @@ export default function AdminWebhooks() {
             <select
               className="w-full px-3 py-2 text-sm"
               value={form.destination_type}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, destination_type: e.target.value as 'HTTP' | 'RABBITMQ' }))
-              }
+              onChange={(e) => setDestinationType(e.target.value as 'HTTP' | 'RABBITMQ')}
             >
               <option value="HTTP">HTTP</option>
               <option value="RABBITMQ">RabbitMQ</option>
             </select>
           </div>
+
+          {form.destination_type === 'RABBITMQ' && (
+            <div className="mb-3">
+              <label className="block font-data font-bold text-sm mb-2 text-off-white">
+                Payload format
+              </label>
+              <select
+                aria-label="Payload format"
+                className="w-full px-3 py-2 text-sm"
+                value={form.payload_format}
+                onChange={(e) => setPayloadFormat(e.target.value as 'NATIVE' | 'TILTIFY')}
+              >
+                <option value="NATIVE">Native</option>
+                <option value="TILTIFY">Tiltify-compatible</option>
+              </select>
+              {isTiltify && (
+                <p className="text-xs text-off-white/40 mt-1">
+                  Tiltify-compatible: sends bare Tiltify-style donation and totals messages for
+                  kollekt and the stream overlay. Routing keys are computed per channel
+                  (&lt;channel-slug&gt;.donation, &lt;slug&gt;.fact.updated); event types and
+                  routing key are ignored.
+                </p>
+              )}
+            </div>
+          )}
 
           {form.destination_type === 'HTTP' ? (
             <div className="mb-3">
@@ -494,18 +557,20 @@ export default function AdminWebhooks() {
                   onChange={(e) => setForm((f) => ({ ...f, amqp_exchange: e.target.value }))}
                 />
               </div>
-              <div className="mb-3">
-                <label className="block font-data font-bold text-sm mb-1 text-off-white">
-                  Routing key *
-                </label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 text-sm"
-                  placeholder="my.queue.name"
-                  value={form.amqp_routing_key}
-                  onChange={(e) => setForm((f) => ({ ...f, amqp_routing_key: e.target.value }))}
-                />
-              </div>
+              {!isTiltify && (
+                <div className="mb-3">
+                  <label className="block font-data font-bold text-sm mb-1 text-off-white">
+                    Routing key *
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 text-sm"
+                    placeholder="my.queue.name"
+                    value={form.amqp_routing_key}
+                    onChange={(e) => setForm((f) => ({ ...f, amqp_routing_key: e.target.value }))}
+                  />
+                </div>
+              )}
             </>
           )}
 
@@ -559,21 +624,28 @@ export default function AdminWebhooks() {
             <label className="block font-data font-bold text-sm mb-2 text-off-white">
               Event types *
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              {WEBHOOK_MESSAGE_TYPES.map((t) => (
-                <label
-                  key={t}
-                  className="flex items-center gap-2 font-data text-sm text-off-white cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.event_types.includes(t)}
-                    onChange={() => toggleMessageType(t)}
-                  />
-                  {t}
-                </label>
-              ))}
-            </div>
+            {isTiltify ? (
+              <p className="text-xs text-off-white/40">
+                Ignored for a Tiltify-compatible destination — routing keys are computed per
+                channel.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {WEBHOOK_MESSAGE_TYPES.map((t) => (
+                  <label
+                    key={t}
+                    className="flex items-center gap-2 font-data text-sm text-off-white cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.event_types.includes(t)}
+                      onChange={() => toggleMessageType(t)}
+                    />
+                    {t}
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mb-3">
@@ -602,7 +674,7 @@ export default function AdminWebhooks() {
             <button
               onClick={handleSave}
               className="btrl-button"
-              disabled={form.event_types.length === 0}
+              disabled={!isTiltify && form.event_types.length === 0}
             >
               save
             </button>
