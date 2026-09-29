@@ -21,9 +21,13 @@ npm workspaces monorepo
 - **Production** ships two images: `backend` (Express, non-root `dono`, UID 1001) and `frontend` (nginx-unprivileged SPA, proxies `/api/` → backend).
 
 ```
-Donor/Browser → nginx (frontend :8080) ──/api/*──→ backend (Express :3001) → SQLite (/data/dono.db)
+Donor/Browser → [external proxy: Caddy/nginx/LB, optional] → nginx (frontend :8080) ──/api/*──→ backend (Express :3001) → SQLite (/data/dono.db)
 Stripe webhook → backend /api/webhooks/stripe (raw body, before express.json)
 ```
+
+Every proxy in front of the backend is one **hop**. `TRUST_PROXY` must equal the
+number of hops, or rate limiting cannot see the visitor's IP (see
+[§ Client IP and `TRUST_PROXY`](#client-ip-and-trust_proxy)).
 
 ---
 
@@ -143,6 +147,9 @@ APP_BASE_URL=https://donations.example.com
 STRIPE_SECRET_KEY=sk_live_…      # optional — omitted → checkout degrades gracefully
 STRIPE_WEBHOOK_SECRET=whsec_…    # optional — omitted → webhook sig check skipped
 SMTP_HOST=…                      # optional — omitted → magic links logged to stdout
+TRUST_PROXY=2                    # REQUIRED behind an external proxy (TLS terminator, load
+                                 # balancer); 1 (default) only when browsers reach the
+                                 # frontend container directly. See § Client IP.
 ```
 
 ### 3. Start
@@ -165,13 +172,27 @@ curl -s http://localhost:8080/api/health        # → {"ok":true,"db":true}
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/rewards   # → 200 (SPA fallback)
 ```
 
+Behind an external proxy, also check that each visitor gets their own rate-limit
+counter (run from two different networks, e.g. your machine and the server):
+
+```bash
+curl -sI https://donations.example.com/api/campaign | grep -i x-ratelimit-remaining
+```
+
+Each network should count down from `RATE_LIMIT_API` (default 600) on its own.
+If a second network continues the first one's count, `TRUST_PROXY` is too low.
+
 Full end-to-end validation (tears the stack down on exit):
 
 ```bash
 ADMIN_API_KEY=… FRONTEND_PORT=18080 ./scripts/smoke-test.sh
 ```
 
-### 5. External reverse proxy (optional)
+### 5. External reverse proxy
+
+A public production deployment normally puts a TLS terminator (Caddy, nginx, a
+cloud load balancer) in front of the frontend container. **Then set
+`TRUST_PROXY=2`** (see [§ Client IP and `TRUST_PROXY`](#client-ip-and-trust_proxy)).
 
 Point TLS at the frontend container (`:8080`) and let it proxy `/api/`:
 
@@ -193,13 +214,27 @@ Caddy: `reverse_proxy /* 127.0.0.1:8080`
 > The frontend container already forwards `/api/*` to `dono-backend:3001`, so
 > an external proxy only needs to reach the frontend.
 
-> **Set `TRUST_PROXY=2`** behind an external proxy (it plus the frontend nginx).
-> Rate limits are per client IP, read from `X-Forwarded-For` that many hops
-> back. With the default `1`, every visitor gets the external proxy's address and
-> they all share one bucket (#140). The external proxy must append
-> `X-Forwarded-For` (Caddy does by default; the nginx example above sets it).
-> Check: two clients on different networks should see separate
-> `x-ratelimit-remaining` counters on any `/api` response.
+#### Client IP and `TRUST_PROXY`
+
+The rate limits are per client IP: `RATE_LIMIT_API` on the whole API, plus the
+stricter auth, feedback and metrics limits (the spend limit is per donor, but
+falls back to the IP for anonymous requests). The backend reads the client
+IP from `X-Forwarded-For`, counting `TRUST_PROXY` proxies back from itself.
+
+| Setup                                                               | `TRUST_PROXY` |
+| ------------------------------------------------------------------- | ------------- |
+| Browsers reach the frontend container directly (no proxy before it) | `1` (default) |
+| One external proxy (Caddy, nginx, a load balancer) → frontend       | `2`           |
+| Two external proxies (e.g. CDN → load balancer → frontend)          | `3`           |
+
+- **Too low:** every visitor gets the proxy's address and **all share one
+  bucket**. Six magic-link requests from different people in one minute then
+  block everyone (#140).
+- **Too high:** a client can choose its own IP with a forged `X-Forwarded-For`
+  and escape the limits.
+- Each external proxy must **append** to `X-Forwarded-For`. Caddy does by
+  default; the nginx example above sets it; check your load balancer.
+- Check after every proxy change: [§ 4. Verify](#4-verify).
 
 ---
 
@@ -392,11 +427,16 @@ curl -s -H "Authorization: Bearer key_metrics_$METRICS_API_KEY" http://localhost
 8. **`prisma generate` must run** before `typecheck`/`test` (the Prisma client is
    generated, not committed). CI does this; replicate locally after any schema
    change.
-9. **`DATABASE_URL` path resolution.** The Prisma CLI resolves a relative SQLite
-   URL against the schema directory; the generated PrismaClient resolves it
-   against `process.cwd()`. The Docker `test` target pins an absolute
-   `file:/app/server/prisma/dev.db` to sidestep the mismatch (see the comment in
-   `Dockerfile.backend`). Keep these in sync with `server/vitest.config.ts`.
+9. **`TRUST_PROXY` equals the number of proxies in front of the backend**
+   (the frontend nginx counts as one). Adding or removing a proxy (TLS
+   terminator, load balancer, CDN) changes it. Wrong in either direction breaks
+   the per-IP rate limits: too low, one bucket for everyone; too high, spoofable.
+   See § Client IP and `TRUST_PROXY`.
+10. **`DATABASE_URL` path resolution.** The Prisma CLI resolves a relative SQLite
+    URL against the schema directory; the generated PrismaClient resolves it
+    against `process.cwd()`. The Docker `test` target pins an absolute
+    `file:/app/server/prisma/dev.db` to sidestep the mismatch (see the comment in
+    `Dockerfile.backend`). Keep these in sync with `server/vitest.config.ts`.
 
 ### Agent pre-flight / verification checklist
 
@@ -423,7 +463,9 @@ restart. All seven checks must pass before a change is considered deployable.
 ### Scaling notes
 
 For high-traffic campaigns, see the README's "Future / Production at Scale"
-diagram: horizontally scale frontend replicas behind a load balancer, scale the
+diagram: horizontally scale frontend replicas behind a load balancer (one more proxy
+hop: raise `TRUST_PROXY`; with several backend replicas the in-memory rate-limit
+counters are per replica, so the effective limit multiplies), scale the
 backend tier, and migrate SQLite → PostgreSQL (`datasource.provider` +
 `DATABASE_URL`) with a read replica. A dedicated webhook-sender container is the
 future path to decouple webhook ingestion from API serving.
