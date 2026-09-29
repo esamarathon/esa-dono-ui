@@ -27,6 +27,7 @@ import prisma from '../../../lib/prisma.js';
 import {
   signPayload,
   buildDonationCreatedPayload,
+  buildDonationVisibilityPayload,
   buildDonationModeratedPayload,
   buildIncentiveCreatedPayload,
   buildIncentiveEnabledPayload,
@@ -37,7 +38,9 @@ import {
   WEBHOOK_MESSAGE_TYPES,
 } from '../../../services/webhooks/delivery.js';
 
-const FORBIDDEN_KEYS = ['email', 'donor_name', 'donor_email', 'comment', 'moderated_by'];
+// PRD-0002 §N2: the public display name and comment may go downstream; the
+// donor's email and the moderator's identity may not.
+const FORBIDDEN_KEYS = ['email', 'donor_email', 'moderated_by'];
 
 function findForbiddenKeys(obj: unknown, path: string[] = []): string[] {
   if (Array.isArray(obj)) {
@@ -75,30 +78,67 @@ describe('isWebhookMessageType', () => {
   });
 });
 
+const DONATION = {
+  id: 'dn-1',
+  external_id: 'ext-1',
+  amount_cents: 1000,
+  channel_id: null,
+  event_id: null,
+  donor_id: 'donor-ref-1',
+  donor_name: 'Public Name',
+  comment: 'Public comment',
+  hidden_from_overlay: false,
+};
+
 describe('PII allowlist — donation.created payload', () => {
   it('contains no forbidden keys', () => {
-    const payload = buildDonationCreatedPayload({
-      donationId: 'dn-1',
-      externalId: 'ext-1',
-      amountCents: 1000,
-      channelId: null,
-      donorRef: 'donor-ref-1',
-    });
+    const payload = buildDonationCreatedPayload(DONATION);
     const violations = findForbiddenKeys(payload);
     expect(violations).toHaveLength(0);
   });
 
-  it('excludes donor_name, email, and comment', () => {
-    const payload = buildDonationCreatedPayload({
-      donationId: 'dn-1',
-      externalId: 'ext-1',
-      amountCents: 1000,
-      channelId: null,
-      donorRef: 'donor-ref-1',
-    });
+  it('excludes email and moderator identity, keeps the public display data', () => {
+    const payload = buildDonationCreatedPayload(DONATION);
     const keys = JSON.stringify(payload);
     FORBIDDEN_KEYS.forEach((k) => {
       expect(keys).not.toContain(k);
+    });
+    expect(payload.data).toMatchObject({
+      donor_name: 'Public Name',
+      donor_comment: 'Public comment',
+      event_id: null,
+      hidden_from_overlay: false,
+    });
+  });
+
+  it('sends null name and comment for a donation already hidden from the overlay', () => {
+    const payload = buildDonationCreatedPayload({ ...DONATION, hidden_from_overlay: true });
+    expect(payload.data).toMatchObject({
+      donor_name: null,
+      donor_comment: null,
+      hidden_from_overlay: true,
+    });
+  });
+});
+
+describe('donation.hidden / donation.unhidden payload', () => {
+  it('is donation.hidden with no name or comment when hidden', () => {
+    const payload = buildDonationVisibilityPayload({ ...DONATION, hidden_from_overlay: true });
+    expect(payload.type).toBe('donation.hidden');
+    expect(payload.data).toMatchObject({
+      donation_id: 'dn-1',
+      donor_name: null,
+      donor_comment: null,
+    });
+    expect(findForbiddenKeys(payload)).toHaveLength(0);
+  });
+
+  it('is donation.unhidden with the public name and comment when shown', () => {
+    const payload = buildDonationVisibilityPayload(DONATION);
+    expect(payload.type).toBe('donation.unhidden');
+    expect(payload.data).toMatchObject({
+      donor_name: 'Public Name',
+      donor_comment: 'Public comment',
     });
   });
 });
@@ -197,14 +237,7 @@ describe('PII allowlist — incentive payloads', () => {
 describe('emitWebhookMessage', () => {
   // The mocked prisma client stands in for the caller's transaction client.
   const tx = prisma as unknown as Parameters<typeof emitWebhookMessage>[0];
-  const build = () =>
-    buildDonationCreatedPayload({
-      donationId: 'dn-1',
-      externalId: 'ext-1',
-      amountCents: 1000,
-      channelId: null,
-      donorRef: 'donor-ref-1',
-    });
+  const build = () => buildDonationCreatedPayload(DONATION);
   const ep = (id: string, types: string[]) => ({
     id,
     event_types: JSON.stringify(types),
@@ -281,11 +314,11 @@ describe('emitWebhookMessage', () => {
     });
   });
 
-  it('only queries active endpoints', async () => {
+  it('only queries active NATIVE destinations (TILTIFY ones get Tiltify messages, §T3)', async () => {
     vi.mocked(prisma.webhookDestination.findMany).mockResolvedValue([]);
     await emitWebhookMessage(tx, 'donation.created', build);
     expect(prisma.webhookDestination.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { is_active: true } }),
+      expect.objectContaining({ where: { is_active: true, payload_format: 'NATIVE' } }),
     );
   });
 });

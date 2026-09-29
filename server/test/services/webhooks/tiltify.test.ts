@@ -16,6 +16,12 @@ import { createPledge } from '../../../services/pledge.js';
 const prisma = new PrismaClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `list[i]`, failing the test when it is missing (noUncheckedIndexedAccess). */
+function nth<T>(list: T[], i: number): T {
+  const item = list[i];
+  if (item === undefined) throw new Error(`expected an item at index ${i} of ${list.length}`);
+  return item;
+}
 const rand = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
 
 function createApp() {
@@ -167,7 +173,12 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       channel_id: channelId,
       items: [
         { kind: 'REWARD', target_id: reward.id, quantity: 2 },
-        { kind: 'POLL_VOTE', poll_id: poll.id, target_id: poll.options[1].id, amount_cents: 200 },
+        {
+          kind: 'POLL_VOTE',
+          poll_id: poll.id,
+          target_id: nth(poll.options, 1).id,
+          amount_cents: 200,
+        },
         { kind: 'GOAL', target_id: goal.id, amount_cents: 150 },
       ],
     });
@@ -187,14 +198,11 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
   }
 
   it('rejects TILTIFY on an HTTP Destination (§T1)', async () => {
-    const res = await request(createApp())
-      .post('/api/admin/destinations')
-      .set(AUTH)
-      .send({
-        destination_type: 'HTTP',
-        url: 'https://example.com/hook',
-        payload_format: 'TILTIFY',
-      });
+    const res = await request(createApp()).post('/api/admin/destinations').set(AUTH).send({
+      destination_type: 'HTTP',
+      url: 'https://example.com/hook',
+      payload_format: 'TILTIFY',
+    });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/TILTIFY requires destination_type RABBITMQ/);
 
@@ -216,7 +224,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       `${eventSlug}.fact.updated`,
     ]);
 
-    const d = msgs[0].body;
+    const d = nth(msgs, 0).body;
     // Top level IS the donation: no envelope.
     expect(d).not.toHaveProperty('meta');
     expect(d).not.toHaveProperty('data');
@@ -254,8 +262,8 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       expect(c).toMatchObject({ reward_id: reward.id, quantity: 1 });
     }
     expect(d.poll_id).toBe(poll.id);
-    expect(d.poll_option_id).toBe(poll.options[1].id);
-    expect(d.poll_votes).toEqual([{ poll_id: poll.id, poll_option_id: poll.options[1].id }]);
+    expect(d.poll_option_id).toBe(nth(poll.options, 1).id);
+    expect(d.poll_votes).toEqual([{ poll_id: poll.id, poll_option_id: nth(poll.options, 1).id }]);
     expect(d.target_id).toBe(goal.id);
     expect(d.target_contributions).toEqual([
       { target_id: goal.id, amount: { currency: 'USD', value: '1.50' } },
@@ -264,7 +272,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       expect(d).not.toHaveProperty(k);
     }
 
-    const [channelTotal, eventTotal] = [msgs[1].body, msgs[2].body];
+    const [channelTotal, eventTotal] = [nth(msgs, 1).body, nth(msgs, 2).body];
     expect(channelTotal).toMatchObject({
       id: channelId,
       slug: channelSlug,
@@ -292,7 +300,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
   it('a donation without a display name is "Anonymous", never empty (§T9)', async () => {
     const before = await lastSeq(tiltifyDest);
     await donate({ email: `anon-${rand()}@example.com`, amount_cents: 700, channel_id: channelId });
-    const [d] = await messages(tiltifyDest, before);
+    const d = nth(await messages(tiltifyDest, before), 0);
     expect(d.body.donor_name).toBe('Anonymous');
     expect(d.body.donor_comment).toBeNull();
     expect(d.body.reward_claims).toEqual([]);
@@ -316,16 +324,16 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     expect(hide.status).toBe(200);
     let msgs = await messages(tiltifyDest, before);
     expect(msgs).toHaveLength(1);
-    expect(msgs[0].routing_key).toBe(`${channelSlug}.donation`);
-    expect(msgs[0].body).toMatchObject({
+    expect(nth(msgs, 0).routing_key).toBe(`${channelSlug}.donation`);
+    expect(nth(msgs, 0).body).toMatchObject({
       id: donationId,
       donor_name: 'Anonymous',
       donor_comment: null,
     });
-    expect(msgs[0].body).not.toHaveProperty('completed_at');
+    expect(nth(msgs, 0).body).not.toHaveProperty('completed_at');
     let native = await messages(nativeDest, nativeBefore);
     expect(native.map((m) => m.message_type)).toEqual(['donation.hidden']);
-    expect(native[0].body.data).toMatchObject({ donor_name: null, donor_comment: null });
+    expect(nth(native, 0).body.data).toMatchObject({ donor_name: null, donor_comment: null });
 
     // Hiding again changes nothing and publishes nothing.
     before = await lastSeq(tiltifyDest);
@@ -343,14 +351,14 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     expect(show.status).toBe(200);
     msgs = await messages(tiltifyDest, before);
     expect(msgs).toHaveLength(1);
-    expect(msgs[0].body).toMatchObject({
+    expect(nth(msgs, 0).body).toMatchObject({
       donor_name: 'Contract Donor',
       donor_comment: 'Hello stream',
     });
-    expect(msgs[0].body.completed_at).toBeTruthy();
+    expect(nth(msgs, 0).body.completed_at).toBeTruthy();
     native = await messages(nativeDest, nativeBefore);
     expect(native.map((m) => m.message_type)).toEqual(['donation.unhidden']);
-    expect(native[0].body.data.donor_name).toBe('Contract Donor');
+    expect(nth(native, 0).body.data.donor_name).toBe('Contract Donor');
   });
 
   it('the moderated toggle publishes only the native message, never TILTIFY (§T8)', async () => {
@@ -384,7 +392,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
         `${channelSlug}.fact.updated`,
         `${eventSlug}.fact.updated`,
       ]);
-      return Number(msgs[0].body.total_amount_raised.value);
+      return Number(nth(msgs, 0).body.total_amount_raised.value);
     };
     const refunded = await donate({
       email: `ref-${rand()}@example.com`,
