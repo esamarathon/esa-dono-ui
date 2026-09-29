@@ -16,7 +16,7 @@ import {
 // return it via any other path) in a JSON response. Moderators can see
 // donor_name, spend amounts, claim/entry content, and moderation metadata,
 // but never the donor's email address — only ADMIN routes (server/routes/
-// admin.ts, gated by X-Admin-Key) are allowed to expose it.
+// admin.ts, gated by the admin key or an ADMIN session) are allowed to expose it.
 //
 // This has regressed once already (fixed in 87ad5e4, then again for the
 // donations endpoints): the pattern `donor: { select: { email: ... } } }` was

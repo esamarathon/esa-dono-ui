@@ -40,7 +40,7 @@ No environment variables are needed. Destinations, secrets and RabbitMQ URLs are
 
 kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible messages** (a `TILTIFY` Destination, § Formats) and the **Tiltify-compatible REST API** at `<APP_BASE_URL>/api/tiltify/` ([ADR-0010](adr/0010-tiltify-compatible-rest-api.md)).
 
-- **REST API.** It serves bare Tiltify-v5 objects and needs no key. It is rate-limited per IP by `RATE_LIMIT_TILTIFY` (default 300/min).
+- **REST API.** It serves bare Tiltify-v5 objects and needs no key. The global per-IP API limit applies (`RATE_LIMIT_API`, default 600/min). kollekt polls about 36 times/min per Channel.
 - **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same number as the `fact.updated` message.
 - **Shared incentives** (no Channel) are listed under every Channel, and an Event lists none of its own.
 - **Always empty:** milestones and matches are `[]`.

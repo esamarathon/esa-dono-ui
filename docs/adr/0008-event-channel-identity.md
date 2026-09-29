@@ -4,7 +4,7 @@
 
 **Status:** Accepted
 
-**Related:** PRD-0002 §S, esamarathon/esa-dono-ui#114, ADR-0006 (vocabulary)
+**Related:** PRD-0002 §S, esamarathon/esa-dono-ui#114, [ADR-0006](0006-webhook-vocabulary.md) (vocabulary), [ADR-0009](0009-tiltify-compatible-messages.md) and [ADR-0010](0010-tiltify-compatible-rest-api.md) (slugs and uuids on the Tiltify boundary)
 
 ## Context
 

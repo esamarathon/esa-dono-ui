@@ -194,7 +194,7 @@ export default function AdminWebhooks() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this webhook endpoint? This cannot be undone.')) return;
+    if (!confirm('Delete this Destination? This cannot be undone.')) return;
     try {
       await deleteDestination(id);
       await reload();
@@ -257,13 +257,13 @@ export default function AdminWebhooks() {
       <div className="flex justify-between items-center mb-6">
         <h1 className="font-display text-4xl uppercase">webhooks</h1>
         <button onClick={openCreate} className="btrl-button">
-          + new endpoint
+          + new destination
         </button>
       </div>
 
       {endpoints.length === 0 && (
         <p className="text-off-white/55 font-data text-sm">
-          No webhook endpoints configured. Create one to start receiving events.
+          No Destinations configured. Create one to start receiving webhook messages.
         </p>
       )}
 
@@ -271,7 +271,7 @@ export default function AdminWebhooks() {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-              {['type', 'events', 'ssl', 'active', 'actions'].map((h) => (
+              {['type', 'message types', 'ssl', 'active', 'actions'].map((h) => (
                 <th
                   key={h}
                   className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
@@ -475,7 +475,7 @@ export default function AdminWebhooks() {
 
       {modal && (
         <Modal
-          title={modal === 'create' ? 'new webhook endpoint' : 'edit webhook endpoint'}
+          title={modal === 'create' ? 'new destination' : 'edit destination'}
           onClose={() => setModal(null)}
         >
           <div className="mb-3">
@@ -510,7 +510,7 @@ export default function AdminWebhooks() {
                 <p className="text-xs text-off-white/40 mt-1">
                   Tiltify-compatible: sends bare Tiltify-style donation and totals messages for
                   kollekt and the stream overlay. Routing keys are computed per channel
-                  (&lt;channel-slug&gt;.donation, &lt;slug&gt;.fact.updated); event types and
+                  (&lt;channel-slug&gt;.donation, &lt;slug&gt;.fact.updated); message types and
                   routing key are ignored.
                 </p>
               )}
@@ -622,7 +622,7 @@ export default function AdminWebhooks() {
 
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-2 text-off-white">
-              Event types *
+              Message types *
             </label>
             {isTiltify ? (
               <p className="text-xs text-off-white/40">
@@ -655,7 +655,7 @@ export default function AdminWebhooks() {
             <input
               type="text"
               className="w-full px-3 py-2 text-sm"
-              placeholder="Optional note for this endpoint"
+              placeholder="Optional note for this Destination"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
             />

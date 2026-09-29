@@ -354,7 +354,7 @@ cannot consume our messages**: an unknown campaign id makes it throw and drop th
 **Decided in #117 (ADR-0010).**
 
 - **Mount path and responses:** mounted at `/api/tiltify`. Responses are bare (no `{ data }`), and an unknown id returns 404.
-- **Access:** public, with a per-IP rate limit (`RATE_LIMIT_TILTIFY`).
+- **Access:** public; the global per-IP API limit applies (`RATE_LIMIT_API`, #140).
 - **Shared incentives** are listed under every Channel, and an Event lists none of its own. This needs a kollekt change (kollekt#36).
 - **Milestones and matches** are always `[]`.
 - **Totals:** `total_amount_raised` is the same number as the `fact.updated` message.

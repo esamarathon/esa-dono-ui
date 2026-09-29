@@ -78,7 +78,7 @@ describe('AdminDestinations', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/No webhook endpoints configured/)).toBeInTheDocument();
+    expect(await screen.findByText(/No Destinations configured/)).toBeInTheDocument();
   });
 
   it('creates an HTTP destination', async () => {
@@ -91,8 +91,8 @@ describe('AdminDestinations', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ new endpoint' }));
-    expect(screen.getByText('new webhook endpoint')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: '+ new destination' }));
+    expect(screen.getByText('new destination')).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText('https://example.com/webhook'), {
       target: { value: 'https://example.com/hook' },
@@ -150,7 +150,7 @@ describe('AdminDestinations', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
-    expect(screen.getByText('edit webhook endpoint')).toBeInTheDocument();
+    expect(screen.getByText('edit destination')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
 
     await waitFor(() =>
@@ -168,7 +168,7 @@ describe('AdminDestinations', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ new endpoint' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ new destination' }));
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'RABBITMQ' } });
     expect(
       screen.getByPlaceholderText('amqps://user:pass@rabbitmq.example.com:5671/vhost'),
@@ -190,7 +190,7 @@ describe('AdminDestinations', () => {
     );
   });
 
-  it('creates a Tiltify-compatible RabbitMQ destination and hides event types (#116)', async () => {
+  it('creates a Tiltify-compatible RabbitMQ destination and hides message types (#116)', async () => {
     mocks.getDestinations.mockResolvedValue([]);
     mocks.createDestination.mockResolvedValue({ id: 'ep-4' });
 
@@ -200,11 +200,11 @@ describe('AdminDestinations', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ new endpoint' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ new destination' }));
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'RABBITMQ' } });
     fireEvent.change(screen.getByLabelText('Payload format'), { target: { value: 'TILTIFY' } });
 
-    // Event types and the routing key are ignored for a Tiltify destination.
+    // Message types and the routing key are ignored for a Tiltify destination.
     expect(screen.queryByLabelText('donation.created')).toBeNull();
     expect(screen.queryByPlaceholderText('my.queue.name')).toBeNull();
     expect(screen.getByText(/sends bare Tiltify-style/)).toBeInTheDocument();

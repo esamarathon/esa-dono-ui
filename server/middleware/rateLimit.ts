@@ -40,14 +40,16 @@ const feedbackLimit = rateLimit({
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-// The Tiltify-compatible read API (/api/tiltify) is public like /donate. kollekt
-// polls each campaign every 5 s (~36 requests/min per campaign), so the default
-// is generous; keyed by IP.
-const tiltifyLimit = rateLimit({
+// Global per-IP limit on the whole API (#140), a load backstop. The stricter
+// limits above guard specific abuse (email sending, spending) and apply on top.
+// Sized for the busiest legitimate client: kollekt polls /api/tiltify every 5 s
+// (~36 requests/min per Channel), and several donors can share a venue NAT.
+// Keyed by req.ip, so TRUST_PROXY must match the proxy hops (lib/trustProxy.ts).
+const apiLimit = rateLimit({
   windowMs: 60_000,
-  max: Number(process.env.RATE_LIMIT_TILTIFY) || 300,
+  max: Number(process.env.RATE_LIMIT_API) || 600,
   keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ''),
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-export { spendLimit, authLimit, metricsLimit, feedbackLimit, tiltifyLimit };
+export { spendLimit, authLimit, metricsLimit, feedbackLimit, apiLimit };

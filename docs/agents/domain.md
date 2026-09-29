@@ -23,8 +23,14 @@ Single-context repo (most repos):
 │   ├── 0002-migrate-payments-tiltify-to-stripe.md
 │   ├── 0003-unify-auth-on-donor-token-and-role.md
 │   ├── 0004-bearer-token-transport-and-credential-holding.md
-│   ├── 0005-outbound-webhooks.md
-│   └── 0006-webhook-vocabulary.md
+│   ├── 0005-outbound-webhooks.md               (superseded in part by 0007)
+│   ├── 0006-webhook-vocabulary.md
+│   ├── 0007-webhook-delivery-semantics.md
+│   ├── 0008-event-channel-identity.md
+│   ├── 0009-tiltify-compatible-messages.md
+│   └── 0010-tiltify-compatible-rest-api.md
+├── docs/prd/               ← product requirements (0001 Tiltify→Stripe, 0002 webhook queue + Tiltify compatibility)
+├── docs/outbound-events.md ← webhook runbook: Formats, Consumer setup, Runbook
 └── ...
 ```
 

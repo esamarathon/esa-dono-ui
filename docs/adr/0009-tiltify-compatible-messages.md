@@ -4,7 +4,7 @@
 
 **Status:** Accepted
 
-**Related:** PRD-0002 §T, §N, esamarathon/esa-dono-ui#116, ADR-0007 (delivery), ADR-0008 (identity), esamarathon/kollekt#35, esamarathon/kollekt#36, esamarathon/esa-layouts-v2#5, esamarathon/esa-layouts-v2#6
+**Related:** PRD-0002 §T, §N, esamarathon/esa-dono-ui#116, [ADR-0006](0006-webhook-vocabulary.md) (vocabulary), [ADR-0007](0007-webhook-delivery-semantics.md) (delivery), [ADR-0008](0008-event-channel-identity.md) (identity), [ADR-0010](0010-tiltify-compatible-rest-api.md) (REST API), esamarathon/kollekt#35, esamarathon/kollekt#36, esamarathon/esa-layouts-v2#5, esamarathon/esa-layouts-v2#6
 
 ## Context
 

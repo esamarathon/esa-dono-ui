@@ -179,7 +179,12 @@ Point TLS at the frontend container (`:8080`) and let it proxy `/api/`:
 server {
   listen 443 ssl;
   server_name donations.example.com;
-  location / { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
 }
 ```
 
@@ -187,6 +192,14 @@ Caddy: `reverse_proxy /* 127.0.0.1:8080`
 
 > The frontend container already forwards `/api/*` to `dono-backend:3001`, so
 > an external proxy only needs to reach the frontend.
+
+> **Set `TRUST_PROXY=2`** behind an external proxy (it plus the frontend nginx).
+> Rate limits are per client IP, read from `X-Forwarded-For` that many hops
+> back. With the default `1`, every visitor gets the external proxy's address and
+> they all share one bucket (#140). The external proxy must append
+> `X-Forwarded-For` (Caddy does by default; the nginx example above sets it).
+> Check: two clients on different networks should see separate
+> `x-ratelimit-remaining` counters on any `/api` response.
 
 ---
 
@@ -218,7 +231,8 @@ Caddy: `reverse_proxy /* 127.0.0.1:8080`
 | `RATE_LIMIT_SPEND`                  | no             | `20`                                                       | spend endpoints req/min/donor                                      |
 | `RATE_LIMIT_AUTH`                   | no             | `5`                                                        | auth endpoints req/min/IP                                          |
 | `RATE_LIMIT_METRICS`                | no             | `30`                                                       | `/api/metrics` req/min/IP                                          |
-| `RATE_LIMIT_TILTIFY`                | no             | `300`                                                      | `/api/tiltify` req/min/IP                                          |
+| `RATE_LIMIT_API`                    | no             | `600`                                                      | all of `/api/*` req/min/IP (#140)                                  |
+| `TRUST_PROXY`                       | no             | `1`                                                        | proxy hops in front of Express (#140)                              |
 
 OAuth redirect URIs to register with each provider:
 `${APP_BASE_URL}/api/auth/{google,discord,twitch}/callback`.
