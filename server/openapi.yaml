@@ -1949,6 +1949,8 @@ paths:
                       [
                         donation.created,
                         donation.moderated,
+                        donation.hidden,
+                        donation.unhidden,
                         incentive.created,
                         incentive.enabled,
                         incentive.disabled,
@@ -1962,7 +1964,13 @@ paths:
                     description: 'Required for RabbitMQ endpoints. Must be amqp:// or amqps://',
                   }
                 amqp_exchange: { type: string, default: '' }
-                amqp_routing_key: { type: string, description: 'Required for RabbitMQ endpoints' }
+                amqp_routing_key:
+                  { type: string, description: 'Required for NATIVE RabbitMQ endpoints only' }
+                payload_format:
+                  type: string
+                  enum: [NATIVE, TILTIFY]
+                  default: NATIVE
+                  description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '201':
           description: Endpoint created (secret included on creation only)
@@ -2015,6 +2023,8 @@ paths:
                       [
                         donation.created,
                         donation.moderated,
+                        donation.hidden,
+                        donation.unhidden,
                         incentive.created,
                         incentive.enabled,
                         incentive.disabled,
@@ -2025,7 +2035,13 @@ paths:
                 description: { type: string }
                 amqp_url: { type: string }
                 amqp_exchange: { type: string }
-                amqp_routing_key: { type: string }
+                amqp_routing_key:
+                  { type: string, description: 'Required for NATIVE RabbitMQ endpoints only' }
+                payload_format:
+                  type: string
+                  enum: [NATIVE, TILTIFY]
+                  default: NATIVE
+                  description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '200':
           description: Endpoint updated
@@ -3028,11 +3044,20 @@ paths:
   /moderator/donations/{id}:
     patch:
       tags: [Moderator]
-      summary: Mark (or unmark) a donation as moderated
+      summary: Moderate a donation and/or hide it from the stream overlay
       description: |
-        Sets `moderated`, `moderated_at`, and `moderated_by` so downstream
-        tools (exports, leaderboards, Discord role sync, etc.) can rely on
-        which donations a human has reviewed.
+        Accepts `moderated` and/or `hidden_from_overlay`; at least one is
+        required (400 otherwise).
+
+        `moderated` sets `moderated`, `moderated_at`, and `moderated_by` so
+        downstream tools (exports, leaderboards, Discord role sync, etc.) can
+        rely on which donations a human has reviewed. It is a review flag only
+        and does not republish to Tiltify destinations.
+
+        `hidden_from_overlay` hides the donation from the stream overlay. It
+        publishes native `donation.hidden`/`donation.unhidden` messages and
+        republishes the Tiltify donation (as "Anonymous" without `completed_at`
+        when hidden).
       parameters:
         - name: token
           in: query
@@ -3048,14 +3073,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [moderated]
+              description: At least one of moderated / hidden_from_overlay is required.
               properties:
                 moderated: { type: boolean }
+                hidden_from_overlay: { type: boolean }
       responses:
         '200':
           description: Donation updated
         '400':
-          description: moderated must be a boolean
+          description: Neither moderated nor hidden_from_overlay provided, or a value is not a boolean
+        '404':
+          description: Donation not found
 
   /moderator/goals:
     get:
@@ -3379,6 +3407,8 @@ components:
               [
                 donation.created,
                 donation.moderated,
+                donation.hidden,
+                donation.unhidden,
                 incentive.created,
                 incentive.enabled,
                 incentive.disabled,
@@ -3398,12 +3428,16 @@ components:
           }
         amqp_exchange: { type: string, default: '' }
         amqp_routing_key:
-          { type: string, nullable: true, description: 'Required for RabbitMQ endpoints' }
+          {
+            type: string,
+            nullable: true,
+            description: 'Required for NATIVE RabbitMQ endpoints only',
+          }
         payload_format:
           type: string
           enum: [NATIVE, TILTIFY]
           default: NATIVE
-          description: Message payload envelope (PRD-0002). NATIVE is the existing envelope.
+          description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     WebhookDelivery:

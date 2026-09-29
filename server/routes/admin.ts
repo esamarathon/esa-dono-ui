@@ -2,10 +2,10 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { countedDonation } from '../lib/donationTotals.js';
+import { countedDonation, countsTowardTotals } from '../lib/donationTotals.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
-import { sendError } from '../lib/httpError.js';
+import { httpError, sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { processDonation } from '../services/donation.js';
@@ -27,6 +27,8 @@ import {
   buildIncentiveEnabledPayload,
   buildIncentiveDisabledPayload,
   buildIncentiveValueChangedPayload,
+  PAYLOAD_FORMATS,
+  TILTIFY_DEFAULT_EXCHANGE,
 } from '../services/webhooks/delivery.js';
 
 const router = Router();
@@ -139,65 +141,66 @@ router.patch('/donations/:id/status', async (req, res) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
-  const donation = await prisma.donation.findUnique({
-    where: { id: req.params.id },
-    include: { donor: true },
-  });
-  if (!donation) return res.status(404).json({ error: 'Donation not found' });
-  if (donation.refund_id) {
-    return res
-      .status(400)
-      .json({ error: 'Donation is refunded/charged back and cannot change status' });
-  }
-  if (donation.status === status) {
-    return res.status(400).json({ error: 'Donation already has this status' });
-  }
+  try {
+    // One transaction, reading inside it: the checks, the balance clawback, the
+    // status and the totals messages see one state (a double submit cannot claw
+    // back twice).
+    const updated = await withWebhooks(async (tx, _emit, tiltify) => {
+      const donation = await tx.donation.findUnique({
+        where: { id: req.params.id },
+        include: { donor: true },
+      });
+      if (!donation) throw httpError(404, 'Donation not found');
+      if (donation.refund_id) {
+        throw httpError(400, 'Donation is refunded/charged back and cannot change status');
+      }
+      if (donation.status === status) {
+        throw httpError(400, 'Donation already has this status');
+      }
 
-  if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-    // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
-    // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
-    // Donation.status value.
-    const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
-    const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
-    const balanceAfter = donation.donor.balance_remaining - clawback;
-
-    const [, adjustment] = await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donation.donor_id },
-        data: { balance_remaining: { decrement: clawback } },
-      }),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donation.donor_id,
-          amount_cents: -clawback,
-          balance_after_cents: balanceAfter,
-          type: adjustmentType,
-          reason: reason || `Donation ${status.toLowerCase()}`,
-          reference_id: donation.id,
-          created_by: 'admin',
+      let refundId: string | undefined;
+      if (status === 'REFUNDED' || status === 'CHARGEBACK') {
+        // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
+        // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
+        // Donation.status value.
+        const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
+        const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
+        await tx.donor.update({
+          where: { id: donation.donor_id },
+          data: { balance_remaining: { decrement: clawback } },
+        });
+        const adjustment = await tx.balanceAdjustment.create({
+          data: {
+            donor_id: donation.donor_id,
+            amount_cents: -clawback,
+            balance_after_cents: donation.donor.balance_remaining - clawback,
+            type: adjustmentType,
+            reason: reason || `Donation ${status.toLowerCase()}`,
+            reference_id: donation.id,
+            created_by: 'admin',
+          },
+        });
+        refundId = adjustment.id;
+      }
+      const row = await tx.donation.update({
+        where: { id: donation.id },
+        data: { status, ...(refundId ? { refund_id: refundId } : {}) },
+        include: {
+          donor: { select: { email: true } },
+          channel: { select: { id: true, name: true, slug: true, event_id: true } },
         },
-      }),
-    ]);
-    const updated = await prisma.donation.update({
-      where: { id: donation.id },
-      data: { status, refund_id: adjustment.id },
-      include: {
-        donor: { select: { email: true } },
-        channel: { select: { id: true, name: true, slug: true, event_id: true } },
-      },
+      });
+      // Publish the totals only when they move (PRD-0002 §T7): a chargeback lowers
+      // them; a refund goes to the donor's wallet and does not (lib/donationTotals.ts).
+      if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
+        await tiltify.totals(row.channel_id);
+      }
+      return row;
     });
-    return res.json(updated);
+    res.json(updated);
+  } catch (e) {
+    sendError(res, e, '[admin/donations/status]');
   }
-
-  const updated = await prisma.donation.update({
-    where: { id: donation.id },
-    data: { status },
-    include: {
-      donor: { select: { email: true } },
-      channel: { select: { id: true, name: true, slug: true, event_id: true } },
-    },
-  });
-  res.json(updated);
 });
 
 // Claims
@@ -267,6 +270,7 @@ router.post('/rewards', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'REWARD',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         costCents: created.cost_cents,
@@ -316,6 +320,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -324,6 +329,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -335,6 +341,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldCostCents: prior.cost_cents,
@@ -890,6 +897,7 @@ router.post('/polls', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'POLL',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         endsAt: created.ends_at,
@@ -936,6 +944,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -944,6 +953,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -959,6 +969,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldEndsAt,
@@ -1080,6 +1091,7 @@ router.post('/goals', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'GOAL',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         targetCents: created.target_cents,
@@ -1114,6 +1126,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -1122,6 +1135,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -1133,6 +1147,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldTargetCents: prior.target_cents,
@@ -1161,6 +1176,7 @@ router.delete('/goals/:id', async (req, res) => {
           buildIncentiveDisabledPayload({
             incentiveKind: 'GOAL',
             incentiveId: prior.id,
+            channelId: prior.channel_id,
             title: prior.title,
           }),
         );
@@ -1391,6 +1407,20 @@ router.get('/destinations', async (req, res) => {
   );
 });
 
+/**
+ * PRD-0002 §T1: the Tiltify format is RabbitMQ-only (no consumer reads a bare
+ * Tiltify body over HTTP). Returns an error message, or null when valid.
+ */
+function payloadFormatError(destType: string, format: unknown): string | null {
+  if (!(PAYLOAD_FORMATS as readonly unknown[]).includes(format)) {
+    return 'payload_format must be NATIVE or TILTIFY';
+  }
+  if (format === 'TILTIFY' && destType !== 'RABBITMQ') {
+    return 'payload_format TILTIFY requires destination_type RABBITMQ';
+  }
+  return null;
+}
+
 router.post('/destinations', async (req, res) => {
   const {
     url,
@@ -1402,9 +1432,13 @@ router.post('/destinations', async (req, res) => {
     amqp_url,
     amqp_exchange,
     amqp_routing_key,
+    payload_format,
   } = req.body;
 
   const destType = destination_type ?? 'HTTP';
+  const format = payload_format ?? 'NATIVE';
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
 
   if (destType === 'HTTP') {
     if (!url || typeof url !== 'string') {
@@ -1425,7 +1459,8 @@ router.post('/destinations', async (req, res) => {
     if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
       return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
     }
-    if (!amqp_routing_key || typeof amqp_routing_key !== 'string') {
+    // A TILTIFY Destination computes the routing key per message (§T3).
+    if (format === 'NATIVE' && (!amqp_routing_key || typeof amqp_routing_key !== 'string')) {
       return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
     }
   } else {
@@ -1449,8 +1484,9 @@ router.post('/destinations', async (req, res) => {
       description: description ?? null,
       destination_type: destType,
       amqp_url: amqp_url ?? null,
-      amqp_exchange: amqp_exchange ?? '',
+      amqp_exchange: amqp_exchange ?? (format === 'TILTIFY' ? TILTIFY_DEFAULT_EXCHANGE : ''),
       amqp_routing_key: amqp_routing_key ?? null,
+      payload_format: format,
     },
   });
   res.status(201).json({
@@ -1470,9 +1506,24 @@ router.put('/destinations/:id', async (req, res) => {
     amqp_url,
     amqp_exchange,
     amqp_routing_key,
+    payload_format,
   } = req.body;
 
-  const destType = destination_type ?? 'HTTP';
+  const current = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+    select: { destination_type: true, payload_format: true, amqp_routing_key: true },
+  });
+  if (!current) return res.status(404).json({ error: 'Destination not found' });
+  // Validate the Destination as it will be after the update, not the request alone.
+  const destType = destination_type ?? current.destination_type;
+  const format = payload_format ?? current.payload_format;
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
+  const routingKey = amqp_routing_key !== undefined ? amqp_routing_key : current.amqp_routing_key;
+  if (destType === 'RABBITMQ' && format === 'NATIVE' && !routingKey) {
+    // Without one, every NATIVE message would stall the queue as an endpoint failure.
+    return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
+  }
 
   if (destType === 'HTTP') {
     if (url !== undefined) {
@@ -1519,6 +1570,7 @@ router.put('/destinations/:id', async (req, res) => {
       ...(amqp_url !== undefined ? { amqp_url } : {}),
       ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
       ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
+      ...(payload_format !== undefined ? { payload_format } : {}),
     },
   });
   // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.

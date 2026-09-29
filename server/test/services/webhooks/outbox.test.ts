@@ -16,6 +16,7 @@ const build = () =>
   buildIncentiveCreatedPayload({
     incentiveKind: 'GOAL',
     incentiveId: 'goal-1',
+    channelId: null,
     title: 'Outbox test goal',
     isActive: true,
     targetCents: 1000,

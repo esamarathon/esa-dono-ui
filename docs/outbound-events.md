@@ -2,12 +2,37 @@
 
 Admins configure **Destinations** at `/admin/destinations`. A Destination receives a **webhook message** when something happens on the platform: a new donation, a moderation change, or an incentive change (create, enable, disable, value change) for rewards, polls and goals. Vocabulary: see [`CONTEXT.md`](../CONTEXT.md).
 
-**Message types:** `donation.created`, `donation.moderated`, `incentive.created`, `incentive.enabled`, `incentive.disabled`, `incentive.value_changed`, plus `ping` from the admin "Test ping" button.
+**Message types:** `donation.created`, `donation.moderated`, `donation.hidden`, `donation.unhidden`, `incentive.created`, `incentive.enabled`, `incentive.disabled`, `incentive.value_changed`, plus `ping` from the admin "Test ping" button.
 
 Each Destination picks a transport:
 
 - **HTTP**: a signed POST with `X-Webhook-Signature: t=<ts>,v1=<hmac>` (Stripe-style HMAC-SHA256), `X-Webhook-Event: <message type>` and `X-Webhook-Delivery: <delivery id>`. SSL verification can be turned off for self-signed certificates.
 - **RabbitMQ**: published with `amqplib` to the configured exchange and routing key. The broker confirms each publish. Properties are `persistent`, `contentType: application/json`, `messageId: <message id>` and `type: <message type>`, with headers `x-webhook-event` and `x-webhook-delivery`.
+
+## Formats
+
+Each Destination also picks a **payload format**. Design: [ADR-0009](adr/0009-tiltify-compatible-messages.md).
+
+- **Native** (default). The envelope `{ id, type, created_at, data }`, one message type per change, filtered by the Destination's `event_types`, sent with its routing key.
+  - `donation.created` carries `donation_id`, `external_id`, `amount_cents`, `channel_id`, `event_id`, `donor_ref`, `donor_name`, `donor_comment` and `hidden_from_overlay`.
+  - `donor_name` and `donor_comment` are the donor's public display data. They are null while the donation is hidden from the overlay.
+  - `donation.hidden` / `donation.unhidden` are sent when a moderator hides or shows a donation.
+  - Unassigned donations publish nothing until an admin assigns them.
+  - `incentive.*` messages carry `channel_id`: the Channel the incentive belongs to, or null when every Channel shares it.
+- **Tiltify-compatible** (`TILTIFY`, RabbitMQ only). Bare Tiltify-v5 objects for kollekt and esa-layouts-v2, with no envelope. The Destination's event types and routing key are ignored. The exchange defaults to `tiltify` and is declared `topic, durable, autoDelete`.
+
+  | Routing key               | Body                                                                                                                                                                                                     | Sent when                                                               |
+  | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+  | `<channel-slug>.donation` | the donation: `id`, `amount {currency, value, value_cents}`, `donor_name`, `donor_comment`, `created_at`, `completed_at`, `campaign_id` (Channel), `team_event_id` (Event), incentive scalars and arrays | created, assigned, hidden, shown again                                  |
+  | `<slug>.fact.updated`     | `{ id, slug, name, total_amount_raised: {currency, value} }`                                                                                                                                             | created, assigned, chargeback: once for the Channel, once for its Event |
+  - `amount.value` is a string with two decimals.
+  - A hidden donation is sent as `donor_name: "Anonymous"`, `donor_comment: null`, **without `completed_at`**. The overlay removes it, and an overlay that never saw it stays silent.
+  - **`"Anonymous"` consequence:** a donor without a display name is also sent as `"Anonymous"`. The overlay therefore removes an anonymous donation after **any** republish of it: hide, show again, or an admin requeue. The fix is on the overlay side (esa-layouts-v2#5).
+  - Showing a donation again re-adds it to the overlay **and plays the alert**.
+  - The `moderated` review toggle and incentive changes are not sent in this format. Consumers read incentives from the REST API.
+  - A refund goes to the donor's wallet, so the totals do not change. A chargeback lowers them.
+
+**Message identity.** Each message has one UUID, `message_id`, which is the AMQP `messageId`. For the native format it is also the envelope `id`. A requeue sends the same `message_id` again. Consumers deduplicate on it, or on the donation `id` (Tiltify consumers upsert by it).
 
 No environment variables are needed. Destinations, secrets and RabbitMQ URLs are set at runtime in the admin UI. One optional variable, `WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS` (default `10000`), changes the publish-confirm timeout.
 

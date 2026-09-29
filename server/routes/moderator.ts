@@ -515,35 +515,77 @@ router.get('/donations', async (req, res) => {
   );
 });
 
+/**
+ * PATCH /moderator/donations/:id — `{ moderated?, hidden_from_overlay? }`, at least one.
+ *
+ * - `moderated` is the review toggle: native `donation.moderated` only. It does NOT
+ *   republish on TILTIFY, because the body would not change and a republish of an
+ *   anonymous donation removes it from the overlay (PRD-0002 §T8).
+ * - `hidden_from_overlay` hides the donation from the stream overlay: native
+ *   `donation.hidden` / `donation.unhidden`, and a TILTIFY republish (as `"Anonymous"`
+ *   without `completed_at` when hidden, the full donation when shown; §T5–T6).
+ *   Setting the value it already has publishes nothing.
+ */
 router.patch('/donations/:id', async (req, res) => {
-  const { moderated } = req.body;
-  if (typeof moderated !== 'boolean') {
+  const { moderated, hidden_from_overlay: hidden } = req.body;
+  if (moderated === undefined && hidden === undefined) {
+    return res
+      .status(400)
+      .json({ error: 'Provide moderated and/or hidden_from_overlay (booleans)' });
+  }
+  if (moderated !== undefined && typeof moderated !== 'boolean') {
     return res.status(400).json({ error: 'moderated must be a boolean' });
+  }
+  if (hidden !== undefined && typeof hidden !== 'boolean') {
+    return res.status(400).json({ error: 'hidden_from_overlay must be a boolean' });
   }
   const moderatorEmail = req.donor?.email || 'moderator';
 
-  const { buildDonationModeratedPayload } = await import('../services/webhooks/delivery.js');
+  const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
+    await import('../services/webhooks/delivery.js');
   const { withWebhooks } = await import('../services/webhooks/outbox.js');
-  const donation = await withWebhooks(async (tx, emit) => {
+  const reviewFields = (value: boolean) =>
+    value
+      ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
+      : { moderated: false, moderated_at: null, moderated_by: null };
+
+  const donation = await withWebhooks(async (tx, emit, tiltify) => {
+    // Read inside the transaction, so two concurrent hides publish once.
+    const existing = await tx.donation.findUnique({
+      where: { id: req.params.id },
+      select: { hidden_from_overlay: true },
+    });
+    if (!existing) return null;
     const updated = await tx.donation.update({
       where: { id: req.params.id },
-      data: moderated
-        ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
-        : { moderated: false, moderated_at: null, moderated_by: null },
-      include: { donor: { select: { id: true } } },
+      data: {
+        ...(moderated === undefined ? {} : reviewFields(moderated)),
+        ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
+      },
     });
-    await emit('donation.moderated', () =>
-      buildDonationModeratedPayload({
-        donationId: updated.id,
-        externalId: updated.external_id,
-        donorRef: updated.donor.id,
-        moderated,
-        moderatedAt: updated.moderated_at,
-      }),
-    );
+    if (moderated !== undefined) {
+      await emit('donation.moderated', () =>
+        buildDonationModeratedPayload({
+          donationId: updated.id,
+          externalId: updated.external_id,
+          donorRef: updated.donor_id,
+          moderated,
+          moderatedAt: updated.moderated_at,
+        }),
+      );
+    }
+    // An unassigned donation was never published, so there is nothing to hide (§E6).
+    const published = updated.channel_id !== null || updated.event_id !== null;
+    if (hidden !== undefined && hidden !== existing.hidden_from_overlay && published) {
+      await emit(hidden ? 'donation.hidden' : 'donation.unhidden', () =>
+        buildDonationVisibilityPayload(updated),
+      );
+      await tiltify.donation(updated.id);
+    }
     return updated;
   });
 
+  if (!donation) return res.status(404).json({ error: 'Donation not found' });
   res.json(donation);
 });
 

@@ -414,6 +414,11 @@ export default function StaffHelp({ role }: { role: Role }) {
           record that a human has reviewed it. This flag is used by downstream tools (overlays,
           exports). It does <em>not</em> block or hide the donation.
         </p>
+        <p>
+          <Term>Hide from overlay</Term> — removes the donor's name and message from the stream
+          overlay. The donation still counts toward totals. Un-hiding re-adds it and plays the alert
+          again.
+        </p>
         {isAdmin && (
           <p>
             The admin donations list is the only place in the UI where donor emails appear alongside
@@ -528,6 +533,10 @@ export default function StaffHelp({ role }: { role: Role }) {
           />
           <p>Managing destinations:</p>
           <ul className="list-disc pl-5 space-y-1">
+            <li>
+              <Term>Payload format</Term> — <Term>Native</Term> is our envelope, for our own tools.{' '}
+              <Term>Tiltify-compatible</Term> is RabbitMQ only, for kollekt and esa-layouts-v2.
+            </li>
             <li>
               <Term>Create</Term> — provide a URL (HTTP) or exchange config (RABBITMQ). A signing
               secret is auto-generated if not supplied.

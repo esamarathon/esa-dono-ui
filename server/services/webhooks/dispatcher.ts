@@ -2,7 +2,7 @@ import type { WebhookDelivery, WebhookDestination } from '@prisma/client';
 import http from 'http';
 import https from 'https';
 import prisma from '../../lib/prisma.js';
-import { signPayload } from './delivery.js';
+import { signPayload, TILTIFY_DEFAULT_EXCHANGE } from './delivery.js';
 
 /** Retry delays in seconds, indexed by attempt count after the failure (1-based). */
 export const BACKOFF_SECONDS = [5, 15, 60, 180] as const;
@@ -90,6 +90,8 @@ async function httpPost(
 type AmqpEntry = {
   connection: import('amqplib').ChannelModel;
   channel: import('amqplib').ConfirmChannel;
+  /** The TILTIFY exchange was declared on this connection. */
+  exchangeAsserted?: boolean;
 };
 
 const amqpCache = new Map<string, AmqpEntry>();
@@ -131,9 +133,12 @@ async function amqpPublish(
   messageId: string,
   messageType: string,
   body: string,
+  routingKey: string,
 ): Promise<AttemptResult> {
   const url = withHeartbeat(dest.amqp_url!);
-  const routingKey = dest.amqp_routing_key!;
+  const tiltify = dest.payload_format === 'TILTIFY';
+  // The Tiltify consumers read the `tiltify` exchange (PRD-0002 §T3).
+  const exchange = dest.amqp_exchange || (tiltify ? TILTIFY_DEFAULT_EXCHANGE : '');
 
   let cached = amqpCache.get(dest.id);
 
@@ -151,6 +156,18 @@ async function amqpPublish(
 
     const { channel } = cached;
 
+    // TILTIFY consumers declare the exchange as `topic, durable, autoDelete`
+    // (PRD-0002 §T3). Declaring it the same way first surfaces a mismatch as
+    // PRECONDITION_FAILED (an endpoint failure, retried) instead of publishing into
+    // an exchange of the wrong type. Once per connection.
+    if (tiltify && !cached.exchangeAsserted) {
+      await channel.assertExchange(exchange, 'topic', {
+        durable: true,
+        autoDelete: true,
+      });
+      cached.exchangeAsserted = true;
+    }
+
     const headers: Record<string, string> = {
       'x-webhook-event': messageType,
       'x-webhook-delivery': deliveryId,
@@ -165,7 +182,7 @@ async function amqpPublish(
       const outcome = await Promise.race([
         new Promise<'confirmed'>((resolve, reject) => {
           channel.publish(
-            dest.amqp_exchange || '',
+            exchange,
             routingKey,
             Buffer.from(body),
             {
@@ -205,7 +222,9 @@ async function amqpPublish(
 
 async function deliver(delivery: DeliveryWithDestination): Promise<AttemptResult> {
   if (delivery.destination.destination_type === 'RABBITMQ') {
-    if (!delivery.destination.amqp_url || !delivery.destination.amqp_routing_key) {
+    // A TILTIFY message carries its own routing key; a NATIVE one uses the Destination's.
+    const routingKey = delivery.routing_key ?? delivery.destination.amqp_routing_key;
+    if (!delivery.destination.amqp_url || !routingKey) {
       return {
         ok: false,
         statusCode: 0,
@@ -218,6 +237,7 @@ async function deliver(delivery: DeliveryWithDestination): Promise<AttemptResult
       delivery.message_id,
       delivery.message_type,
       delivery.payload,
+      routingKey,
     );
   }
 

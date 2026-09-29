@@ -1,7 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { buildDonationCreatedPayload } from './webhooks/delivery.js';
-import { withWebhooks } from './webhooks/outbox.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
 
 /** Where a donation is routed. Both null = unassigned (PRD-0002 §E5, §E6). */
 export interface DonationRoute {
@@ -61,7 +60,7 @@ export async function resolveDonationRoute(
  */
 export async function assignDonationChannel(donationId: string, channelId: unknown) {
   if (typeof channelId !== 'string' || !channelId) throw httpError(400, 'channel_id is required');
-  return withWebhooks(async (tx, emit) => {
+  return withWebhooks(async (tx, emit, tiltify) => {
     const donation = await tx.donation.findUnique({ where: { id: donationId } });
     if (!donation) throw httpError(404, 'Donation not found');
     if (donation.channel_id || donation.event_id) {
@@ -72,15 +71,7 @@ export async function assignDonationChannel(donationId: string, channelId: unkno
       where: { id: donationId },
       data: { channel_id: route.channelId, event_id: route.eventId },
     });
-    await emit('donation.created', () =>
-      buildDonationCreatedPayload({
-        donationId: updated.id,
-        externalId: updated.external_id,
-        amountCents: updated.amount_cents,
-        channelId: route.channelId,
-        donorRef: updated.donor_id,
-      }),
-    );
+    await publishRoutedDonation(emit, tiltify, updated);
     return updated;
   });
 }

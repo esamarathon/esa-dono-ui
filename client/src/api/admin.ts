@@ -173,6 +173,7 @@ export async function getDestinations(): Promise<WebhookEndpoint[]> {
 
 export async function createDestination(payload: {
   destination_type?: 'HTTP' | 'RABBITMQ';
+  payload_format?: 'NATIVE' | 'TILTIFY';
   url?: string;
   secret?: string;
   event_types: string[];
@@ -190,6 +191,7 @@ export async function updateDestination(
   id: string,
   payload: {
     destination_type?: 'HTTP' | 'RABBITMQ';
+    payload_format?: 'NATIVE' | 'TILTIFY';
     url?: string;
     event_types?: string[];
     verify_ssl?: boolean;

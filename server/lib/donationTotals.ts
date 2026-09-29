@@ -14,3 +14,8 @@ export const COUNTED_DONATION_STATUSES = ['COMPLETED', 'REFUNDED'];
 
 /** Prisma `where` fragment selecting donations that count toward totals. */
 export const countedDonation = { status: { in: COUNTED_DONATION_STATUSES } };
+
+/** Whether a donation with this status counts toward money totals. */
+export function countsTowardTotals(status: string): boolean {
+  return COUNTED_DONATION_STATUSES.includes(status);
+}

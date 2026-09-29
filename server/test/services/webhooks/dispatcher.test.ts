@@ -53,6 +53,7 @@ describe('webhook dispatcher', () => {
     amqp_url?: string | null;
     amqp_exchange?: string;
     amqp_routing_key?: string | null;
+    payload_format?: string;
   };
 
   type DeliveryOverrides = {
@@ -60,6 +61,7 @@ describe('webhook dispatcher', () => {
     attempts?: number;
     status?: string;
     next_attempt_at?: Date;
+    routing_key?: string | null;
   };
 
   async function createDestination(data: DestinationOverrides = {}) {
@@ -356,6 +358,142 @@ describe('webhook dispatcher', () => {
         'x-webhook-delivery': delivery.id,
       },
     });
+  });
+
+  it('publishes a TILTIFY delivery with its own routing key to the tiltify exchange, asserting the exchange first', async () => {
+    const order: string[] = [];
+    const assertExchange = vi.fn(async () => {
+      order.push('assertExchange');
+      return {};
+    });
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) => {
+        order.push('publish');
+        cb(null);
+      },
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    const delivery = await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+    expect(assertExchange).toHaveBeenCalledWith('tiltify', 'topic', {
+      durable: true,
+      autoDelete: true,
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    const call = publish.mock.calls.at(0);
+    expect(call).toBeDefined();
+    const [exchange, routingKey] = call!;
+    expect(exchange).toBe('tiltify');
+    expect(routingKey).toBe('my-channel.donation');
+    expect(order).toEqual(['assertExchange', 'publish']);
+  });
+
+  it('asserts the TILTIFY exchange once per connection', async () => {
+    const assertExchange = vi.fn().mockResolvedValue({});
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+    await createDelivery(dest.id, 2, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(1);
+    expect(assertExchange).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("a NATIVE RabbitMQ delivery uses the destination's routing key and does not assert the exchange", async () => {
+    const assertExchange = vi.fn().mockResolvedValue({});
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: 'my.queue',
+      payload_format: 'NATIVE',
+    });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+    expect(assertExchange).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls.at(0)![1]).toBe('my.queue');
+  });
+
+  it('a failed exchange assertion (PRECONDITION_FAILED) is an endpoint failure: the row stays PENDING with last_error', async () => {
+    const assertExchange = vi
+      .fn()
+      .mockRejectedValue(new Error('PRECONDITION_FAILED - inequivalent arg'));
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    const delivery = await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_error).toMatch(/PRECONDITION_FAILED/);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('treats a RABBITMQ destination missing config as an endpoint failure', async () => {
