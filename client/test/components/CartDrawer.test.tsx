@@ -127,7 +127,9 @@ describe('CartDrawer', () => {
   });
 
   it('shows a checkout error on missing email', async () => {
-    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'c1', name: 'Main', slug: 'main', event_id: 'evt-1', is_active: true },
+    ]);
     // Top-up-only cart: no incentive item to revalidate against the catalog
     // and no incentive category to nudge about, so the click reaches
     // checkout()'s own validation directly. The checkout button is disabled
@@ -147,7 +149,9 @@ describe('CartDrawer', () => {
     vi.mocked(getPolls).mockResolvedValue([
       { id: 'p1', title: 'Poll', options: [], total_votes_cents: 0, is_active: true },
     ]);
-    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'c1', name: 'Main', slug: 'main', event_id: 'evt-1', is_active: true },
+    ]);
     // Pre-seed a poll vote + channel so the cart is non-empty and checkout is enabled
     sessionStorage.setItem(
       'donation_cart_v1',
@@ -183,7 +187,9 @@ describe('CartDrawer', () => {
         channelId: 'c1',
       }),
     );
-    vi.mocked(getChannels).mockResolvedValue([{ id: 'c1', name: 'Main', is_active: true }]);
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'c1', name: 'Main', slug: 'main', event_id: 'evt-1', is_active: true },
+    ]);
     // getRewards returns empty → reward not found → issue
 
     renderDrawer([]);

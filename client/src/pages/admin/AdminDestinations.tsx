@@ -7,6 +7,8 @@ import {
   deleteDestination,
   getDestinationDeliveries,
   testDestination,
+  requeueDelivery,
+  requeueFailedDeliveries,
 } from '../../api/admin';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -15,23 +17,26 @@ import {
   apiErrorMessage,
   type WebhookDelivery,
   type WebhookEndpoint,
-  type WebhookEventType,
+  type WebhookMessageType,
 } from '../../types';
 
-const WEBHOOK_EVENT_TYPES = [
+const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
   'donation.moderated',
+  'donation.hidden',
+  'donation.unhidden',
   'incentive.created',
   'incentive.enabled',
   'incentive.disabled',
   'incentive.value_changed',
-] as const satisfies readonly WebhookEventType[];
+] as const satisfies readonly WebhookMessageType[];
 
 interface WebhookForm {
   destination_type: 'HTTP' | 'RABBITMQ';
+  payload_format: 'NATIVE' | 'TILTIFY';
   url: string;
   secret: string;
-  event_types: WebhookEventType[];
+  event_types: WebhookMessageType[];
   verify_ssl: boolean;
   description: string;
   amqp_url: string;
@@ -41,6 +46,7 @@ interface WebhookForm {
 
 const EMPTY_FORM: WebhookForm = {
   destination_type: 'HTTP',
+  payload_format: 'NATIVE',
   url: '',
   secret: '',
   event_types: [],
@@ -88,9 +94,10 @@ export default function AdminWebhooks() {
   const openEdit = (ep: WebhookEndpoint) => {
     setForm({
       destination_type: ep.destination_type,
+      payload_format: ep.payload_format ?? 'NATIVE',
       url: ep.url,
       secret: ep.secret,
-      event_types: ep.event_types as WebhookEventType[],
+      event_types: ep.event_types as WebhookMessageType[],
       verify_ssl: ep.verify_ssl,
       description: ep.description ?? '',
       amqp_url: ep.amqp_url ?? '',
@@ -102,12 +109,32 @@ export default function AdminWebhooks() {
     setModal(ep);
   };
 
-  const toggleEventType = (t: WebhookEventType) => {
+  const toggleMessageType = (t: WebhookMessageType) => {
     setForm((f) => ({
       ...f,
       event_types: f.event_types.includes(t)
         ? f.event_types.filter((x) => x !== t)
         : [...f.event_types, t],
+    }));
+  };
+
+  const isTiltify = form.destination_type === 'RABBITMQ' && form.payload_format === 'TILTIFY';
+
+  const setDestinationType = (destination_type: 'HTTP' | 'RABBITMQ') => {
+    setForm((f) => ({
+      ...f,
+      destination_type,
+      // HTTP is always NATIVE, so a switch back to HTTP never keeps TILTIFY.
+      payload_format: destination_type === 'HTTP' ? 'NATIVE' : f.payload_format,
+    }));
+  };
+
+  const setPayloadFormat = (payload_format: 'NATIVE' | 'TILTIFY') => {
+    setForm((f) => ({
+      ...f,
+      payload_format,
+      // The Tiltify format requires an exchange; default it when left blank.
+      amqp_exchange: payload_format === 'TILTIFY' && !f.amqp_exchange ? 'tiltify' : f.amqp_exchange,
     }));
   };
 
@@ -117,6 +144,7 @@ export default function AdminWebhooks() {
       if (modal === 'create') {
         await createDestination({
           destination_type: form.destination_type,
+          payload_format: form.payload_format,
           url: form.url || undefined,
           secret: form.secret || undefined,
           event_types: form.event_types,
@@ -129,6 +157,7 @@ export default function AdminWebhooks() {
       } else if (modal) {
         await updateDestination(modal.id, {
           destination_type: form.destination_type,
+          payload_format: form.payload_format,
           url: form.url || undefined,
           event_types: form.event_types,
           verify_ssl: form.verify_ssl,
@@ -165,7 +194,7 @@ export default function AdminWebhooks() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this webhook endpoint? This cannot be undone.')) return;
+    if (!confirm('Delete this Destination? This cannot be undone.')) return;
     try {
       await deleteDestination(id);
       await reload();
@@ -178,11 +207,37 @@ export default function AdminWebhooks() {
     setTestLoading(true);
     try {
       await testDestination(id);
-      alert('Test ping queued. Check the delivery log in a few seconds.');
+      alert('Test ping queued. It is delivered within a few seconds; check the delivery log.');
     } catch (e) {
       alert(apiErrorMessage(e, 'Test failed'));
     } finally {
       setTestLoading(false);
+    }
+  };
+
+  const handleRequeue = async (deliveryId: string) => {
+    if (!expandedId) return;
+    try {
+      await requeueDelivery(expandedId, deliveryId);
+      await loadDeliveries(expandedId);
+    } catch (e) {
+      alert(apiErrorMessage(e, 'Requeue failed'));
+    }
+  };
+
+  const handleRequeueFailed = async () => {
+    if (!expandedId) return;
+    try {
+      const r = await requeueFailedDeliveries(expandedId);
+      alert(
+        `Requeued ${r.requeued} deliveries.` +
+          (r.skipped_unbuilt
+            ? ` ${r.skipped_unbuilt} FAILED row(s) were never built and cannot be resent.`
+            : ''),
+      );
+      await loadDeliveries(expandedId);
+    } catch (e) {
+      alert(apiErrorMessage(e, 'Requeue failed'));
     }
   };
 
@@ -202,13 +257,13 @@ export default function AdminWebhooks() {
       <div className="flex justify-between items-center mb-6">
         <h1 className="font-display text-4xl uppercase">webhooks</h1>
         <button onClick={openCreate} className="btrl-button">
-          + new endpoint
+          + new destination
         </button>
       </div>
 
       {endpoints.length === 0 && (
         <p className="text-off-white/55 font-data text-sm">
-          No webhook endpoints configured. Create one to start receiving events.
+          No Destinations configured. Create one to start receiving webhook messages.
         </p>
       )}
 
@@ -216,7 +271,7 @@ export default function AdminWebhooks() {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-              {['type', 'events', 'ssl', 'active', 'actions'].map((h) => (
+              {['type', 'message types', 'ssl', 'active', 'actions'].map((h) => (
                 <th
                   key={h}
                   className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
@@ -231,11 +286,24 @@ export default function AdminWebhooks() {
               <>
                 <tr key={ep.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                   <td className="px-4 py-2">
-                    <span className="font-mono text-[10px] uppercase text-off-white/70">
-                      {ep.destination_type === 'RABBITMQ'
-                        ? `MQ ${ep.amqp_routing_key ?? ''}`
-                        : 'HTTP'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[10px] uppercase text-off-white/70">
+                        {ep.destination_type === 'RABBITMQ'
+                          ? `MQ ${ep.amqp_routing_key ?? ''}`
+                          : 'HTTP'}
+                      </span>
+                      {ep.payload_format === 'TILTIFY' && (
+                        <span
+                          className="font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm"
+                          style={{
+                            background: 'rgba(208,152,70,.16)',
+                            color: 'var(--d-yellow)',
+                          }}
+                        >
+                          Tiltify
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
@@ -304,64 +372,97 @@ export default function AdminWebhooks() {
                       ) : deliveries.length === 0 ? (
                         <p className="text-off-white/55 text-sm font-data">No deliveries yet.</p>
                       ) : (
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr>
-                              {[
-                                'seq',
-                                'event',
-                                'status',
-                                'attempts',
-                                'last code',
-                                'last error',
-                              ].map((h) => (
-                                <th
-                                  key={h}
-                                  className="text-left px-2 py-1 font-mono text-off-white/55 uppercase"
-                                >
-                                  {h}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {deliveries.map((d) => (
-                              <tr
-                                key={d.id}
-                                style={{ borderTop: '1px solid rgba(239,238,236,.05)' }}
+                        <>
+                          {deliveries.some((d) => d.status === 'FAILED') && (
+                            <div className="flex items-center gap-3 mb-2">
+                              <button
+                                onClick={handleRequeueFailed}
+                                className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
                               >
-                                <td className="px-2 py-1 font-data text-off-white">{d.seq}</td>
-                                <td className="px-2 py-1 font-mono text-off-white/55">
-                                  {d.event_type}
-                                </td>
-                                <td className="px-2 py-1">
-                                  <span
-                                    className="font-mono text-[10px] uppercase"
-                                    style={{
-                                      color:
-                                        d.status === 'SUCCESS'
-                                          ? 'var(--green)'
-                                          : d.status === 'FAILED'
-                                            ? 'var(--red)'
-                                            : 'var(--off-white)',
-                                    }}
+                                requeue all failed
+                              </button>
+                              <span className="text-off-white/55 text-xs font-data">
+                                Requeued messages are re-sent at their original queue position.
+                              </span>
+                            </div>
+                          )}
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr>
+                                {[
+                                  'seq',
+                                  'event',
+                                  'status',
+                                  'attempts',
+                                  'next attempt',
+                                  'last code',
+                                  'last error',
+                                  '',
+                                ].map((h) => (
+                                  <th
+                                    key={h}
+                                    className="text-left px-2 py-1 font-mono text-off-white/55 uppercase"
                                   >
-                                    {d.status}
-                                  </span>
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55">
-                                  {d.attempts}/{d.max_attempts}
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55">
-                                  {d.last_status_code ?? '—'}
-                                </td>
-                                <td className="px-2 py-1 font-data text-off-white/55 max-w-xs truncate">
-                                  {d.last_error ?? '—'}
-                                </td>
+                                    {h}
+                                  </th>
+                                ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {deliveries.map((d) => (
+                                <tr
+                                  key={d.id}
+                                  style={{ borderTop: '1px solid rgba(239,238,236,.05)' }}
+                                >
+                                  <td className="px-2 py-1 font-data text-off-white">{d.seq}</td>
+                                  <td className="px-2 py-1 font-mono text-off-white/55">
+                                    {d.event_type}
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    <span
+                                      className="font-mono text-[10px] uppercase"
+                                      style={{
+                                        color:
+                                          d.status === 'SUCCESS'
+                                            ? 'var(--green)'
+                                            : d.status === 'FAILED'
+                                              ? 'var(--red)'
+                                              : 'var(--off-white)',
+                                      }}
+                                    >
+                                      {d.status}
+                                    </span>
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.attempts}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.status === 'PENDING'
+                                      ? new Date(d.next_attempt_at).toLocaleTimeString()
+                                      : '—'}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55">
+                                    {d.last_status_code ?? '—'}
+                                  </td>
+                                  <td className="px-2 py-1 font-data text-off-white/55 max-w-xs truncate">
+                                    {d.last_error ?? '—'}
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    {d.status === 'FAILED' && (
+                                      <button
+                                        onClick={() => handleRequeue(d.id)}
+                                        title="Re-send at its original queue position"
+                                        className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                                      >
+                                        requeue
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -374,7 +475,7 @@ export default function AdminWebhooks() {
 
       {modal && (
         <Modal
-          title={modal === 'create' ? 'new webhook endpoint' : 'edit webhook endpoint'}
+          title={modal === 'create' ? 'new destination' : 'edit destination'}
           onClose={() => setModal(null)}
         >
           <div className="mb-3">
@@ -384,14 +485,37 @@ export default function AdminWebhooks() {
             <select
               className="w-full px-3 py-2 text-sm"
               value={form.destination_type}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, destination_type: e.target.value as 'HTTP' | 'RABBITMQ' }))
-              }
+              onChange={(e) => setDestinationType(e.target.value as 'HTTP' | 'RABBITMQ')}
             >
               <option value="HTTP">HTTP</option>
               <option value="RABBITMQ">RabbitMQ</option>
             </select>
           </div>
+
+          {form.destination_type === 'RABBITMQ' && (
+            <div className="mb-3">
+              <label className="block font-data font-bold text-sm mb-2 text-off-white">
+                Payload format
+              </label>
+              <select
+                aria-label="Payload format"
+                className="w-full px-3 py-2 text-sm"
+                value={form.payload_format}
+                onChange={(e) => setPayloadFormat(e.target.value as 'NATIVE' | 'TILTIFY')}
+              >
+                <option value="NATIVE">Native</option>
+                <option value="TILTIFY">Tiltify-compatible</option>
+              </select>
+              {isTiltify && (
+                <p className="text-xs text-off-white/40 mt-1">
+                  Tiltify-compatible: sends bare Tiltify-style donation and totals messages for
+                  kollekt and the stream overlay. Routing keys are computed per channel
+                  (&lt;channel-slug&gt;.donation, &lt;slug&gt;.fact.updated); message types and
+                  routing key are ignored.
+                </p>
+              )}
+            </div>
+          )}
 
           {form.destination_type === 'HTTP' ? (
             <div className="mb-3">
@@ -433,18 +557,20 @@ export default function AdminWebhooks() {
                   onChange={(e) => setForm((f) => ({ ...f, amqp_exchange: e.target.value }))}
                 />
               </div>
-              <div className="mb-3">
-                <label className="block font-data font-bold text-sm mb-1 text-off-white">
-                  Routing key *
-                </label>
-                <input
-                  type="text"
-                  className="w-full px-3 py-2 text-sm"
-                  placeholder="my.queue.name"
-                  value={form.amqp_routing_key}
-                  onChange={(e) => setForm((f) => ({ ...f, amqp_routing_key: e.target.value }))}
-                />
-              </div>
+              {!isTiltify && (
+                <div className="mb-3">
+                  <label className="block font-data font-bold text-sm mb-1 text-off-white">
+                    Routing key *
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-2 text-sm"
+                    placeholder="my.queue.name"
+                    value={form.amqp_routing_key}
+                    onChange={(e) => setForm((f) => ({ ...f, amqp_routing_key: e.target.value }))}
+                  />
+                </div>
+              )}
             </>
           )}
 
@@ -496,23 +622,30 @@ export default function AdminWebhooks() {
 
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-2 text-off-white">
-              Event types *
+              Message types *
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              {WEBHOOK_EVENT_TYPES.map((t) => (
-                <label
-                  key={t}
-                  className="flex items-center gap-2 font-data text-sm text-off-white cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.event_types.includes(t)}
-                    onChange={() => toggleEventType(t)}
-                  />
-                  {t}
-                </label>
-              ))}
-            </div>
+            {isTiltify ? (
+              <p className="text-xs text-off-white/40">
+                Ignored for a Tiltify-compatible destination — routing keys are computed per
+                channel.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {WEBHOOK_MESSAGE_TYPES.map((t) => (
+                  <label
+                    key={t}
+                    className="flex items-center gap-2 font-data text-sm text-off-white cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.event_types.includes(t)}
+                      onChange={() => toggleMessageType(t)}
+                    />
+                    {t}
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mb-3">
@@ -522,7 +655,7 @@ export default function AdminWebhooks() {
             <input
               type="text"
               className="w-full px-3 py-2 text-sm"
-              placeholder="Optional note for this endpoint"
+              placeholder="Optional note for this Destination"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
             />
@@ -541,7 +674,7 @@ export default function AdminWebhooks() {
             <button
               onClick={handleSave}
               className="btrl-button"
-              disabled={form.event_types.length === 0}
+              disabled={!isTiltify && form.event_types.length === 0}
             >
               save
             </button>

@@ -29,11 +29,11 @@ describe('Admin CRUD routes', () => {
 
   afterAll(async () => {
     await prisma.broadcast.deleteMany();
-    await prisma.eventDelivery.deleteMany({ where: { destination_id: { in: destinationIds } } });
-    await prisma.eventDestinationSeq.deleteMany({
+    await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinationIds } } });
+    await prisma.webhookDestinationSeq.deleteMany({
       where: { destination_id: { in: destinationIds } },
     });
-    await prisma.eventDestination.deleteMany({ where: { id: { in: destinationIds } } });
+    await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
     await prisma.blockedWord.deleteMany({ where: { id: { in: blockedWordIds } } });
     await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
     await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
@@ -596,6 +596,15 @@ describe('Admin CRUD routes', () => {
       expect(testRes.status).toBe(200);
       expect(testRes.body.success).toBe(true);
 
+      // Wire contract (PRD-0002 §V4): the delivery log still says `event_type`,
+      // even though the Prisma field is now `message_type`.
+      const logRes = await request(createApp())
+        .get(`/api/admin/destinations/${createRes.body.id}/deliveries`)
+        .set(AUTH);
+      expect(logRes.status).toBe(200);
+      expect(logRes.body.deliveries[0]).toMatchObject({ event_type: 'ping' });
+      expect(logRes.body.deliveries[0]).not.toHaveProperty('message_type');
+
       const delRes = await request(createApp())
         .delete(`/api/admin/destinations/${createRes.body.id}`)
         .set(AUTH);
@@ -628,6 +637,147 @@ describe('Admin CRUD routes', () => {
         .send({ url: 'https://example.com/hook', event_types: ['nope'] })
         .set(AUTH);
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('webhook requeue', () => {
+    async function createDestination(): Promise<string> {
+      const res = await request(createApp())
+        .post('/api/admin/destinations')
+        .send({
+          destination_type: 'HTTP',
+          url: 'https://example.com/requeue',
+          event_types: ['donation.created'],
+        })
+        .set(AUTH);
+      expect(res.status).toBe(201);
+      destinationIds.push(res.body.id);
+      return res.body.id as string;
+    }
+
+    async function createDelivery(
+      destinationId: string,
+      overrides: { status: string; payload: string; seq: number },
+    ) {
+      return prisma.webhookDelivery.create({
+        data: {
+          destination_id: destinationId,
+          seq: overrides.seq,
+          message_id: crypto.randomUUID(),
+          message_type: 'donation.created',
+          payload: overrides.payload,
+          status: overrides.status,
+          attempts: 5,
+          last_error: 'boom',
+          last_status_code: 500,
+        },
+      });
+    }
+
+    it('requeues a FAILED delivery and preserves its seq and message_id', async () => {
+      const destinationId = await createDestination();
+      const delivery = await createDelivery(destinationId, {
+        status: 'FAILED',
+        payload: '{}',
+        seq: 7,
+      });
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/deliveries/${delivery.id}/requeue`)
+        .set(AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        status: 'PENDING',
+        attempts: 0,
+        event_type: 'donation.created',
+      });
+      expect(res.body).not.toHaveProperty('message_type');
+
+      const row = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+      expect(row!.seq).toBe(7);
+      expect(row!.message_id).toBe(delivery.message_id);
+    });
+
+    it('rejects a PENDING delivery with 409', async () => {
+      const destinationId = await createDestination();
+      const delivery = await createDelivery(destinationId, {
+        status: 'PENDING',
+        payload: '{}',
+        seq: 1,
+      });
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/deliveries/${delivery.id}/requeue`)
+        .set(AUTH);
+      expect(res.status).toBe(409);
+    });
+
+    it('rejects a FAILED delivery whose payload was never built with 409', async () => {
+      const destinationId = await createDestination();
+      const delivery = await createDelivery(destinationId, {
+        status: 'FAILED',
+        payload: '',
+        seq: 2,
+      });
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/deliveries/${delivery.id}/requeue`)
+        .set(AUTH);
+      expect(res.status).toBe(409);
+    });
+
+    it('returns 404 for an unknown delivery id', async () => {
+      const destinationId = await createDestination();
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/deliveries/${crypto.randomUUID()}/requeue`)
+        .set(AUTH);
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for a delivery id belonging to another destination', async () => {
+      const destinationId = await createDestination();
+      const otherId = await createDestination();
+      const delivery = await createDelivery(otherId, {
+        status: 'FAILED',
+        payload: '{}',
+        seq: 3,
+      });
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/deliveries/${delivery.id}/requeue`)
+        .set(AUTH);
+      expect(res.status).toBe(404);
+    });
+
+    it('requeues only built FAILED deliveries in bulk', async () => {
+      const destinationId = await createDestination();
+      await createDelivery(destinationId, { status: 'FAILED', payload: '{}', seq: 1 });
+      await createDelivery(destinationId, { status: 'FAILED', payload: '{}', seq: 2 });
+      const neverBuilt = await createDelivery(destinationId, {
+        status: 'FAILED',
+        payload: '',
+        seq: 3,
+      });
+      await createDelivery(destinationId, { status: 'SUCCESS', payload: '{}', seq: 4 });
+
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${destinationId}/requeue-failed`)
+        .set(AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ requeued: 2, skipped_unbuilt: 1 });
+
+      const stillFailed = await prisma.webhookDelivery.findUnique({ where: { id: neverBuilt.id } });
+      expect(stillFailed!.status).toBe('FAILED');
+    });
+
+    it('returns 404 when requeueing failed for an unknown destination', async () => {
+      const res = await request(createApp())
+        .post(`/api/admin/destinations/${crypto.randomUUID()}/requeue-failed`)
+        .set(AUTH);
+      expect(res.status).toBe(404);
     });
   });
 

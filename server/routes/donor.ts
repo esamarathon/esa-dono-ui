@@ -9,7 +9,7 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
     where: { id: req.donor!.id },
     include: {
       donations: {
-        include: { channel: { select: { id: true, name: true } } },
+        include: { channel: { select: { id: true, name: true, slug: true, event_id: true } } },
         orderBy: { created_at: 'desc' },
       },
       reward_claims: {

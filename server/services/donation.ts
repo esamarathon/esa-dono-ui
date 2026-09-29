@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
-import prisma from '../lib/prisma.js';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
-import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
 import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
@@ -16,6 +16,8 @@ interface ProcessDonationOptions {
   pledgeToken?: string | null;
   shippingCents?: number;
   channelId?: string | null;
+  /** Route to this Event's primary Channel when no Channel is given (PRD-0002 §E5). */
+  eventId?: string | null;
   /** Backdates Donation.created_at (#62) — e.g. when recording a donation
    * actually received on an external platform on an earlier date. Defaults
    * to now when omitted. */
@@ -55,6 +57,7 @@ export async function processDonation({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  eventId = null,
   occurredAt = null,
 }: ProcessDonationOptions) {
   return withSpan('donation.process', async () => {
@@ -67,6 +70,7 @@ export async function processDonation({
       pledgeToken,
       shippingCents,
       channelId,
+      eventId,
       occurredAt,
     });
   });
@@ -81,6 +85,7 @@ async function processDonationInner({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  eventId = null,
   occurredAt = null,
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
@@ -90,11 +95,16 @@ async function processDonationInner({
 
   let result: {
     donor: { id: string; magic_token: string | null; email: string; balance_remaining: number };
-    donation: { id: string; external_id: string };
+    donation: {
+      id: string;
+      external_id: string;
+      channel_id: string | null;
+      event_id: string | null;
+    };
     pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
   } | null = null;
   try {
-    result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit, tiltify) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
@@ -114,6 +124,18 @@ async function processDonationInner({
         },
       });
 
+      // Resolve the pledge first: its Channel routes the donation (PRD-0002 §E5).
+      let pledge: Awaited<ReturnType<typeof resolvePledge>> = null;
+      try {
+        pledge = await resolvePledge({ pledgeToken, email: normalizedEmail, amountCents }, tx);
+      } catch (pledgeErr) {
+        console.error('Pledge resolution error (non-fatal):', pledgeErr);
+      }
+      const route = await resolveDonationRoute(tx, {
+        channelId: pledge?.channel_id ?? channelId,
+        eventId,
+      });
+
       const donation = await tx.donation.create({
         data: {
           external_id: externalId,
@@ -121,32 +143,34 @@ async function processDonationInner({
           amount_cents: amountCents,
           donor_name: donorName,
           comment: comment ?? null,
-          channel_id: channelId ?? null,
+          channel_id: route.channelId,
+          event_id: route.eventId,
           ...(occurredAt ? { created_at: occurredAt } : {}),
         },
       });
 
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
-      try {
-        const pledge = await resolvePledge({
-          pledgeToken,
-          email: normalizedEmail,
-          amountCents,
-        });
-        if (pledge) {
-          pledgeResult = await fulfillPledge(tx, pledge, donor.id);
+      if (pledge) {
+        try {
+          pledgeResult = await fulfillPledge(tx, pledge, donor.id, donation.id);
           await tx.donation.update({
             where: { id: donation.id },
             data: {
               pledge: { connect: { id: pledge.id } },
               ...(pledge.comment ? { comment: pledge.comment } : {}),
               ...(pledge.display_name ? { donor_name: pledge.display_name } : {}),
-              ...(pledge.channel_id ? { channel_id: pledge.channel_id } : {}),
             },
           });
+        } catch (pledgeErr) {
+          console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
         }
-      } catch (pledgeErr) {
-        console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
+      }
+
+      // An unassigned donation is published when an admin assigns it (§E6).
+      if (route.channelId || route.eventId) {
+        // Re-read: pledge fulfilment may have set the comment and display name.
+        const final = await tx.donation.findUniqueOrThrow({ where: { id: donation.id } });
+        await publishRoutedDonation(emit, tiltify, final);
       }
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
@@ -161,17 +185,6 @@ async function processDonationInner({
     }
     throw err;
   }
-
-  emitWebhookEvent(
-    'donation.created',
-    buildDonationCreatedPayload({
-      donationId: result!.donation.id,
-      externalId,
-      amountCents,
-      channelId: channelId ?? null,
-      donorRef: result!.donor.id,
-    }),
-  );
 
   return {
     donor: result!.donor,

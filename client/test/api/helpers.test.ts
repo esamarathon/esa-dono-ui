@@ -12,6 +12,7 @@ vi.mock('../../src/api/client', () => ({
 import { getOAuthProviders } from '../../src/api/auth';
 import { getCampaign } from '../../src/api/campaign';
 import { getChannels } from '../../src/api/channels';
+import { getPublicEvents, getPublicEvent } from '../../src/api/events';
 import { getDonor, requestToken } from '../../src/api/donor';
 import { getGoals } from '../../src/api/goals';
 import { getPolls } from '../../src/api/polls';
@@ -40,6 +41,22 @@ describe('public API helpers', () => {
     mocks.get.mockResolvedValue({ data: [{ id: 'c1' }] });
     await expect(getChannels()).resolves.toEqual([{ id: 'c1' }]);
     expect(mocks.get).toHaveBeenCalledWith('/channels');
+  });
+
+  it('getPublicEvents returns the active events array', async () => {
+    mocks.get.mockResolvedValue({ data: [{ id: 'e1', slug: 'marathon' }] });
+    await expect(getPublicEvents()).resolves.toEqual([{ id: 'e1', slug: 'marathon' }]);
+    expect(mocks.get).toHaveBeenCalledWith('/events');
+  });
+
+  it('getPublicEvent fetches one event by slug', async () => {
+    mocks.get.mockResolvedValue({ data: { id: 'e1', slug: 'marathon', channels: [] } });
+    await expect(getPublicEvent('marathon')).resolves.toEqual({
+      id: 'e1',
+      slug: 'marathon',
+      channels: [],
+    });
+    expect(mocks.get).toHaveBeenCalledWith('/events/marathon');
   });
 
   it('getDonor returns the wallet payload', async () => {

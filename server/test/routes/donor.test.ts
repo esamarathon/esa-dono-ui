@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import donorRouter from '../../routes/donor.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -86,8 +87,8 @@ describe('GET /api/donor', () => {
   it("includes each donation's channel (#53)", async () => {
     const email = `chan-${Date.now()}-${Math.random()}@example.com`;
     const { token, donor } = await makeDonor(email);
-    const channel = await prisma.channel.create({
-      data: { name: `Main Marathon ${crypto.randomUUID()}` },
+    const channel = await createTestChannel(prisma, {
+      name: `Main Marathon ${crypto.randomUUID()}`,
     });
     const channeled = await prisma.donation.create({
       data: {

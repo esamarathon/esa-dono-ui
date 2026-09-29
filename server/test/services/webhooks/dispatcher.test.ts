@@ -1,0 +1,751 @@
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import crypto from 'crypto';
+import http from 'http';
+import { PrismaClient } from '@prisma/client';
+import {
+  backoffSeconds,
+  drainDestination,
+  sweepRetention,
+  wakeDispatcher,
+  startWebhookDispatcher,
+} from '../../../services/webhooks/dispatcher.js';
+
+const amqpMocks = vi.hoisted(() => ({ connect: vi.fn() }));
+
+vi.mock('amqplib', () => ({ connect: amqpMocks.connect }));
+
+const prisma = new PrismaClient();
+
+function listen(server: http.Server): Promise<number> {
+  return new Promise((resolve) =>
+    server.listen(0, () => {
+      const addr = server.address() as { port: number };
+      resolve(addr.port);
+    }),
+  );
+}
+
+function close(server: http.Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+describe('webhook dispatcher', () => {
+  const destinationIds: string[] = [];
+  const deliveryIds: string[] = [];
+
+  beforeEach(() => {
+    amqpMocks.connect.mockReset();
+  });
+
+  afterAll(async () => {
+    await prisma.webhookDelivery.deleteMany({ where: { id: { in: deliveryIds } } });
+    await prisma.webhookDestinationSeq.deleteMany({
+      where: { destination_id: { in: destinationIds } },
+    });
+    await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
+    await prisma.$disconnect();
+  });
+
+  type DestinationOverrides = {
+    url?: string;
+    is_active?: boolean;
+    destination_type?: string;
+    amqp_url?: string | null;
+    amqp_exchange?: string;
+    amqp_routing_key?: string | null;
+    payload_format?: string;
+  };
+
+  type DeliveryOverrides = {
+    payload?: string;
+    attempts?: number;
+    status?: string;
+    next_attempt_at?: Date;
+    routing_key?: string | null;
+  };
+
+  async function createDestination(data: DestinationOverrides = {}) {
+    const dest = await prisma.webhookDestination.create({
+      data: {
+        url: 'http://127.0.0.1:1/hook',
+        secret: 'secret',
+        event_types: JSON.stringify(['donation.created']),
+        ...data,
+      },
+    });
+    destinationIds.push(dest.id);
+    return dest;
+  }
+
+  async function createDelivery(destinationId: string, seq: number, data: DeliveryOverrides = {}) {
+    const delivery = await prisma.webhookDelivery.create({
+      data: {
+        destination_id: destinationId,
+        seq,
+        message_id: crypto.randomUUID(),
+        message_type: 'donation.created',
+        payload: JSON.stringify({ id: seq }),
+        status: 'PENDING',
+        next_attempt_at: new Date(),
+        ...data,
+      },
+    });
+    deliveryIds.push(delivery.id);
+    return delivery;
+  }
+
+  /** Start an HTTP server that records bodies and replies with `statusCode`. */
+  async function startCaptureServer(statusCode = 200) {
+    const bodies: string[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        bodies.push(body);
+        res.statusCode = statusCode;
+        res.end('ok');
+      });
+    });
+    const port = await listen(server);
+    return { server, bodies, url: `http://127.0.0.1:${port}/hook` };
+  }
+
+  it('backoffSeconds follows the 5/15/60/180 schedule', () => {
+    expect([1, 2, 3, 4, 5, 10].map(backoffSeconds)).toEqual([5, 15, 60, 180, 180, 180]);
+    expect(backoffSeconds(0)).toBe(5);
+  });
+
+  it('drains all due messages in seq order in one call', async () => {
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    const d1 = await createDelivery(dest.id, 1, { payload: JSON.stringify({ id: 1 }) });
+    const d2 = await createDelivery(dest.id, 2, { payload: JSON.stringify({ id: 2 }) });
+    const d3 = await createDelivery(dest.id, 3, { payload: JSON.stringify({ id: 3 }) });
+
+    await drainDestination(dest.id);
+
+    expect(capture.bodies).toEqual([
+      JSON.stringify({ id: 1 }),
+      JSON.stringify({ id: 2 }),
+      JSON.stringify({ id: 3 }),
+    ]);
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { id: { in: [d1.id, d2.id, d3.id] } },
+      orderBy: { seq: 'asc' },
+    });
+    expect(rows.map((r) => r.status)).toEqual(['SUCCESS', 'SUCCESS', 'SUCCESS']);
+
+    await close(capture.server);
+  });
+
+  it('stalls on a head that is not yet due and never touches later rows', async () => {
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    await createDelivery(dest.id, 1, { next_attempt_at: new Date(Date.now() + 60_000) });
+    const d2 = await createDelivery(dest.id, 2);
+
+    await drainDestination(dest.id);
+
+    expect(capture.bodies).toEqual([]);
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: d2.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(0);
+
+    await close(capture.server);
+  });
+
+  it('keeps the head and stops on an endpoint failure (500)', async () => {
+    const capture = await startCaptureServer(500);
+    const dest = await createDestination({ url: capture.url });
+    const d1 = await createDelivery(dest.id, 1);
+    const d2 = await createDelivery(dest.id, 2);
+
+    const before = Date.now();
+    await drainDestination(dest.id);
+
+    expect(capture.bodies).toHaveLength(1);
+    const head = await prisma.webhookDelivery.findUnique({ where: { id: d1.id } });
+    expect(head!.status).toBe('PENDING');
+    expect(head!.attempts).toBe(1);
+    expect(head!.last_status_code).toBe(500);
+    const delay = head!.next_attempt_at.getTime() - before;
+    expect(delay).toBeGreaterThanOrEqual(4_000);
+    expect(delay).toBeLessThanOrEqual(6_000);
+    const second = await prisma.webhookDelivery.findUnique({ where: { id: d2.id } });
+    expect(second!.status).toBe('PENDING');
+    expect(second!.attempts).toBe(0);
+
+    await close(capture.server);
+  });
+
+  it('treats a 429 as an endpoint failure, not FAILED', async () => {
+    const capture = await startCaptureServer(429);
+    const dest = await createDestination({ url: capture.url });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_status_code).toBe(429);
+
+    await close(capture.server);
+  });
+
+  it('never marks a delivery FAILED on repeated endpoint failures', async () => {
+    const dest = await createDestination({ url: 'http://127.0.0.1:1/hook' });
+    const delivery = await createDelivery(dest.id, 1, { attempts: 10 });
+
+    const before = Date.now();
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(11);
+    expect(updated!.last_status_code).toBe(0);
+    const delay = updated!.next_attempt_at.getTime() - before;
+    expect(delay).toBeGreaterThanOrEqual(175_000);
+    expect(delay).toBeLessThanOrEqual(185_000);
+  });
+
+  it('marks a message-class failure FAILED and moves on to the next row', async () => {
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    const d1 = await createDelivery(dest.id, 1, { payload: '' });
+    const d2 = await createDelivery(dest.id, 2, { payload: 'not json' });
+    const d3 = await createDelivery(dest.id, 3, { payload: JSON.stringify({ id: 3 }) });
+
+    await drainDestination(dest.id);
+
+    const first = await prisma.webhookDelivery.findUnique({ where: { id: d1.id } });
+    const second = await prisma.webhookDelivery.findUnique({ where: { id: d2.id } });
+    const third = await prisma.webhookDelivery.findUnique({ where: { id: d3.id } });
+    expect(first!.status).toBe('FAILED');
+    expect(first!.last_error).toBe('payload is empty (never built)');
+    expect(first!.last_status_code).toBeNull();
+    expect(second!.status).toBe('FAILED');
+    expect(second!.last_error).toBe('payload is not valid JSON');
+    expect(third!.status).toBe('SUCCESS');
+    expect(capture.bodies).toEqual([JSON.stringify({ id: 3 })]);
+
+    await close(capture.server);
+  });
+
+  it('single-flight sends a row once for two concurrent drains', async () => {
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await Promise.all([drainDestination(dest.id), drainDestination(dest.id)]);
+
+    expect(capture.bodies).toHaveLength(1);
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+
+    await close(capture.server);
+  });
+
+  it('does not lose a wake that arrives during an in-flight drain', async () => {
+    const bodies: string[] = [];
+
+    let seq2Promise: Promise<unknown> | null = null;
+    let destId = '';
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        bodies.push(body);
+        if (bodies.length === 1) {
+          seq2Promise = prisma.webhookDelivery
+            .create({
+              data: {
+                destination_id: destId,
+                seq: 2,
+                message_id: crypto.randomUUID(),
+                message_type: 'donation.created',
+                payload: JSON.stringify({ id: 2 }),
+                status: 'PENDING',
+                next_attempt_at: new Date(),
+              },
+            })
+            .then((row) => {
+              deliveryIds.push(row.id);
+              drainDestination(destId).catch(() => {});
+            });
+          void seq2Promise.then(() => {
+            res.statusCode = 200;
+            res.end('ok');
+          });
+          return;
+        }
+        res.statusCode = 200;
+        res.end('ok');
+      });
+    });
+    const port = await listen(server);
+
+    const dest = await createDestination({ url: `http://127.0.0.1:${port}/hook` });
+    destId = dest.id;
+    await createDelivery(dest.id, 1, { payload: JSON.stringify({ id: 1 }) });
+
+    await drainDestination(dest.id);
+
+    expect(bodies).toEqual([JSON.stringify({ id: 1 }), JSON.stringify({ id: 2 })]);
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { destination_id: dest.id },
+      orderBy: { seq: 'asc' },
+    });
+    expect(rows.map((r) => r.status)).toEqual(['SUCCESS', 'SUCCESS']);
+
+    await close(server);
+  });
+
+  it('does not send to an inactive destination', async () => {
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url, is_active: false });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    expect(capture.bodies).toEqual([]);
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(0);
+
+    await close(capture.server);
+  });
+
+  it('publishes RABBITMQ deliveries with the message id and heartbeat', async () => {
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: 'my.queue',
+    });
+    const delivery = await createDelivery(dest.id, 1, { payload: JSON.stringify({ id: 1 }) });
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(1);
+    expect(amqpMocks.connect.mock.calls[0]?.[0]).toContain('heartbeat=30');
+    expect(amqpMocks.connect.mock.calls[0]?.[1]).toEqual({ timeout: 10_000 });
+    expect(publish).toHaveBeenCalledTimes(1);
+    const call = publish.mock.calls.at(0);
+    expect(call).toBeDefined();
+    const [exchange, routingKey, buffer, options] = call!;
+    expect(exchange).toBe('tiltify');
+    expect(routingKey).toBe('my.queue');
+    expect(buffer.toString()).toBe(JSON.stringify({ id: 1 }));
+    expect(options).toMatchObject({
+      persistent: true,
+      messageId: delivery.message_id,
+      type: 'donation.created',
+      headers: {
+        'x-webhook-event': 'donation.created',
+        'x-webhook-delivery': delivery.id,
+      },
+    });
+  });
+
+  it('publishes a TILTIFY delivery with its own routing key to the tiltify exchange, asserting the exchange first', async () => {
+    const order: string[] = [];
+    const assertExchange = vi.fn(async () => {
+      order.push('assertExchange');
+      return {};
+    });
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) => {
+        order.push('publish');
+        cb(null);
+      },
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    const delivery = await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+    expect(assertExchange).toHaveBeenCalledWith('tiltify', 'topic', {
+      durable: true,
+      autoDelete: true,
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    const call = publish.mock.calls.at(0);
+    expect(call).toBeDefined();
+    const [exchange, routingKey] = call!;
+    expect(exchange).toBe('tiltify');
+    expect(routingKey).toBe('my-channel.donation');
+    expect(order).toEqual(['assertExchange', 'publish']);
+  });
+
+  it('asserts the TILTIFY exchange once per connection', async () => {
+    const assertExchange = vi.fn().mockResolvedValue({});
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+    await createDelivery(dest.id, 2, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(1);
+    expect(assertExchange).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("a NATIVE RabbitMQ delivery uses the destination's routing key and does not assert the exchange", async () => {
+    const assertExchange = vi.fn().mockResolvedValue({});
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: 'my.queue',
+      payload_format: 'NATIVE',
+    });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('SUCCESS');
+    expect(assertExchange).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls.at(0)![1]).toBe('my.queue');
+  });
+
+  it('a failed exchange assertion (PRECONDITION_FAILED) is an endpoint failure: the row stays PENDING with last_error', async () => {
+    const assertExchange = vi
+      .fn()
+      .mockRejectedValue(new Error('PRECONDITION_FAILED - inequivalent arg'));
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), assertExchange, publish }),
+    });
+
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_exchange: 'tiltify',
+      amqp_routing_key: null,
+      payload_format: 'TILTIFY',
+    });
+    const delivery = await createDelivery(dest.id, 1, { routing_key: 'my-channel.donation' });
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_error).toMatch(/PRECONDITION_FAILED/);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('treats a RABBITMQ destination missing config as an endpoint failure', async () => {
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: null,
+    });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_error).toMatch(/amqp_routing_key/);
+    expect(amqpMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it('fails the attempt when the AMQP publish confirm times out', async () => {
+    process.env.WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS = '50';
+    try {
+      const publish = vi.fn(); // never calls its callback
+      const closeConnection = vi.fn().mockResolvedValue(undefined);
+      amqpMocks.connect.mockResolvedValue({
+        on: vi.fn(),
+        close: closeConnection,
+        createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+      });
+
+      const dest = await createDestination({
+        url: '',
+        destination_type: 'RABBITMQ',
+        amqp_url: 'amqp://localhost',
+        amqp_routing_key: 'my.queue',
+      });
+      const delivery = await createDelivery(dest.id, 1);
+
+      await drainDestination(dest.id);
+
+      const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+      expect(updated!.status).toBe('PENDING');
+      expect(updated!.attempts).toBe(1);
+      expect(updated!.last_error).toBe('AMQP publish confirm timed out');
+      expect(closeConnection).toHaveBeenCalled();
+    } finally {
+      delete process.env.WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS;
+    }
+  });
+
+  it('sweeps SUCCESS and FAILED rows past retention but never PENDING', async () => {
+    const dest = await createDestination({ url: 'http://127.0.0.1:1/hook' });
+    const success = await createDelivery(dest.id, 1, { status: 'SUCCESS' });
+    const failed = await createDelivery(dest.id, 2, { status: 'FAILED' });
+    const pending = await createDelivery(dest.id, 3, { status: 'PENDING' });
+
+    await sweepRetention(new Date(Date.now() + 3 * 3600_000));
+
+    const afterThreeHours = await prisma.webhookDelivery.findMany({
+      where: { id: { in: [success.id, failed.id, pending.id] } },
+      select: { id: true },
+    });
+    const remainingIds = afterThreeHours.map((r) => r.id);
+    expect(remainingIds).not.toContain(success.id);
+    expect(remainingIds).toContain(failed.id);
+    expect(remainingIds).toContain(pending.id);
+
+    await sweepRetention(new Date(Date.now() + 25 * 3600_000));
+
+    const afterDay = await prisma.webhookDelivery.findMany({
+      where: { id: { in: [failed.id, pending.id] } },
+      select: { id: true },
+    });
+    const remainingAfterDay = afterDay.map((r) => r.id);
+    expect(remainingAfterDay).not.toContain(failed.id);
+    expect(remainingAfterDay).toContain(pending.id);
+  });
+
+  it('wakeDispatcher() with no argument drains every active destination', async () => {
+    const capture = await startCaptureServer(200);
+    const a = await createDestination({ url: capture.url });
+    const b = await createDestination({ url: capture.url });
+    const paused = await createDestination({ url: capture.url, is_active: false });
+    const rows = [
+      await createDelivery(a.id, 1, { payload: JSON.stringify({ d: 'a' }) }),
+      await createDelivery(b.id, 1, { payload: JSON.stringify({ d: 'b' }) }),
+    ];
+    const pausedRow = await createDelivery(paused.id, 1, { payload: JSON.stringify({ d: 'p' }) });
+
+    wakeDispatcher();
+
+    const deadline = Date.now() + 5_000;
+    let statuses: string[] = [];
+    while (Date.now() < deadline) {
+      statuses = (
+        await prisma.webhookDelivery.findMany({ where: { id: { in: rows.map((r) => r.id) } } })
+      ).map((r) => r.status);
+      if (statuses.every((s) => s === 'SUCCESS')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(statuses).toEqual(['SUCCESS', 'SUCCESS']);
+    expect(capture.bodies).not.toContain(JSON.stringify({ d: 'p' }));
+    expect((await prisma.webhookDelivery.findUnique({ where: { id: pausedRow.id } }))!.status).toBe(
+      'PENDING',
+    );
+
+    await close(capture.server);
+  });
+
+  it('startWebhookDispatcher starts the safety tick and retention sweep, and stop() clears them', () => {
+    const env = process.env.NODE_ENV;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      startWebhookDispatcher().stop(); // no-op under NODE_ENV=test
+      expect(vi.getTimerCount()).toBe(0);
+
+      process.env.NODE_ENV = 'development';
+      const dispatcher = startWebhookDispatcher();
+      expect(vi.getTimerCount()).toBe(2);
+      dispatcher.stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      process.env.NODE_ENV = env;
+      vi.useRealTimers();
+    }
+  });
+
+  it('the safety tick wakes destinations and the retention timer sweeps', async () => {
+    const env = process.env.NODE_ENV;
+    const capture = await startCaptureServer(200);
+    const dest = await createDestination({ url: capture.url });
+    const old = await createDelivery(dest.id, 1, { status: 'SUCCESS' });
+    // An old SUCCESS row (retention: 2 h) and a due PENDING row.
+    await prisma.webhookDelivery.update({
+      where: { id: old.id },
+      data: { updated_at: new Date(Date.now() - 3 * 3600_000) },
+    });
+    const due = await createDelivery(dest.id, 2);
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let dispatcher: { stop(): void } | undefined;
+    try {
+      process.env.NODE_ENV = 'development';
+      dispatcher = startWebhookDispatcher();
+      vi.advanceTimersByTime(60_000); // runs the 5 s safety tick and the 60 s sweep
+    } finally {
+      dispatcher?.stop();
+      process.env.NODE_ENV = env;
+      vi.useRealTimers();
+    }
+
+    const deadline = Date.now() + 5_000;
+    let dueStatus = '';
+    let oldGone = false;
+    while (Date.now() < deadline) {
+      dueStatus = (await prisma.webhookDelivery.findUnique({ where: { id: due.id } }))!.status;
+      oldGone = (await prisma.webhookDelivery.findUnique({ where: { id: old.id } })) === null;
+      if (dueStatus === 'SUCCESS' && oldGone) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(dueStatus).toBe('SUCCESS');
+    expect(oldGone).toBe(true);
+
+    await close(capture.server);
+  });
+
+  it('evicts and reconnects when the cached AMQP connection errors', async () => {
+    const handlers: Record<string, (err?: unknown) => void> = {};
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockImplementation(async () => ({
+      on: (event: string, fn: (err?: unknown) => void) => (handlers[event] = fn),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    }));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+
+    await createDelivery(dest.id, 1);
+    await drainDestination(dest.id);
+    handlers.error!(new Error('socket reset'));
+    await createDelivery(dest.id, 2);
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes the connection when a publish is rejected, and retries later', async () => {
+    const close = vi.fn().mockRejectedValue(new Error('already closed'));
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: Error) => void) =>
+        cb(new Error('channel closed by broker')),
+    );
+    amqpMocks.connect.mockResolvedValue({
+      on: vi.fn(),
+      close,
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    });
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+    const delivery = await createDelivery(dest.id, 1);
+
+    await drainDestination(dest.id);
+
+    const updated = await prisma.webhookDelivery.findUnique({ where: { id: delivery.id } });
+    expect(updated!.status).toBe('PENDING');
+    expect(updated!.attempts).toBe(1);
+    expect(updated!.last_error).toBe('channel closed by broker');
+    expect(close).toHaveBeenCalled(); // and a rejected close() does not throw
+  });
+
+  it('reconnects after the cached AMQP connection closes', async () => {
+    const handlers: Record<string, () => void> = {};
+    const publish = vi.fn(
+      (_exchange: string, _key: string, _buf: Buffer, _opts: object, cb: (err: null) => void) =>
+        cb(null),
+    );
+    amqpMocks.connect.mockImplementation(async () => ({
+      on: (event: string, fn: () => void) => (handlers[event] = fn),
+      close: vi.fn().mockResolvedValue(undefined),
+      createConfirmChannel: async () => ({ on: vi.fn(), publish }),
+    }));
+    const dest = await createDestination({
+      url: '',
+      destination_type: 'RABBITMQ',
+      amqp_url: 'amqp://localhost',
+      amqp_routing_key: 'my.queue',
+    });
+
+    await createDelivery(dest.id, 1);
+    await drainDestination(dest.id);
+    await createDelivery(dest.id, 2);
+    await drainDestination(dest.id);
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(1); // connection reused
+
+    handlers.close!(); // broker drops the connection
+    await createDelivery(dest.id, 3);
+    await drainDestination(dest.id);
+
+    expect(amqpMocks.connect).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
+});

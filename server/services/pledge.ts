@@ -7,7 +7,8 @@ import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } fro
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
-import { emitWebhookEvent, buildDonationCreatedPayload } from './eventDelivery.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
@@ -298,9 +299,11 @@ export async function fulfillPledge(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,
+  /** The donation paying for the pledge: its reward claims are linked to it (PRD-0002 §T4). */
+  donationId: string | null = null,
 ) {
   return withSpan('pledge.fulfill', async () => {
-    return fulfillPledgeInner(tx, pledge, donorId);
+    return fulfillPledgeInner(tx, pledge, donorId, donationId);
   });
 }
 
@@ -308,6 +311,7 @@ async function fulfillPledgeInner(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,
+  donationId: string | null,
 ) {
   const results: Array<Record<string, unknown>> = [];
   let totalSpent = 0;
@@ -318,11 +322,18 @@ async function fulfillPledgeInner(
       let result: { cost: number } | undefined;
       if (item.kind === 'REWARD') {
         const data = item.data ? JSON.parse(item.data) : {};
-        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity);
+        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity, donationId);
       } else if (item.kind === 'POLL_VOTE') {
-        result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
+        result = await votePollTx(
+          tx,
+          donorId,
+          item.poll_id!,
+          item.target_id,
+          item.amount_cents,
+          donationId,
+        );
       } else if (item.kind === 'GOAL') {
-        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents);
+        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents, donationId);
       } else if (item.kind === 'POLL_CUSTOM') {
         const data = item.data ? JSON.parse(item.data) : {};
         result = await proposeCustomEntryTx(
@@ -331,6 +342,7 @@ async function fulfillPledgeInner(
           item.poll_id!,
           data.label,
           item.amount_cents,
+          donationId,
         );
       }
       totalSpent += result!.cost;
@@ -357,18 +369,25 @@ async function fulfillPledgeInner(
 /**
  * Resolve a pledge token to a pending pledge, or fall back to email-based lookup.
  * Returns the pledge or null.
+ *
+ * Pass the caller's transaction as `db` when calling inside one. With a single
+ * SQLite connection (`lib/prisma.ts`), a query on the global client from inside a
+ * transaction waits for that transaction and times out.
  */
-export async function resolvePledge({
-  pledgeToken,
-  email,
-  amountCents,
-}: {
-  pledgeToken?: string | null;
-  email?: string | null;
-  amountCents: number;
-}) {
+export async function resolvePledge(
+  {
+    pledgeToken,
+    email,
+    amountCents,
+  }: {
+    pledgeToken?: string | null;
+    email?: string | null;
+    amountCents: number;
+  },
+  db: Pick<Prisma.TransactionClient, 'pendingPledge'> = prisma,
+) {
   if (pledgeToken) {
-    const pledge = await prisma.pendingPledge.findUnique({
+    const pledge = await db.pendingPledge.findUnique({
       where: { pledge_token: pledgeToken },
       include: { items: true },
     });
@@ -385,7 +404,7 @@ export async function resolvePledge({
   // Fallback: email-based lookup for newest OPEN pledge within window
   if (email) {
     const cutoff = new Date(Date.now() - PLEDGE_TTL_MS);
-    const pledge = await prisma.pendingPledge.findFirst({
+    const pledge = await db.pendingPledge.findFirst({
       where: {
         donor_email: email.trim().toLowerCase(),
         status: 'OPEN',
@@ -486,7 +505,9 @@ export async function createCheckoutForPledge(
         // donor's history like any other donation (#43). amount_cents is the
         // wallet spend that fulfilled the pledge (the full total).
         const walletExternalId = `wallet-${crypto.randomUUID()}`;
-        const donation = await prisma.$transaction(async (tx) => {
+        await withWebhooks(async (tx, emit, tiltify) => {
+          // Same routing as every other donation: the pledge's Channel and its Event.
+          const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
           const created = await tx.donation.create({
             data: {
               external_id: walletExternalId,
@@ -494,10 +515,11 @@ export async function createCheckoutForPledge(
               amount_cents: pledge.total_cents,
               comment: fullPledge.comment ?? null,
               donor_name: fullPledge.display_name ?? null,
-              channel_id: fullPledge.channel_id ?? null,
+              channel_id: route.channelId,
+              event_id: route.eventId,
             },
           });
-          await fulfillPledge(tx, fullPledge, donor.id);
+          await fulfillPledge(tx, fullPledge, donor.id, created.id);
           await tx.pendingPledge.update({
             where: { pledge_token: pledgeToken },
             data: {
@@ -506,19 +528,8 @@ export async function createCheckoutForPledge(
               fulfilled_by_donation_id: created.id,
             },
           });
-          return created;
+          await publishRoutedDonation(emit, tiltify, created);
         });
-
-        emitWebhookEvent(
-          'donation.created',
-          buildDonationCreatedPayload({
-            donationId: donation.id,
-            externalId: walletExternalId,
-            amountCents: pledge.total_cents,
-            channelId: fullPledge.channel_id ?? null,
-            donorRef: donor.id,
-          }),
-        );
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>
           console.error('Email error:', err),

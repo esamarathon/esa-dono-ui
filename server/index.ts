@@ -10,18 +10,21 @@ import rewardsRouter from './routes/rewards.js';
 import pollsRouter from './routes/polls.js';
 import goalsRouter from './routes/goals.js';
 import channelsRouter from './routes/channels.js';
+import eventsRouter from './routes/events.js';
 import pledgeRouter from './routes/pledge.js';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
 import auctionsRouter from './routes/auctions.js';
 import feedbackRouter from './routes/feedback.js';
+import tiltifyRouter from './routes/tiltify.js';
 import featureFlagsRouter from './routes/featureFlags.js';
-import { startEventDispatcher } from './services/eventDispatcher.js';
+import { startWebhookDispatcher } from './services/webhooks/dispatcher.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { metricsAuth } from './middleware/metricsAuth.js';
-import { metricsLimit } from './middleware/rateLimit.js';
+import { apiLimit, metricsLimit } from './middleware/rateLimit.js';
+import { trustProxySetting } from './lib/trustProxy.js';
 import { register } from './lib/metrics.js';
 import { startMetricsRefresh } from './services/metrics.js';
 import { startAuctionScheduler } from './services/auctionScheduler.js';
@@ -31,9 +34,9 @@ import { tracingMiddleware } from './lib/tracing.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Behind the nginx frontend proxy in production: trust the first hop so
-// req.ip (rate limiting) and secure-cookie detection reflect the real client.
-app.set('trust proxy', 1);
+// Behind reverse proxies (the nginx frontend, maybe more): trust TRUST_PROXY hops
+// so req.ip (rate limiting) and secure-cookie detection reflect the real client.
+app.set('trust proxy', trustProxySetting(process.env.TRUST_PROXY));
 
 app.use(cors());
 // Trace every request (including the raw-body webhook) so donation processing
@@ -73,6 +76,10 @@ app.get('/api/metrics', metricsLimit, metricsAuth, async (_req: Request, res: Re
   res.send(await register.metrics());
 });
 
+// Global per-IP limit for everything below (#140). The Stripe webhook, uploads,
+// health and metrics are mounted above and are not counted.
+app.use('/api', apiLimit);
+
 app.get('/api/openapi.yaml', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/x-yaml');
   res.sendFile(resolve(dirname(fileURLToPath(import.meta.url)), 'openapi.yaml'));
@@ -89,6 +96,7 @@ app.use('/api/rewards', rewardsRouter);
 app.use('/api/polls', pollsRouter);
 app.use('/api/goals', goalsRouter);
 app.use('/api/channels', channelsRouter);
+app.use('/api/events', eventsRouter);
 app.use('/api/pledge', pledgeRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/feature-flags', featureFlagsRouter);
@@ -96,10 +104,11 @@ app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 app.use('/api/auctions', auctionsRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/tiltify', tiltifyRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  startEventDispatcher();
+  startWebhookDispatcher();
 });
 startMetricsRefresh();
 startAuctionScheduler();

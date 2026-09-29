@@ -23,6 +23,7 @@ import {
 
 const NAV: SidebarNavItem[] = [
   { to: '/moderate', label: 'dashboard', end: true, icon: DashboardIcon },
+  { to: '/moderate/events', label: 'events', icon: PlayIcon },
   { to: '/moderate/channels', label: 'channels', icon: PlayIcon },
   { to: '/moderate/polls', label: 'polls', icon: PollIcon },
   { to: '/moderate/rewards', label: 'rewards', icon: GiftIcon },

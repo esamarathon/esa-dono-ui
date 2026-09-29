@@ -32,6 +32,18 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Proxy hops in front of Express (#140): 1 = the frontend nginx only; 2 when
+      # another reverse proxy (Caddy, Traefik, a load balancer) sits in front of it.
+      # Wrong here, and every client shares one rate-limit bucket.
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      # Rate limits (req/min): whole API per IP (backstop), spend per donor,
+      # auth and /api/metrics per IP.
+      - RATE_LIMIT_API=${RATE_LIMIT_API:-600}
+      - RATE_LIMIT_SPEND=${RATE_LIMIT_SPEND:-20}
+      - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-5}
+      - RATE_LIMIT_METRICS=${RATE_LIMIT_METRICS:-30}
+      # Outbound webhooks: RabbitMQ publisher-confirm timeout (ms). Default 10000.
+      - WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS=${WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS:-10000}
       # OAuth sign-in (Google / Discord / Twitch). Leave empty to disable.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}

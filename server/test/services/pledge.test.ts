@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { createPledge, resolvePledge, createCheckoutForPledge } from '../../services/pledge.js';
 import { processDonation } from '../../services/donation.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -14,11 +15,9 @@ describe('Pledge Service', () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
     process.env.APP_BASE_URL = 'http://localhost:5173';
 
-    const event = await prisma.channel.create({
-      data: { name: `Event A ${crypto.randomUUID()}` },
-    });
+    const event = await createTestChannel(prisma, { name: `Event A ${crypto.randomUUID()}` });
     channelId = event.id;
-    const other = await prisma.channel.create({ data: { name: `Event B ${crypto.randomUUID()}` } });
+    const other = await createTestChannel(prisma, { name: `Event B ${crypto.randomUUID()}` });
     otherEventId = other.id;
   });
 
@@ -462,6 +461,8 @@ describe('Pledge Service', () => {
     }, 10000);
 
     it('creates a Donation row when the wallet fully covers the pledge (#43)', async () => {
+      // Unique per run: a failed earlier run cannot collide with this one.
+      const email = `walletcovered-${crypto.randomUUID()}@example.com`;
       const reward = await prisma.reward.create({
         data: {
           title: 'Fully wallet-covered reward',
@@ -471,16 +472,16 @@ describe('Pledge Service', () => {
         },
       });
       const { pledge_token } = await createPledge({
-        email: 'walletcovered@example.com',
+        email,
         items: [{ kind: 'REWARD', target_id: reward.id }],
         channel_id: channelId,
       });
       const donor = await prisma.donor.create({
         data: {
-          email: 'walletcovered@example.com',
+          email,
           total_donated: 10000,
           balance_remaining: 10000,
-          magic_token: 'tok-wallet-covered',
+          magic_token: `tok-wallet-${crypto.randomUUID()}`,
           token_expires_at: new Date(Date.now() + 60000),
         },
       });
@@ -493,7 +494,7 @@ describe('Pledge Service', () => {
           balance_remaining: donor.balance_remaining,
           magic_token: donor.magic_token,
         },
-        'walletcovered@example.com',
+        email,
       );
 
       // Wallet covers the entire 500-cent pledge — no Stripe charge.
@@ -506,6 +507,9 @@ describe('Pledge Service', () => {
       expect(donation!.amount_cents).toBe(500);
       expect(donation!.external_id).toMatch(/^wallet-/);
       expect(donation!.channel_id).toBe(channelId);
+      // Routed like every other donation: the channel's Event is set too (§E4).
+      const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } });
+      expect(donation!.event_id).toBe(channel.event_id);
 
       // The pledge is FULFILLED and linked back to the wallet donation.
       const pledge = await prisma.pendingPledge.findUnique({ where: { pledge_token } });
@@ -597,6 +601,50 @@ describe('Pledge Service', () => {
       await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
+    }, 10000);
+
+    it("queues donation.created in the same transaction, with the pledge's channel", async () => {
+      // The emit used to run after commit with the caller's channelId (null for a
+      // Stripe webhook), so pledge-routed donations were published with no channel.
+      const dest = await prisma.webhookDestination.create({
+        data: {
+          url: 'http://127.0.0.1:1/hook',
+          secret: 's',
+          event_types: JSON.stringify(['donation.created']),
+        },
+      });
+      const { pledge_token } = await createPledge({
+        email: 'outbox-channel@example.com',
+        items: [],
+        top_up_cents: 500,
+        channel_id: channelId,
+      });
+
+      await processDonation({
+        externalId: `test-${crypto.randomUUID()}`,
+        email: 'outbox-channel@example.com',
+        donorName: 'Test',
+        amountCents: 500,
+        pledgeToken: pledge_token,
+      });
+
+      const donor = await prisma.donor.findUnique({
+        where: { email: 'outbox-channel@example.com' },
+      });
+      const donation = await prisma.donation.findFirstOrThrow({ where: { donor_id: donor!.id } });
+      const rows = await prisma.webhookDelivery.findMany({ where: { destination_id: dest.id } });
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row!.status).toBe('PENDING');
+      const payload = JSON.parse(row!.payload);
+      expect(row!.message_id).toBe(payload.id);
+      expect(payload.data).toMatchObject({ donation_id: donation.id, channel_id: channelId });
+
+      await prisma.webhookDelivery.deleteMany({ where: { destination_id: dest.id } });
+      await prisma.webhookDestinationSeq.deleteMany({ where: { destination_id: dest.id } });
+      await prisma.webhookDestination.delete({ where: { id: dest.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
+      await prisma.donor.delete({ where: { id: donor!.id } });
     }, 10000);
 
     it('fulfills a reward pledge with quantity > 1, creating one RewardClaim per unit and charging cost_cents * quantity (#50)', async () => {

@@ -179,7 +179,33 @@ export interface Goal {
 export interface Channel {
   id: string;
   name: string;
+  slug: string;
+  event_id: string;
   is_active: boolean;
+}
+
+/** A charity Event (a marathon, or a one-day stream event) that groups
+ *  Channels. Only active Events are open for donations. */
+export interface Event {
+  id: string;
+  name: string;
+  slug: string;
+  is_active: boolean;
+  // Where donations that name no channel are routed. Required (and must be an
+  // active channel of this event) before the event can be activated.
+  primary_channel_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Public view of an active Event with its active Channels (#115). Used by the
+ *  /donate/<event>[/<channel>] link tree; internal fields are omitted. */
+export interface PublicEvent {
+  id: string;
+  name: string;
+  slug: string;
+  primary_channel_id: string | null;
+  channels: Channel[];
 }
 
 export type AuctionStatus =
@@ -319,7 +345,14 @@ export interface AdminDonation {
   moderated?: boolean;
   moderated_at?: string | null;
   moderated_by?: string | null;
+  // PRD-0002 §N2: hidden donations stay in the totals but are pulled from the
+  // stream overlay until a moderator un-hides them (#116).
+  hidden_from_overlay?: boolean;
   channel?: { id: string; name: string } | null;
+  // Routing (#115). Both null means the donation arrived while no single event
+  // was active — it stays unassigned until an admin assigns a channel.
+  channel_id?: string | null;
+  event_id?: string | null;
   status: DonationStatus;
   refund_id?: string | null;
   // What the donor selected/pledged toward (#58) — human-readable labels
@@ -384,9 +417,11 @@ export interface AdminDonorWallet {
   balance_adjustments?: BalanceAdjustment[];
 }
 
-export type WebhookEventType =
+export type WebhookMessageType =
   | 'donation.created'
   | 'donation.moderated'
+  | 'donation.hidden'
+  | 'donation.unhidden'
   | 'incentive.created'
   | 'incentive.enabled'
   | 'incentive.disabled'
@@ -403,6 +438,7 @@ export interface WebhookEndpoint {
   created_at: string;
   updated_at: string;
   destination_type: 'HTTP' | 'RABBITMQ';
+  payload_format: 'NATIVE' | 'TILTIFY';
   amqp_url: string | null;
   amqp_exchange: string;
   amqp_routing_key: string | null;
@@ -411,10 +447,11 @@ export interface WebhookEndpoint {
 export interface WebhookDelivery {
   id: string;
   seq: number;
+  message_id: string;
   event_type: string;
   status: string;
   attempts: number;
-  max_attempts: number;
+  next_attempt_at: string;
   last_status_code: number | null;
   last_error: string | null;
   created_at: string;
