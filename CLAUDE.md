@@ -190,10 +190,20 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 - **Slugs** (`lib/slugs.ts`) — `^[a-z0-9]+(-[a-z0-9]+)*$`, 3–64 chars, not reserved, unique across Events **and** Channels. They appear in URLs and AMQP routing keys (`<slug>.donation`), so a slug cannot change while its Event/Channel is active. No `.`: it is the AMQP topic separator.
 - **Ids are UUIDs** (`@default(uuid())`) — kollekt requires them.
 - Channel create/update/deactivate goes through `services/channels.ts` (shared by `/api/admin/channels` and `/api/moderator/channels`). `slug` defaults to one derived from `name`; `event_id` defaults to the only Event when exactly one exists (the migration creates `default-event`). `prisma db seed` makes one Event active with a primary Channel.
+- **Event API** (`services/events.ts`): `GET/POST /api/admin/events`, `PUT/DELETE /api/admin/events/:id` (delete = deactivate), mirrored under `/api/moderator/events`. New Events start inactive. The slug is fixed while active; the primary must be one of the Event's Channels; activating requires an active primary. Public: `GET /api/events` (active Events with their active Channels) and `GET /api/events/:slug` (`routes/events.ts`).
+- **Donation routing** (`services/routing.ts` `resolveDonationRoute`, PRD-0002 §E5), applied in `processDonation()` for every path (pledge, Stripe webhook, `simulate-donation`):
+  1. a fulfilled pledge's Channel, or an explicit `channel_id` → that Channel and its Event;
+  2. else `event_id` → that Event's primary Channel;
+  3. else exactly one active Event → its primary Channel;
+  4. else **unassigned** (`channel_id` and `event_id` null) and **no webhook message is queued**.
+
+  An admin assigns it with `PATCH /api/admin/donations/:id/channel`, which sets both ids and publishes `donation.created` in the same transaction. A donation is never reassigned (409).
+
+- **Donate URLs**: `/donate/<event-slug>` and `/donate/<event-slug>/<channel-slug>` preselect the Channel. `/donate` keeps its picker; `?channel=<id>` still works.
 - **Every pledge routes to exactly one channel.** `POST /api/pledge` rejects a missing/unknown/inactive `channel_id` with 400. `processDonation()` copies the fulfilled pledge's `channel_id` onto the `Donation`; non-pledge donations (`POST /api/admin/simulate-donation`) may pass `channel_id` directly.
 - **Incentives are channel-scoped or shared.** `Reward`, `Poll`, `FundGoal` and `Auction` have a nullable `channel_id`: `null` = shared (available from any channel); a set value scopes it to that Channel. `createPledge()` rejects an item whose incentive belongs to a different Channel.
-- `Donation.event_id` and `hidden_from_overlay` exist but are not set yet: donation routing by Event and the Event API arrive in #115, hiding from the overlay in #116.
-- **Per-channel totals are admin-only.** `GET /api/admin/stats` includes `channels: [...]`; the public `/api/campaign` keeps one overall total.
+- `Donation.event_id` is set by routing (above). `hidden_from_overlay` is not used until #116.
+- **Per-channel totals are admin-only.** `GET /api/admin/stats` includes `channels: [...]`. The public `/api/campaign` keeps one overall total, counting **`COMPLETED` donations only** (refunds and chargebacks excluded; hidden donations included, PRD-0002 §E7).
 - **Client**: `/donate` requires selecting a channel (`CartContext.selectChannel`) before showing incentives, pre-filtered to shared + that channel. Switching channels with channel-scoped items in the cart asks for confirmation (`pendingChannelId` / `confirmChannelSwitch`) and drops those items.
 
 ### Client
