@@ -203,11 +203,11 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 - **Every pledge routes to exactly one channel.** `POST /api/pledge` rejects a missing/unknown/inactive `channel_id` with 400. `processDonation()` copies the fulfilled pledge's `channel_id` onto the `Donation`; non-pledge donations (`POST /api/admin/simulate-donation`) may pass `channel_id` directly.
 - **Incentives are channel-scoped or shared.** `Reward`, `Poll`, `FundGoal` and `Auction` have a nullable `channel_id`: `null` = shared (available from any channel); a set value scopes it to that Channel. `createPledge()` rejects an item whose incentive belongs to a different Channel.
 - `Donation.event_id` is set by routing (above). `hidden_from_overlay` is not used until #116.
-- **Per-channel totals are admin-only.** `GET /api/admin/stats` includes `channels: [...]`. The public `/api/campaign` keeps one overall total, counting **`COMPLETED` donations only** (refunds and chargebacks excluded; hidden donations included, PRD-0002 §E7).
+- **Per-channel totals are admin-only.** `GET /api/admin/stats` includes `channels: [...]`. The public `/api/campaign` keeps one overall total. **Money totals count `COMPLETED` and `REFUNDED` donations**. Refunds only ever go to the donor's wallet, so the charity keeps the money. `CHARGEBACK` and `PENDING` do not count, and hidden donations do. One rule is shared by `/api/campaign`, `/api/admin/stats` and the cents metrics: `lib/donationTotals.ts` (PRD-0002 §E7).
 - **Metrics** (`services/metrics.ts`, docs in `docs/webhooks-and-metrics.md`):
   - `dono_donations_unassigned` counts donations waiting to be assigned.
   - Per-Event/Channel breakdowns are **separate** gauges labelled `event`/`channel` (slugs, `""` when unassigned or shared): `dono_{donated_cents,donations,reward_claims,poll_votes}_by_channel`. They are separate so `sum()` never double-counts the unlabelled totals.
-  - Cents gauges count `COMPLETED` donations only, as does `/api/admin/stats`.
+  - Cents gauges follow the same money-total rule (`COMPLETED` + `REFUNDED`).
   - `dono_events_active` counts Events; `dono_channels_active` counts Channels.
 - **Client**: `/donate` requires selecting a channel (`CartContext.selectChannel`) before showing incentives, pre-filtered to shared + that channel. Switching channels with channel-scoped items in the cart asks for confirmation (`pendingChannelId` / `confirmChannelSwitch`) and drops those items.
 

@@ -22,7 +22,7 @@ describe('GET /api/campaign totals against the real database', () => {
     await prisma.$disconnect();
   });
 
-  it('counts COMPLETED donations only — REFUNDED and CHARGEBACK are ignored (PRD-0002 §E7)', async () => {
+  it('counts COMPLETED and REFUNDED (wallet refunds), not CHARGEBACK or PENDING', async () => {
     const before = await request(createApp()).get('/api/campaign');
     expect(before.status).toBe(200);
     const beforeRaised = Number(before.body.amount_raised.value);
@@ -36,6 +36,7 @@ describe('GET /api/campaign totals against the real database', () => {
       ['COMPLETED', 1000],
       ['REFUNDED', 2000],
       ['CHARGEBACK', 3000],
+      ['PENDING', 4000],
     ] as const) {
       await prisma.donation.create({
         data: {
@@ -51,7 +52,8 @@ describe('GET /api/campaign totals against the real database', () => {
     expect(after.status).toBe(200);
     const afterRaised = Number(after.body.amount_raised.value);
 
-    // Only the 1000-cent COMPLETED donation moves the total.
-    expect(afterRaised - beforeRaised).toBeCloseTo(10, 2);
+    // COMPLETED 1000 + REFUNDED 2000: refunds go to the donor's wallet, so the
+    // charity keeps the money. Chargebacks and pending payments do not count.
+    expect(afterRaised - beforeRaised).toBeCloseTo(30, 2);
   });
 });

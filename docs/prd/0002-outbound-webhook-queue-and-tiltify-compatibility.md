@@ -264,8 +264,11 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
   `PATCH /api/admin/donations/:id/channel`. Assignment publishes the donation message and
   both totals messages. The donation keeps its original `completed_at`, so esa-layouts-v2
   adds it to the bar and plays the alert at assignment time.
-- **E7.** Totals count `status = COMPLETED` only, hidden donations included.
-  `/api/campaign` is fixed to the same rule (today it sums every status).
+- **E7.** Totals count `COMPLETED` and `REFUNDED` donations, hidden donations
+  included. ESA never refunds to the original payment method, only to the donor's
+  wallet, so a refunded donation is still money the charity holds. `CHARGEBACK` (the
+  bank took the money back) and `PENDING` (not paid) do not count. `/api/campaign`,
+  admin stats and the cents metrics share one rule (`server/lib/donationTotals.ts`).
 
 ### §T — Tiltify message format
 

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
+import { countedDonation } from '../lib/donationTotals.js';
 
 const router = Router();
 
@@ -14,10 +15,10 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const goalCents = Number(process.env.CAMPAIGN_GOAL_CENTS || '500000');
 
-    // Money actually kept (PRD-0002 §E7): refunds and chargebacks do not count.
+    // Completed and wallet-refunded donations count; chargebacks do not (lib/donationTotals.ts).
     // Hidden donations still count; hiding is a display decision.
     const { _sum } = await prisma.donation.aggregate({
-      where: { status: 'COMPLETED' },
+      where: countedDonation,
       _sum: { amount_cents: true },
     });
 

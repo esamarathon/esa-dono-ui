@@ -55,7 +55,7 @@ describe('GET /api/campaign', () => {
     expect(res.body.goal.value).toBe('1000.00');
     // Only money actually kept counts: refunds/chargebacks are excluded (§E7).
     expect(prisma.donation.aggregate).toHaveBeenCalledWith({
-      where: { status: 'COMPLETED' },
+      where: { status: { in: ['COMPLETED', 'REFUNDED'] } },
       _sum: { amount_cents: true },
     });
   });

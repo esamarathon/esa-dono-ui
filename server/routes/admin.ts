@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
+import { countedDonation } from '../lib/donationTotals.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
 import { sendError } from '../lib/httpError.js';
@@ -45,8 +46,8 @@ router.get('/stats', async (req, res) => {
     prisma.donor.count(),
     prisma.donation.count(),
     prisma.rewardClaim.count(),
-    // Money kept (PRD-0002 §E7): refunds and chargebacks excluded, like /api/campaign.
-    prisma.donation.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount_cents: true } }),
+    // Money totals: completed and wallet-refunded, not chargebacks (lib/donationTotals.ts).
+    prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
     prisma.pendingPledge.count(),
     prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
     // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
@@ -60,7 +61,7 @@ router.get('/stats', async (req, res) => {
     channels.map(async (channel) => {
       const [sum, count] = await Promise.all([
         prisma.donation.aggregate({
-          where: { channel_id: channel.id, status: 'COMPLETED' },
+          where: { channel_id: channel.id, ...countedDonation },
           _sum: { amount_cents: true },
         }),
         prisma.donation.count({ where: { channel_id: channel.id } }),

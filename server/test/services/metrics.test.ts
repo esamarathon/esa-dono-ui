@@ -80,10 +80,10 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('sets per-Event/Channel breakdown gauges with slug labels', async () => {
-    // Two groupBy calls: counts over every donation, cents over COMPLETED only
+    // Two groupBy calls: counts over every donation, cents over counted statuses only
     // (PRD-0002 §E7). ch1 has 3 donations, one of them refunded (900 cents).
     vi.mocked(prisma.donation.groupBy).mockImplementation((async (args: any) =>
-      args.where?.status === 'COMPLETED'
+      args.where?.status?.in
         ? [
             { event_id: 'ev1', channel_id: 'ch1', _sum: { amount_cents: 5000 } },
             { event_id: 'gone', channel_id: null, _sum: { amount_cents: 700 } },
@@ -130,15 +130,15 @@ describe('refreshBusinessMetrics', () => {
       return sample?.value as number | undefined;
     };
 
-    // COMPLETED cents only (the refunded 900 is excluded), but all 3 donations counted.
+    // Counted cents only (a 900-cent chargeback is excluded), but all 3 donations counted.
     expect(
       value('dono_donated_cents_by_channel', { event: 'event-one', channel: 'channel-one' }),
     ).toBe(5000);
     expect(prisma.donation.groupBy).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: 'COMPLETED' } }),
+      expect.objectContaining({ where: { status: { in: ['COMPLETED', 'REFUNDED'] } } }),
     );
     expect(prisma.donation.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: 'COMPLETED' } }),
+      expect.objectContaining({ where: { status: { in: ['COMPLETED', 'REFUNDED'] } } }),
     );
     expect(value('dono_donations_by_channel', { event: 'event-one', channel: 'channel-one' })).toBe(
       3,

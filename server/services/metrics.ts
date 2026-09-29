@@ -1,5 +1,6 @@
 import client from 'prom-client';
 import prisma from '../lib/prisma.js';
+import { countedDonation } from '../lib/donationTotals.js';
 import { register } from '../lib/metrics.js';
 import { METRICS_REFRESH_MS } from '../config.js';
 
@@ -22,7 +23,7 @@ const donorsTotal = new client.Gauge({
 
 const donatedCentsTotal = new client.Gauge({
   name: 'dono_donated_cents_total',
-  help: 'Total amount donated (COMPLETED donations: refunds and chargebacks excluded), in cents',
+  help: 'Total amount donated (completed and wallet-refunded donations; chargebacks excluded), in cents',
   registers: [register],
 });
 
@@ -230,7 +231,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       channelRows,
     ] = await Promise.all([
       prisma.donor.count(),
-      prisma.donation.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount_cents: true } }),
+      prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
       prisma.donation.count(),
       prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
       prisma.event.count({ where: { is_active: true } }),
@@ -260,10 +261,10 @@ export async function refreshBusinessMetrics(): Promise<void> {
       }),
       prisma.donation.count({ where: { channel_id: null, event_id: null } }),
       prisma.donation.groupBy({ by: ['event_id', 'channel_id'], _count: { _all: true } }),
-      // Money kept (PRD-0002 §E7): cents count COMPLETED donations only.
+      // Money totals count COMPLETED and REFUNDED (wallet refunds), not chargebacks (lib/donationTotals.ts).
       prisma.donation.groupBy({
         by: ['event_id', 'channel_id'],
-        where: { status: 'COMPLETED' },
+        where: countedDonation,
         _sum: { amount_cents: true },
       }),
       prisma.rewardClaim.groupBy({ by: ['reward_id'], _count: { _all: true } }),
