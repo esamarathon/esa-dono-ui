@@ -6,7 +6,7 @@
 
 **Supersedes in part:** [ADR-0005](0005-outbound-webhooks.md). It replaces ADR-0005's delivery model, FIFO and retry sections. Transports, signing and the PII allowlist are unchanged.
 
-**Related:** PRD-0002 §Q, §M; esamarathon/esa-dono-ui#109
+**Related:** PRD-0002 §Q, §M; esamarathon/esa-dono-ui#109, [ADR-0006](0006-webhook-vocabulary.md) (vocabulary), [ADR-0009](0009-tiltify-compatible-messages.md) (Tiltify format, per-delivery routing key)
 
 ## Context
 

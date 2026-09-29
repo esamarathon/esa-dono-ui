@@ -6,15 +6,17 @@ guess which concept is meant.
 
 ## Glossary
 
-| Term                | Means                                                                                                                                                                | Avoid                             |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| **Event**           | A charity event: a marathon, or a one-day stream event. Parent of Channels.                                                                                          | occasion, campaign, team campaign |
-| **Channel**         | One stream within an Event.                                                                                                                                          | stream, campaign                  |
-| **Primary channel** | The Channel an Event routes a donation to when the donation names no Channel. An active Event always has an active one.                                              | default channel                   |
-| **Slug**            | The lowercase, URL- and routing-safe name of an Event or Channel (`esa-summer-2025`), unique across both. Used in `/donate/<event>/<channel>` and AMQP routing keys. | handle, key, short name           |
-| **Webhook message** | One outbound notification that something happened (for example, a donation was made).                                                                                | event, webhook event              |
-| **Destination**     | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                                                                                                 | endpoint, event destination       |
-| **Delivery**        | One queued attempt to send one webhook message to one Destination.                                                                                                   | job, event delivery               |
+| Term                 | Means                                                                                                                                                                                                        | Avoid                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| **Event**            | A charity event: a marathon, or a one-day stream event. Parent of Channels.                                                                                                                                  | occasion, campaign, team campaign |
+| **Channel**          | One stream within an Event.                                                                                                                                                                                  | stream, campaign                  |
+| **Primary channel**  | The Channel an Event routes a donation to when the donation names no Channel. An active Event always has an active one.                                                                                      | default channel                   |
+| **Slug**             | The lowercase, URL- and routing-safe name of an Event or Channel (`esa-summer-2025`), unique across both. Used in `/donate/<event>/<channel>` and AMQP routing keys.                                         | handle, key, short name           |
+| **Webhook message**  | One outbound notification that something happened (for example, a donation was made).                                                                                                                        | event, webhook event              |
+| **Destination**      | Where webhook messages are sent: an HTTP URL or a RabbitMQ exchange.                                                                                                                                         | endpoint, event destination       |
+| **Delivery**         | One queued attempt to send one webhook message to one Destination.                                                                                                                                           | job, event delivery               |
+| **Endpoint failure** | A send that the receiving side (URL or broker) rejected or did not answer, including every HTTP 4xx. Retried forever, in order (ADR-0007). "Endpoint" here means the receiver, never the Destination record. | error, transient failure          |
+| **Message failure**  | A message that cannot be sent at all (empty or unparseable payload). Marked `FAILED`; the queue moves on.                                                                                                    | poison message, permanent failure |
 
 ## "Event" versus "webhook message"
 

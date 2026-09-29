@@ -4,7 +4,7 @@
 
 **Status:** Accepted
 
-**Related:** PRD-0002 §V, esamarathon/esa-dono-ui#113
+**Related:** PRD-0002 §V, esamarathon/esa-dono-ui#113, [ADR-0007](0007-webhook-delivery-semantics.md) (delivery), [ADR-0008](0008-event-channel-identity.md) (identity: what an Event is), [ADR-0009](0009-tiltify-compatible-messages.md) (Tiltify format)
 
 ## Context
 

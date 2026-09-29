@@ -8,7 +8,7 @@ const router = Router();
  * POST /api/pledge
  * Create a pending pledge from cart items.
  * Body: { email?, comment?, display_name?, items: [{ kind, target_id, amount_cents?, poll_id?, data? }] }
- * Query: ?token=<magic_token> — when a valid donor token is provided, the donor's
+ * Donor session (cookie or Bearer, resolveDonorToken) — when a valid one is present, the donor's
  *         wallet balance is applied as a discount on the Stripe checkout amount.
  * Returns: { pledge_token, total_cents, expires_at, donate_url, has_checkout, wallet_discount_cents }
  */

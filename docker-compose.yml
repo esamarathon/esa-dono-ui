@@ -32,6 +32,10 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Rate limits (req/min): spend per donor, auth and /api/metrics per IP.
+      - RATE_LIMIT_SPEND=${RATE_LIMIT_SPEND:-20}
+      - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-5}
+      - RATE_LIMIT_METRICS=${RATE_LIMIT_METRICS:-30}
       # Outbound webhooks: RabbitMQ publisher-confirm timeout (ms). Default 10000.
       - WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS=${WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS:-10000}
       # OAuth sign-in (Google / Discord / Twitch). Leave empty to disable.

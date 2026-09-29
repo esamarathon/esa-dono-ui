@@ -4,7 +4,7 @@
 
 **Status:** Accepted
 
-**Related:** PRD-0002 §R, esamarathon/esa-dono-ui#117 (design comment), ADR-0008 (identity), ADR-0009 (messages), esamarathon/kollekt#36, esamarathon/esa-layouts-v2#6
+**Related:** PRD-0002 §R, esamarathon/esa-dono-ui#117 (design comment), [ADR-0008](0008-event-channel-identity.md) (identity), [ADR-0009](0009-tiltify-compatible-messages.md) (messages), esamarathon/kollekt#36, esamarathon/esa-layouts-v2#6
 
 ## Context
 

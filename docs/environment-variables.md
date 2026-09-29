@@ -31,3 +31,4 @@
 | `RATE_LIMIT_SPEND`                            | No         | `20`                                            | Max spend requests per minute per donor                                                                                         |
 | `RATE_LIMIT_AUTH`                             | No         | `5`                                             | Max auth/magic-link requests per minute per IP                                                                                  |
 | `RATE_LIMIT_METRICS`                          | No         | `30`                                            | Max `/api/metrics` requests per minute per IP (public endpoint, gated only by the metrics token)                                |
+| `RATE_LIMIT_TILTIFY`                          | No         | `300`                                           | Max `/api/tiltify` (Tiltify-compatible read API) requests per minute per IP                                                     |

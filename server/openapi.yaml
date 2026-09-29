@@ -47,7 +47,7 @@ info:
 
     ## Wallet Discount
 
-    When `POST /api/pledge` receives a valid `?token=` (authenticated donor),
+    When `POST /api/pledge` receives a valid donor session (authenticated donor),
     the donor's `balance_remaining` is applied as a discount on the Stripe
     checkout amount. If the wallet covers the entire pledge total, the pledge
     is fulfilled directly without a Stripe charge. See the pledge endpoint for details.
@@ -123,6 +123,7 @@ paths:
                   description: { type: string }
                   amount_raised:
                     type: object
+                    description: One overall total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
                     properties:
                       value: { type: string, description: 'Dollars formatted string' }
                   goal:
@@ -155,11 +156,7 @@ paths:
       tags: [Donor]
       summary: Get current donor profile
       description: Returns the authenticated donor with nested donations (including each donation's channel, #53), claims, votes, contributions, and custom entries.
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       responses:
         '200':
           description: Donor profile
@@ -347,11 +344,8 @@ paths:
     post:
       tags: [Rewards]
       summary: Claim a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -391,11 +385,8 @@ paths:
     post:
       tags: [Polls]
       summary: Propose a custom poll option (funded write-in)
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -428,11 +419,8 @@ paths:
     post:
       tags: [Polls]
       summary: Vote in a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -464,11 +452,8 @@ paths:
     post:
       tags: [Goals]
       summary: Contribute to a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -579,9 +564,8 @@ paths:
       tags: [Events]
       summary: List active events
       description: |
-        Public list of active Events, each with its active Channels. Every
-        donation is routed to exactly one Event, so the client uses this to
-        drive the /donate event picker. Inactive Events and inactive Channels
+        Public list of active Events, each with its active Channels. The client
+        uses this to drive the /donate event picker. Inactive Events and inactive Channels
         are omitted, and internal timestamp fields are not exposed.
       responses:
         '200':
@@ -591,21 +575,7 @@ paths:
               schema:
                 type: array
                 items:
-                  allOf:
-                    - $ref: '#/components/schemas/Event'
-                    - type: object
-                      properties:
-                        channels:
-                          type: array
-                          description: Only this Event's active Channels
-                          items:
-                            type: object
-                            properties:
-                              id: { type: string }
-                              name: { type: string }
-                              slug: { type: string }
-                              event_id: { type: string }
-                              is_active: { type: boolean }
+                  $ref: '#/components/schemas/PublicEvent'
 
   /events/{slug}:
     get:
@@ -626,20 +596,7 @@ paths:
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/Event'
-                  - type: object
-                    properties:
-                      channels:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            id: { type: string }
-                            name: { type: string }
-                            slug: { type: string }
-                            event_id: { type: string }
-                            is_active: { type: boolean }
+                $ref: '#/components/schemas/PublicEvent'
         '404':
           description: No active Event with that slug
 
@@ -931,8 +888,9 @@ paths:
       summary: Create a pending pledge (smart cart)
       description: |
         Creates a pending pledge from cart items and (when Stripe is configured)
-        a Stripe Checkout Session. When a valid donor token is provided via
-        `?token=`, the donor's wallet balance is applied as a discount.
+        a Stripe Checkout Session. When the request carries a valid donor
+        session (cookie or Bearer token), the donor's wallet balance is applied
+        as a discount. Anonymous requests are allowed.
 
         **Channels:** every pledge is routed to exactly one channel via the
         required `channel_id` (used to route the donation to the correct
@@ -942,16 +900,11 @@ paths:
         transaction.
 
         **Wallet discount flow:**
-        - `?token=` present & valid → donor's `balance_remaining` deducted from Stripe charge
+        - Donor session present & valid → donor's `balance_remaining` deducted from Stripe charge
         - Wallet ≥ pledge total → pledge fulfilled immediately, redirected to wallet
         - Wallet < pledge total → Stripe charges only `total - discount` (min 50 cents)
-        - No `?token=` → no discount applied
-      parameters:
-        - name: token
-          in: query
-          required: false
-          schema: { type: string }
-          description: Optional donor magic token for wallet discount
+        - No donor session → no discount applied
+      security: [{}, { DonorSession: [] }, { DonorBearer: [] }]
       requestBody:
         required: true
         content:
@@ -1100,7 +1053,9 @@ paths:
                   donations: { type: integer }
                   claims: { type: integer }
                   pledges: { type: integer }
-                  total_raised_cents: { type: integer }
+                  total_raised_cents:
+                    type: integer
+                    description: Money total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
                   unallocated_credits_cents:
                     type: integer
                     description: Sum of Donor.balance_remaining across all donors — credited but not yet spent on a reward/poll/goal (#59)
@@ -1112,8 +1067,14 @@ paths:
                       properties:
                         id: { type: string }
                         name: { type: string }
-                        raised_cents: { type: integer }
-                        donations: { type: integer }
+                        slug: { type: string }
+                        event_id: { type: string }
+                        raised_cents:
+                          type: integer
+                          description: Same money-total rule as total_raised_cents
+                        donations:
+                          type: integer
+                          description: Count of all the Channel's donations, whatever their status
 
   /admin/channels:
     get:
@@ -1202,6 +1163,13 @@ paths:
       responses:
         '200':
           description: Channel deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  channel: { type: object, description: The deactivated Channel row }
 
   /admin/events:
     get:
@@ -1314,7 +1282,11 @@ paths:
           description: The deactivated Event
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Event' }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event: { $ref: '#/components/schemas/Event' }
         '404':
           description: Event not found
 
@@ -1331,7 +1303,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations with donor email, channel (id, name), event_id, hidden_from_overlay and moderation flags, ordered by created_at descending
+          description: Donations (all Donation fields incl. status, refund_id, external_id, channel_id, event_id, hidden_from_overlay, moderation flags) with donor email and channel (id, name, slug, event_id), ordered by created_at descending
 
   /admin/donations/{id}/status:
     patch:
@@ -1399,11 +1371,12 @@ paths:
                   }
       responses:
         '200':
-          description: The updated donation (with channel_id and event_id)
+          description: The updated donation row (all Donation fields, with channel_id and event_id set)
           content:
             application/json:
               schema:
                 type: object
+                additionalProperties: true
                 properties:
                   id: { type: string }
                   channel_id: { type: string, nullable: true }
@@ -1413,7 +1386,7 @@ paths:
         '404':
           description: Donation not found
         '409':
-          description: The donation already has a channel
+          description: The donation already has a Channel or an Event (a donation is never reassigned)
 
   /admin/claims:
     get:
@@ -2196,7 +2169,7 @@ paths:
   /admin/destinations:
     get:
       tags: [Admin]
-      summary: List event destinations
+      summary: List Destinations
       security: [{ AdminKey: [] }]
       responses:
         '200':
@@ -2209,7 +2182,7 @@ paths:
                   $ref: '#/components/schemas/WebhookDestination'
     post:
       tags: [Admin]
-      summary: Create an event destination
+      summary: Create a Destination
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -2246,9 +2219,13 @@ paths:
                     type: string,
                     description: 'Required for RabbitMQ endpoints. Must be amqp:// or amqps://',
                   }
-                amqp_exchange: { type: string, default: '' }
+                amqp_exchange:
+                  {
+                    type: string,
+                    description: "Default '' for NATIVE (the default exchange); 'tiltify' for TILTIFY",
+                  }
                 amqp_routing_key:
-                  { type: string, description: 'Required for NATIVE RabbitMQ endpoints only' }
+                  { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
                 payload_format:
                   type: string
                   enum: [NATIVE, TILTIFY]
@@ -2267,7 +2244,7 @@ paths:
   /admin/destinations/{id}:
     delete:
       tags: [Admin]
-      summary: Delete an event destination
+      summary: Delete a Destination
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2282,7 +2259,7 @@ paths:
 
     put:
       tags: [Admin]
-      summary: Update an event destination
+      summary: Update a Destination
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2319,7 +2296,7 @@ paths:
                 amqp_url: { type: string }
                 amqp_exchange: { type: string }
                 amqp_routing_key:
-                  { type: string, description: 'Required for NATIVE RabbitMQ endpoints only' }
+                  { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
                 payload_format:
                   type: string
                   enum: [NATIVE, TILTIFY]
@@ -2356,7 +2333,7 @@ paths:
   /admin/destinations/{id}/deliveries:
     get:
       tags: [Admin]
-      summary: Get delivery log for an endpoint
+      summary: Get delivery log for a Destination
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2412,7 +2389,7 @@ paths:
   /admin/destinations/{id}/requeue-failed:
     post:
       tags: [Admin]
-      summary: Requeue every retained FAILED delivery for an endpoint
+      summary: Requeue every retained FAILED delivery for a Destination
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2437,7 +2414,7 @@ paths:
   /admin/destinations/{id}/test:
     post:
       tags: [Admin]
-      summary: Send a test ping to an endpoint
+      summary: Send a test ping to a Destination
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2738,11 +2715,7 @@ paths:
     get:
       tags: [Moderator]
       summary: Moderator dashboard stats
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Moderator stats
@@ -2760,11 +2733,7 @@ paths:
     get:
       tags: [Moderator]
       summary: List all events
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: All Events ordered by created_at ascending
@@ -2781,11 +2750,7 @@ paths:
         Creates an Event. `slug` is optional; when omitted it is derived from
         `name` and made unique across Events and Channels. New Events start
         inactive — activating one requires a primary Channel of that same Event.
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -2815,11 +2780,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update an event
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -2850,11 +2812,8 @@ paths:
       tags: [Moderator]
       summary: Deactivate an event
       description: Soft-delete — sets is_active false rather than removing the row, since Channels/incentives/donations/pledges may still reference it.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -2864,7 +2823,11 @@ paths:
           description: The deactivated Event
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Event' }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  event: { $ref: '#/components/schemas/Event' }
         '404':
           description: Event not found
 
@@ -2872,11 +2835,7 @@ paths:
     get:
       tags: [Moderator]
       summary: List all channels
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: All channels ordered by created_at ascending
@@ -2887,11 +2846,7 @@ paths:
         Creates a Channel on an Event. `slug` is optional; when omitted it is
         derived from `name` (and made unique across Events and Channels).
         `event_id` is optional while exactly one Event exists, otherwise required.
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -2923,11 +2878,8 @@ paths:
       description: |
         A Channel's `slug` cannot change while it is active, and the primary
         Channel of an active Event cannot be deactivated or moved to another Event.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -2957,11 +2909,8 @@ paths:
       tags: [Moderator]
       summary: Deactivate a channel
       description: Soft-delete — sets is_active false rather than removing the row, to preserve references from incentives/donations/pledges.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -2969,27 +2918,26 @@ paths:
       responses:
         '200':
           description: Channel deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  channel: { type: object, description: The deactivated Channel row }
 
   /moderator/polls:
     get:
       tags: [Moderator]
       summary: List all polls
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Polls with options and custom entries
     post:
       tags: [Moderator]
       summary: Create a poll
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -3020,11 +2968,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3049,11 +2994,8 @@ paths:
     delete:
       tags: [Moderator]
       summary: Delete a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3066,11 +3008,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Add a poll option
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3092,11 +3031,8 @@ paths:
     patch:
       tags: [Moderator]
       summary: Edit a poll option label
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3118,11 +3054,8 @@ paths:
     delete:
       tags: [Moderator]
       summary: Delete a poll option
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3135,11 +3068,8 @@ paths:
     get:
       tags: [Moderator]
       summary: List custom entries for a poll
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3155,11 +3085,8 @@ paths:
       description: |
         APPROVED: credits option tally (`votes_cents`, `total_votes_cents`).
         REJECTED: refunds donor balance, marks option REJECTED, writes BalanceAdjustment.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3182,6 +3109,7 @@ paths:
   /moderator/uploads:
     post:
       tags: [Moderator]
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       summary: Upload a reward image
       description: >
         Accepts jpeg/png/webp/gif up to 8 MB. Resizes to ≤800 px wide and
@@ -3214,22 +3142,14 @@ paths:
     get:
       tags: [Moderator]
       summary: List all rewards
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Rewards ordered by created_at descending
     post:
       tags: [Moderator]
       summary: Create a reward
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -3255,11 +3175,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3285,11 +3202,8 @@ paths:
     delete:
       tags: [Moderator]
       summary: Delete a reward
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3302,11 +3216,7 @@ paths:
     get:
       tags: [Moderator]
       summary: List all reward claims
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Claims with reward details and a human-readable donor_name (from the donor's most recent donation; never donor email or id)
@@ -3315,14 +3225,10 @@ paths:
     get:
       tags: [Moderator]
       summary: List all donations (regardless of donor), for moderation review
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Donations with donor name (no donor email), channel (id, name), event_id, hidden_from_overlay, moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
+          description: Donations with donor name (no donor email), channel (id, name, slug, event_id), event_id, status, hidden_from_overlay, moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
 
   /moderator/donations/{id}:
     patch:
@@ -3341,11 +3247,8 @@ paths:
         publishes native `donation.hidden`/`donation.unhidden` messages and
         republishes the Tiltify donation (as "Anonymous" without `completed_at`
         when hidden).
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3372,22 +3275,14 @@ paths:
     get:
       tags: [Moderator]
       summary: List all fund goals
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: Goals ordered by created_at descending
     post:
       tags: [Moderator]
       summary: Create a fund goal
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -3409,11 +3304,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3436,11 +3328,8 @@ paths:
     delete:
       tags: [Moderator]
       summary: Delete a fund goal
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3453,22 +3342,14 @@ paths:
     get:
       tags: [Moderator]
       summary: List all auctions
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
           description: All auctions ordered by created_at descending
     post:
       tags: [Moderator]
       summary: Create an auction
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       requestBody:
         required: true
         content:
@@ -3497,11 +3378,8 @@ paths:
     put:
       tags: [Moderator]
       summary: Update an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3530,11 +3408,8 @@ paths:
     get:
       tags: [Moderator]
       summary: List the cascade offer history for an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3547,11 +3422,8 @@ paths:
     get:
       tags: [Moderator]
       summary: List all bids for an auction
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3564,11 +3436,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Reopen a cancelled auction for bidding
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3581,11 +3450,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Force-close an auction ahead of its ends_at
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3598,11 +3464,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Cancel an auction before settlement
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3615,11 +3478,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Expire the current cascade offer early and advance to the next bidder
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3632,11 +3492,8 @@ paths:
     post:
       tags: [Moderator]
       summary: Resend the current offer's payment email without advancing the cascade
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
-        - name: token
-          in: query
-          required: true
-          schema: { type: string }
         - name: id
           in: path
           required: true
@@ -3648,10 +3505,22 @@ paths:
 components:
   securitySchemes:
     AdminKey:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer key_admin_<ADMIN_API_KEY>`, or a donor session/token whose role is ADMIN.'
+    ModeratorKey:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer key_mod_<MODERATOR_API_KEY>`. Moderator routes also accept a donor session/token whose role is MODERATOR or ADMIN.'
+    DonorSession:
       type: apiKey
-      in: header
-      name: X-Admin-Key
-      description: Admin API key matching `ADMIN_API_KEY` env var
+      in: cookie
+      name: dono_session
+      description: httpOnly session cookie holding the donor magic token (set by /auth/magic, /auth/session or OAuth).
+    DonorBearer:
+      type: http
+      scheme: bearer
+      description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
     TiltifyAmount:
       type: object
@@ -3736,6 +3605,25 @@ components:
           }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    PublicEvent:
+      type: object
+      description: The public view of an active Event (routes/events.ts); no is_active or timestamps.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        primary_channel_id: { type: string, nullable: true }
+        channels:
+          type: array
+          description: Only this Event's active Channels, oldest first
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              slug: { type: string }
+              event_id: { type: string }
+              is_active: { type: boolean }
     WebhookDestination:
       type: object
       properties:
@@ -3744,7 +3632,7 @@ components:
         secret:
           {
             type: string,
-            description: 'Included on creation only; use rotate-secret to obtain a new value',
+            description: 'Returned in full by the admin API (create, list, update); see #127. Use rotate-secret to replace it.',
           }
         is_active: { type: boolean }
         event_types:
@@ -3774,12 +3662,16 @@ components:
             nullable: true,
             description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
           }
-        amqp_exchange: { type: string, default: '' }
+        amqp_exchange:
+          {
+            type: string,
+            description: "Default '' for NATIVE (the default exchange); 'tiltify' for TILTIFY",
+          }
         amqp_routing_key:
           {
             type: string,
             nullable: true,
-            description: 'Required for NATIVE RabbitMQ endpoints only',
+            description: 'Required for NATIVE RabbitMQ Destinations only',
           }
         payload_format:
           type: string
