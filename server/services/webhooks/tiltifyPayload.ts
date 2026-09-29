@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { countedDonation } from '../../lib/donationTotals.js';
+import { channelTotalCents, eventTotalCents } from '../../lib/donationTotals.js';
 
 /**
  * Tiltify-shaped webhook messages (PRD-0002 §T, ADR-0009) for the consumers that
@@ -44,7 +44,8 @@ function customQuestion(claimData: string | null): string | null {
   return claimData;
 }
 
-function money(cents: number) {
+/** A Tiltify amount: `value` is a decimal string with 2 places (§T2). */
+export function money(cents: number) {
   return { currency: tiltifyCurrency(), value: (cents / 100).toFixed(2) };
 }
 
@@ -131,15 +132,9 @@ export async function buildTiltifyTotals(tx: Tx, channelId: string): Promise<Til
     include: { event: true },
   });
   if (!channel) return [];
-  const [channelSum, eventSum] = await Promise.all([
-    tx.donation.aggregate({
-      where: { channel_id: channel.id, ...countedDonation },
-      _sum: { amount_cents: true },
-    }),
-    tx.donation.aggregate({
-      where: { event_id: channel.event_id, ...countedDonation },
-      _sum: { amount_cents: true },
-    }),
+  const [channelCents, eventCents] = await Promise.all([
+    channelTotalCents(tx, channel.id),
+    eventTotalCents(tx, channel.event_id),
   ]);
   const fact = (id: string, slug: string, name: string, cents: number): TiltifyMessage => ({
     messageType: 'tiltify.fact.updated',
@@ -147,7 +142,7 @@ export async function buildTiltifyTotals(tx: Tx, channelId: string): Promise<Til
     payload: { id, slug, name, total_amount_raised: money(cents) },
   });
   return [
-    fact(channel.id, channel.slug, channel.name, channelSum._sum.amount_cents ?? 0),
-    fact(channel.event.id, channel.event.slug, channel.event.name, eventSum._sum.amount_cents ?? 0),
+    fact(channel.id, channel.slug, channel.name, channelCents),
+    fact(channel.event.id, channel.event.slug, channel.event.name, eventCents),
   ];
 }

@@ -76,6 +76,8 @@ tags:
   - name: Webhook
   - name: Admin
   - name: Moderator
+  - name: Tiltify
+    description: Tiltify-compatible read API for kollekt and esa-layouts-v2 (PRD-0002 §R)
 
 paths:
   # ─── Health ───
@@ -640,6 +642,287 @@ paths:
                             is_active: { type: boolean }
         '404':
           description: No active Event with that slug
+
+  # ─── Tiltify-compatible read API (PRD-0002 §R, ADR-0010) ───
+  /tiltify/campaigns/{id}:
+    get:
+      tags: [Tiltify]
+      summary: Tiltify campaign (Channel) or team campaign (Event)
+      description: |
+        Public, read-only replacement for ESATiltifyBridge `GET /campaigns/{id}`,
+        read by kollekt and esa-layouts-v2. A Channel has `team_id` = its Event id;
+        an Event has `team_id: null`. `total_amount_raised` is the same number as
+        the `<slug>.fact.updated` message (COMPLETED + REFUNDED donations).
+        Inactive Channels and Events still resolve. Bare object (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltifyCampaign'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/rewards:
+    get:
+      tags: [Tiltify]
+      summary: Rewards of a Tiltify campaign
+      description: |
+        Our Rewards. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyReward'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/targets:
+    get:
+      tags: [Tiltify]
+      summary: Targets of a Tiltify campaign
+      description: |
+        Our FundGoals. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyTarget'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/polls:
+    get:
+      tags: [Tiltify]
+      summary: Polls of a Tiltify campaign
+      description: |
+        Our Polls, with only approved (ACTIVE) options. A Channel lists its own incentives plus the shared ones
+        (no channel); an Event lists none (a shared incentive would otherwise
+        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TiltifyPoll'
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/polls/{poll_id}:
+    get:
+      tags: [Tiltify]
+      summary: One poll of a Tiltify campaign
+      description: |
+        The poll, if it is listed under that campaign (see the polls list).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - name: poll_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TiltifyPoll'
+        '404':
+          description: Unknown campaign id, or the poll is not listed under it
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/milestones:
+    get:
+      tags: [Tiltify]
+      summary: Milestones (always empty)
+      description: |
+        We have no milestones; `[]` for a known campaign id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            description: Accepted and ignored (every list is one page),
+            schema: { type: integer },
+          }
+        - {
+            name: after,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+        - {
+            name: before,
+            in: query,
+            required: false,
+            description: Accepted and ignored,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 0
+                items: { type: object }
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+
+  /tiltify/campaign/{id}/matches:
+    get:
+      tags: [Tiltify]
+      summary: Donation matches (always empty)
+      description: |
+        We have no donation matches; `[]` for a known campaign id. esa-layouts-v2
+        sends `status` and `limit`, which are ignored.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A Channel id (Tiltify campaign) or an Event id (Tiltify team campaign)
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 0
+                items: { type: object }
+        '404':
+          description: Unknown Channel or Event id
+        '429':
+          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
 
   # ─── Pledge ───
   /pledge:
@@ -3370,6 +3653,71 @@ components:
       name: X-Admin-Key
       description: Admin API key matching `ADMIN_API_KEY` env var
   schemas:
+    TiltifyAmount:
+      type: object
+      properties:
+        currency: { type: string, example: USD, description: Upper-case currency code }
+        value: { type: string, example: '12.50', description: Decimal string with 2 places }
+    TiltifyCampaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        team_id:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: The Event id for a Channel; null for an Event,
+          }
+        currency_code: { type: string }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        total_amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        status: { type: string, enum: [published, retired] }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyReward:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        active: { type: boolean }
+        amount: { $ref: '#/components/schemas/TiltifyAmount' }
+        quantity: { type: integer, nullable: true }
+        quantity_remaining:
+          { type: integer, nullable: true, description: null when stock is unlimited }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyTarget:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        active: { type: boolean }
+        amount: { $ref: '#/components/schemas/TiltifyAmount' }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TiltifyPoll:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        active: { type: boolean, description: Active and not past its end time }
+        amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+        inserted_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        options:
+          type: array
+          description: Approved options only
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
     Event:
       type: object
       description: A charity event (a marathon, or a one-day stream event) that owns Channels.

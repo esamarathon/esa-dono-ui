@@ -218,6 +218,7 @@ Caddy: `reverse_proxy /* 127.0.0.1:8080`
 | `RATE_LIMIT_SPEND`                  | no             | `20`                                                       | spend endpoints req/min/donor                                      |
 | `RATE_LIMIT_AUTH`                   | no             | `5`                                                        | auth endpoints req/min/IP                                          |
 | `RATE_LIMIT_METRICS`                | no             | `30`                                                       | `/api/metrics` req/min/IP                                          |
+| `RATE_LIMIT_TILTIFY`                | no             | `300`                                                      | `/api/tiltify` req/min/IP                                          |
 
 OAuth redirect URIs to register with each provider:
 `${APP_BASE_URL}/api/auth/{google,discord,twitch}/callback`.

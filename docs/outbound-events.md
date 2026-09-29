@@ -36,6 +36,28 @@ Each Destination also picks a **payload format**. Design: [ADR-0009](adr/0009-ti
 
 No environment variables are needed. Destinations, secrets and RabbitMQ URLs are set at runtime in the admin UI. One optional variable, `WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS` (default `10000`), changes the publish-confirm timeout.
 
+## Consumer setup
+
+kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible messages** (a `TILTIFY` Destination, § Formats) and the **Tiltify-compatible REST API** at `<APP_BASE_URL>/api/tiltify/` ([ADR-0010](adr/0010-tiltify-compatible-rest-api.md)).
+
+- **REST API.** It serves bare Tiltify-v5 objects and needs no key. It is rate-limited per IP by `RATE_LIMIT_TILTIFY` (default 300/min).
+- **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same number as the `fact.updated` message.
+- **Shared incentives** (no Channel) are listed under every Channel, and an Event lists none of its own.
+- **Always empty:** milestones and matches are `[]`.
+
+A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Event**. Find their uuids and slugs at `/admin/events`, or with `GET /api/events`.
+
+| Consumer       | Setting                                    | Value                                                                                                    |
+| -------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| kollekt        | `Rabbit.Url`                               | the broker of the `TILTIFY` Destination                                                                  |
+| kollekt        | `TiltifyBridge.Url`                        | `<APP_BASE_URL>/api/tiltify/`: **keep the trailing slash** (.NET drops the last path segment without it) |
+| esa-layouts-v2 | `rabbitmq.*`                               | the same broker                                                                                          |
+| esa-layouts-v2 | `tiltify.api.url`                          | `<APP_BASE_URL>/api/tiltify`                                                                             |
+| esa-layouts-v2 | `tiltify.teamCampaign.{slug,id}`           | the Event's slug and uuid                                                                                |
+| esa-layouts-v2 | `tiltify.campaigns[].{slug,id,thisStream}` | each Channel's slug and uuid; `thisStream: true` on the one this layout instance shows                   |
+
+**Before two Channels of one Event take donations,** kollekt must look up incentives by id across campaigns (kollekt#36). Otherwise its sync of the second Channel fails on a duplicate key.
+
 ## Delivery guarantees
 
 - **Transactional outbox.** A message is queued in the same database transaction as the change that caused it. If the change rolls back, no message is sent. If it commits, the message cannot be lost.

@@ -17,6 +17,7 @@ import adminRouter from './routes/admin.js';
 import moderatorRouter from './routes/moderator.js';
 import auctionsRouter from './routes/auctions.js';
 import feedbackRouter from './routes/feedback.js';
+import tiltifyRouter from './routes/tiltify.js';
 import featureFlagsRouter from './routes/featureFlags.js';
 import { startWebhookDispatcher } from './services/webhooks/dispatcher.js';
 import prisma from './lib/prisma.js';
@@ -98,6 +99,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/moderator', moderatorRouter);
 app.use('/api/auctions', auctionsRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/tiltify', tiltifyRouter);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

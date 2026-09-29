@@ -9,3 +9,4 @@ process.env.EMAIL_FROM = 'test@example.com';
 // High ceiling so the feedback route's IP-keyed rate limiter doesn't trip
 // across the many requests a single test file issues from the same IP.
 process.env.RATE_LIMIT_FEEDBACK = '1000';
+process.env.RATE_LIMIT_TILTIFY = '10000';
