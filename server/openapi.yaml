@@ -571,6 +571,76 @@ paths:
                       description: Id of the Event this Channel belongs to
                     is_active: { type: boolean }
 
+  # ─── Events ───
+  /events:
+    get:
+      tags: [Events]
+      summary: List active events
+      description: |
+        Public list of active Events, each with its active Channels. Every
+        donation is routed to exactly one Event, so the client uses this to
+        drive the /donate event picker. Inactive Events and inactive Channels
+        are omitted, and internal timestamp fields are not exposed.
+      responses:
+        '200':
+          description: Active Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Event'
+                    - type: object
+                      properties:
+                        channels:
+                          type: array
+                          description: Only this Event's active Channels
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string }
+                              name: { type: string }
+                              slug: { type: string }
+                              event_id: { type: string }
+                              is_active: { type: boolean }
+
+  /events/{slug}:
+    get:
+      tags: [Events]
+      summary: Get an active event by slug
+      description: |
+        Looks up one active Event by its slug, with its active Channels. Used by
+        /donate/<event-slug> to preselect an Event. Inactive or unknown slugs
+        both return 404 rather than leaking the existence of an inactive Event.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The Event and its active Channels
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Event'
+                  - type: object
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            slug: { type: string }
+                            event_id: { type: string }
+                            is_active: { type: boolean }
+        '404':
+          description: No active Event with that slug
+
   # ─── Pledge ───
   /pledge:
     post:
@@ -850,6 +920,121 @@ paths:
         '200':
           description: Channel deactivated
 
+  /admin/events:
+    get:
+      tags: [Admin]
+      summary: List all events
+      description: Admin view — unlike the public `/events`, this includes inactive Events.
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: All Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+    post:
+      tags: [Admin]
+      summary: Create an event
+      description: |
+        Creates an Event. `slug` is optional; when omitted it is derived from
+        `name` and made unique across Events and Channels. New Events start
+        inactive — activating one requires a primary Channel of that same Event.
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and AMQP-routing-safe name; derived from `name` when omitted.
+                is_active:
+                  type: boolean
+                  default: false
+                  description: Must be a boolean when present. Activating on create requires primary_channel_id.
+                primary_channel_id:
+                  type: string
+                  nullable: true
+                  description: Channel that receives donations naming no Channel; must be a Channel of this Event and active while the Event is active.
+      responses:
+        '200':
+          description: The created Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Missing name, invalid slug, or non-boolean is_active
+        '409':
+          description: Name or slug already in use (by an Event or a Channel), or activation without a valid primary Channel
+
+  /admin/events/{id}:
+    put:
+      tags: [Admin]
+      summary: Update an event
+      description: |
+        Updates an Event's name, slug, is_active, or primary_channel_id. A slug
+        can only change while the Event is inactive. Activating requires an
+        active primary Channel belonging to this Event, and the primary Channel
+        of an active Event cannot be cleared.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Only accepted while the Event is inactive.
+                is_active: { type: boolean }
+                primary_channel_id:
+                  type: string
+                  nullable: true
+                  description: Set null only while the Event is inactive.
+      responses:
+        '200':
+          description: The updated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Empty name, invalid slug, non-boolean is_active, or a primary Channel belonging to another Event
+        '404':
+          description: Event not found
+        '409':
+          description: Slug change on an active event, activation without an active primary channel of this event, clearing the primary channel of an active event, or duplicate name/slug
+    delete:
+      tags: [Admin]
+      summary: Deactivate an event
+      description: Soft-delete — sets is_active false rather than removing the row, since Channels/incentives/donations/pledges may still reference it.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The deactivated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404':
+          description: Event not found
+
   /admin/donations:
     get:
       tags: [Admin]
@@ -900,6 +1085,52 @@ paths:
           description: Invalid status, unchanged status, or donation already refunded/charged back
         '404':
           description: Donation not found
+
+  /admin/donations/{id}/channel:
+    patch:
+      tags: [Admin]
+      summary: Assign an unassigned donation to a channel
+      description: >-
+        Records the Channel and Event of a donation that arrived with neither
+        (PRD-0002 §E6). Fails with 409 if the donation already has a Channel,
+        so an assignment cannot be silently overwritten. Emits one
+        `donation.created` webhook on success.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel_id]
+              properties:
+                channel_id:
+                  {
+                    type: string,
+                    description: The Channel to assign; its Event is set on the donation too.,
+                  }
+      responses:
+        '200':
+          description: The updated donation (with channel_id and event_id)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  channel_id: { type: string, nullable: true }
+                  event_id: { type: string, nullable: true }
+        '400':
+          description: Missing channel_id, or the channel does not exist
+        '404':
+          description: Donation not found
+        '409':
+          description: The donation already has a channel
 
   /admin/claims:
     get:
@@ -1038,6 +1269,10 @@ paths:
                   type: string
                   nullable: true
                   description: Optional channel to attribute this donation to (bypasses the pledge flow's required-channel check).
+                event_id:
+                  type: string
+                  nullable: true
+                  description: Optional event to attribute this donation to; routes to that event's primary channel when channel_id is omitted.
                 external_id:
                   type: string
                   description: Optional caller-supplied reference (e.g. an external platform's own transaction id) for dedup/traceability. Falls back to an auto-generated sim-<uuid> when omitted. Must be unique — reusing one returns 409.
@@ -1061,9 +1296,16 @@ paths:
                       id: { type: string }
                       email: { type: string }
                       balance_remaining: { type: integer }
+                  donation:
+                    type: object
+                    description: The created Donation, with the Channel and Event the routing rules resolved to (both null when unassigned).
+                    properties:
+                      id: { type: string }
+                      channel_id: { type: string, nullable: true }
+                      event_id: { type: string, nullable: true }
                   pledge: { type: object, nullable: true }
         '400':
-          description: Missing/invalid email, amount_cents, external_id, or occurred_at
+          description: Missing/invalid email, amount_cents, external_id, occurred_at, or an unknown channel_id/event_id
         '409':
           description: A donation with the given external_id already exists
 
@@ -2214,6 +2456,118 @@ paths:
                   active_polls: { type: integer }
                   total_rewards: { type: integer }
                   total_goals: { type: integer }
+
+  /moderator/events:
+    get:
+      tags: [Moderator]
+      summary: List all events
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: All Events ordered by created_at ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+    post:
+      tags: [Moderator]
+      summary: Create an event
+      description: |
+        Creates an Event. `slug` is optional; when omitted it is derived from
+        `name` and made unique across Events and Channels. New Events start
+        inactive — activating one requires a primary Channel of that same Event.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                slug:
+                  type: string
+                  description: Optional. Lowercase URL- and AMQP-routing-safe name; derived from `name` when omitted.
+                is_active: { type: boolean, default: false }
+                primary_channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: The created Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Missing name, invalid slug, or non-boolean is_active
+        '409':
+          description: Name or slug already in use, or activation without a valid primary Channel
+
+  /moderator/events/{id}:
+    put:
+      tags: [Moderator]
+      summary: Update an event
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                slug: { type: string }
+                is_active: { type: boolean }
+                primary_channel_id: { type: string, nullable: true }
+      responses:
+        '200':
+          description: The updated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400':
+          description: Empty name, invalid slug, non-boolean is_active, or a primary Channel belonging to another Event
+        '404':
+          description: Event not found
+        '409':
+          description: Slug change on an active event, activation without an active primary channel, clearing the primary channel of an active event, or duplicate name/slug
+    delete:
+      tags: [Moderator]
+      summary: Deactivate an event
+      description: Soft-delete — sets is_active false rather than removing the row, since Channels/incentives/donations/pledges may still reference it.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The deactivated Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404':
+          description: Event not found
 
   /moderator/channels:
     get:

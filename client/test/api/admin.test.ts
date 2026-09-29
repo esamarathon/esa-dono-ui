@@ -43,6 +43,11 @@ import {
   getDestinationDeliveries,
   testDestination,
   uploadRewardImage,
+  getEvents,
+  createEvent,
+  updateEvent,
+  deleteEvent,
+  assignDonationChannel,
 } from '../../src/api/admin';
 
 describe('admin API helpers', () => {
@@ -181,5 +186,46 @@ describe('admin API helpers', () => {
       expect.any(FormData),
       expect.objectContaining({ baseURL: '/' }),
     );
+  });
+
+  it('getEvents returns the events array (#115)', async () => {
+    mocks.get.mockResolvedValue({ data: [{ id: 'e1', name: 'Marathon' }] });
+    await expect(getEvents()).resolves.toEqual([{ id: 'e1', name: 'Marathon' }]);
+    expect(mocks.get).toHaveBeenCalledWith('/events');
+  });
+
+  it('createEvent posts the name and optional slug (#115)', async () => {
+    mocks.post.mockResolvedValue({ data: { id: 'e1', name: 'Marathon' } });
+    await expect(createEvent({ name: 'Marathon', slug: 'marathon' })).resolves.toEqual({
+      id: 'e1',
+      name: 'Marathon',
+    });
+    expect(mocks.post).toHaveBeenCalledWith('/events', { name: 'Marathon', slug: 'marathon' });
+  });
+
+  it('updateEvent puts the payload (#115)', async () => {
+    mocks.put.mockResolvedValue({ data: { id: 'e1', is_active: true } });
+    await expect(updateEvent('e1', { is_active: true, primary_channel_id: 'c1' })).resolves.toEqual(
+      { id: 'e1', is_active: true },
+    );
+    expect(mocks.put).toHaveBeenCalledWith('/events/e1', {
+      is_active: true,
+      primary_channel_id: 'c1',
+    });
+  });
+
+  it('deleteEvent deletes and returns the deactivated event (#115)', async () => {
+    mocks.delete.mockResolvedValue({ data: { success: true, event: { id: 'e1' } } });
+    await expect(deleteEvent('e1')).resolves.toEqual({ success: true, event: { id: 'e1' } });
+    expect(mocks.delete).toHaveBeenCalledWith('/events/e1');
+  });
+
+  it('assignDonationChannel patches the donation channel (#115)', async () => {
+    mocks.patch.mockResolvedValue({ data: { id: 'd1', channel_id: 'c1' } });
+    await expect(assignDonationChannel('d1', 'c1')).resolves.toEqual({
+      id: 'd1',
+      channel_id: 'c1',
+    });
+    expect(mocks.patch).toHaveBeenCalledWith('/donations/d1/channel', { channel_id: 'c1' });
   });
 });

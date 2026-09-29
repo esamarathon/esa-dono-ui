@@ -1,8 +1,10 @@
 import axios, { type AxiosInstance } from 'axios';
 import type {
   AdminClaim,
+  AdminDonation,
   AdminDonorList,
   AdminDonorWallet,
+  Event,
   RefundResult,
   WebhookDelivery,
   WebhookEndpoint,
@@ -25,6 +27,42 @@ adminClient.interceptors.request.use((config) => {
 
 export async function getDonors(q = '', offset = 0): Promise<AdminDonorList> {
   const { data } = await adminClient.get('/donors', { params: { q, offset } });
+  return data;
+}
+
+// ─── Events (#115) ───
+
+export async function getEvents(): Promise<Event[]> {
+  const { data } = await adminClient.get('/events');
+  return data;
+}
+
+export async function createEvent(payload: { name: string; slug?: string }): Promise<Event> {
+  const { data } = await adminClient.post('/events', payload);
+  return data;
+}
+
+export async function updateEvent(
+  id: string,
+  payload: {
+    name?: string;
+    slug?: string;
+    primary_channel_id?: string | null;
+    is_active?: boolean;
+  },
+): Promise<Event> {
+  const { data } = await adminClient.put(`/events/${id}`, payload);
+  return data;
+}
+
+export async function deleteEvent(id: string): Promise<{ success: boolean; event: Event }> {
+  const { data } = await adminClient.delete(`/events/${id}`);
+  return data;
+}
+
+/** Assign an unassigned donation to a channel (and so its event), then publish it. */
+export async function assignDonationChannel(id: string, channelId: string): Promise<AdminDonation> {
+  const { data } = await adminClient.patch(`/donations/${id}/channel`, { channel_id: channelId });
   return data;
 }
 

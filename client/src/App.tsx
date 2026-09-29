@@ -16,6 +16,7 @@ import Help from './pages/Help';
 import Auctions from './pages/Auctions';
 import AdminLayout from './pages/admin/AdminLayout';
 import AdminDashboard from './pages/admin/AdminDashboard';
+import AdminEvents from './pages/admin/AdminEvents';
 import AdminChannels from './pages/admin/AdminChannels';
 import AdminRewards from './pages/admin/AdminRewards';
 import AdminPolls from './pages/admin/AdminPolls';
@@ -33,6 +34,7 @@ import AdminHelp from './pages/admin/AdminHelp';
 import ModeratorLayout from './pages/moderator/ModeratorLayout';
 import ModeratorHelp from './pages/moderator/ModeratorHelp';
 import ModeratorDashboard from './pages/moderator/ModeratorDashboard';
+import ModeratorEvents from './pages/moderator/ModeratorEvents';
 import ModeratorChannels from './pages/moderator/ModeratorChannels';
 import ModeratorPolls from './pages/moderator/ModeratorPolls';
 import ModeratorRewards from './pages/moderator/ModeratorRewards';
@@ -56,6 +58,7 @@ export default function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<AdminDashboard />} />
           <Route path="donors" element={<AdminDonors />} />
+          <Route path="events" element={<AdminEvents />} />
           <Route path="channels" element={<AdminChannels />} />
           <Route path="rewards" element={<AdminRewards />} />
           <Route path="polls" element={<AdminPolls />} />
@@ -72,6 +75,7 @@ export default function App() {
         </Route>
         <Route path="/moderate" element={<ModeratorLayout />}>
           <Route index element={<ModeratorDashboard />} />
+          <Route path="events" element={<ModeratorEvents />} />
           <Route path="channels" element={<ModeratorChannels />} />
           <Route path="polls" element={<ModeratorPolls />} />
           <Route path="rewards" element={<ModeratorRewards />} />
@@ -97,6 +101,8 @@ export default function App() {
                     <Routes>
                       <Route path="/" element={<Home />} />
                       <Route path="/donate" element={<DonateFlow />} />
+                      <Route path="/donate/:eventSlug" element={<DonateFlow />} />
+                      <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
                       <Route path="/pledge/:token" element={<PledgeReturn />} />
                       <Route path="/wallet" element={<MyWallet />} />
                       <Route path="/help" element={<Help />} />

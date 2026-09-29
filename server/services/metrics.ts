@@ -1,5 +1,6 @@
 import client from 'prom-client';
 import prisma from '../lib/prisma.js';
+import { countedDonation } from '../lib/donationTotals.js';
 import { register } from '../lib/metrics.js';
 import { METRICS_REFRESH_MS } from '../config.js';
 
@@ -22,13 +23,57 @@ const donorsTotal = new client.Gauge({
 
 const donatedCentsTotal = new client.Gauge({
   name: 'dono_donated_cents_total',
-  help: 'Total amount donated across all donations, in cents',
+  help: 'Total amount donated (completed and wallet-refunded donations; chargebacks excluded), in cents',
   registers: [register],
 });
 
 const donationsTotal = new client.Gauge({
   name: 'dono_donations_total',
   help: 'Total number of donations processed',
+  registers: [register],
+});
+
+/**
+ * Donations with no Channel and no Event yet (PRD-0002 §E6): they wait for an
+ * admin to assign one with PATCH /admin/donations/:id/channel. Alert on > 0.
+ */
+const donationsUnassigned = new client.Gauge({
+  name: 'dono_donations_unassigned',
+  help: 'Donations waiting to be assigned to a Channel',
+  registers: [register],
+});
+
+// Per-Event and per-Channel breakdowns (PRD-0002 §M3) are separate labelled
+// gauges, never labels added to the unlabelled globals above: a gauge carrying
+// both an unlabelled total and labelled parts double-counts under PromQL sum().
+// Labels hold slug values; '' means unassigned or shared.
+const BY_CHANNEL_LABELS = ['event', 'channel'] as const;
+
+const donatedCentsByChannel = new client.Gauge({
+  name: 'dono_donated_cents_by_channel',
+  help: 'Donation amount in cents, by Event and Channel slug',
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const donationsByChannel = new client.Gauge({
+  name: 'dono_donations_by_channel',
+  help: 'Number of donations, by Event and Channel slug',
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const rewardClaimsByChannel = new client.Gauge({
+  name: 'dono_reward_claims_by_channel',
+  help: "Reward claims, by the slug of the reward's Event and Channel",
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const pollVotesByChannel = new client.Gauge({
+  name: 'dono_poll_votes_by_channel',
+  help: "Poll votes, by the slug of the poll's Event and Channel",
+  labelNames: BY_CHANNEL_LABELS,
   registers: [register],
 });
 
@@ -40,7 +85,15 @@ const pledgesOpen = new client.Gauge({
 
 const eventsActive = new client.Gauge({
   name: 'dono_events_active',
-  help: 'Number of active events',
+  help: 'Number of active Events (charity events)',
+  registers: [register],
+});
+
+// Before #115 dono_events_active counted active Channels (the concept was once
+// named "Event"); that count now has its own, correctly named gauge.
+const channelsActive = new client.Gauge({
+  name: 'dono_channels_active',
+  help: 'Number of active Channels',
   registers: [register],
 });
 
@@ -156,6 +209,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       donationCount,
       pledgeCount,
       activeEventCount,
+      activeChannelCount,
       claimCount,
       pollVoteCount,
       adjustmentCounts,
@@ -166,11 +220,21 @@ export async function refreshBusinessMetrics(): Promise<void> {
       unsoldAuctions,
       webhookDestinations,
       webhookDeliveryGroups,
+      unassignedDonationCount,
+      donationByChannel,
+      completedCentsByChannel,
+      claimGroups,
+      rewards,
+      voteGroups,
+      polls,
+      eventRows,
+      channelRows,
     ] = await Promise.all([
       prisma.donor.count(),
-      prisma.donation.aggregate({ _sum: { amount_cents: true } }),
+      prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
       prisma.donation.count(),
       prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
+      prisma.event.count({ where: { is_active: true } }),
       prisma.channel.count({ where: { is_active: true } }),
       prisma.rewardClaim.count(),
       prisma.pollVote.count({ where: { reversed_at: null } }),
@@ -195,6 +259,24 @@ export async function refreshBusinessMetrics(): Promise<void> {
         _min: { created_at: true },
         _max: { updated_at: true },
       }),
+      prisma.donation.count({ where: { channel_id: null, event_id: null } }),
+      prisma.donation.groupBy({ by: ['event_id', 'channel_id'], _count: { _all: true } }),
+      // Money totals count COMPLETED and REFUNDED (wallet refunds), not chargebacks (lib/donationTotals.ts).
+      prisma.donation.groupBy({
+        by: ['event_id', 'channel_id'],
+        where: countedDonation,
+        _sum: { amount_cents: true },
+      }),
+      prisma.rewardClaim.groupBy({ by: ['reward_id'], _count: { _all: true } }),
+      prisma.reward.findMany({ select: { id: true, channel_id: true } }),
+      prisma.pollVote.groupBy({
+        by: ['poll_id'],
+        where: { reversed_at: null },
+        _count: { _all: true },
+      }),
+      prisma.poll.findMany({ select: { id: true, channel_id: true } }),
+      prisma.event.findMany({ select: { id: true, slug: true } }),
+      prisma.channel.findMany({ select: { id: true, slug: true, event_id: true } }),
     ]);
 
     donorsTotal.set(donorCount);
@@ -202,8 +284,74 @@ export async function refreshBusinessMetrics(): Promise<void> {
     donationsTotal.set(donationCount);
     pledgesOpen.set(pledgeCount);
     eventsActive.set(activeEventCount);
+    channelsActive.set(activeChannelCount);
     rewardClaimsTotal.set(claimCount);
     pollVotesTotal.set(pollVoteCount);
+    donationsUnassigned.set(unassignedDonationCount);
+
+    // Slug lookups for the labelled breakdowns: one query each, then resolve in
+    // memory. Unknown or null ids fall back to '' so a stale reference never
+    // creates a bogus slug series.
+    const eventSlug = new Map(eventRows.map((e) => [e.id, e.slug]));
+    const channelSlug = new Map(channelRows.map((c) => [c.id, c.slug]));
+    const channelEvent = new Map(channelRows.map((c) => [c.id, c.event_id]));
+    const labelsFor = (eventId: string | null, channelId: string | null) => ({
+      event: (eventId && eventSlug.get(eventId)) || '',
+      channel: (channelId && channelSlug.get(channelId)) || '',
+    });
+
+    // Several rows can resolve to the same label pair (e.g. an unknown and a null
+    // Event both give ''), so values are summed per pair, never overwritten.
+    const setBySlugPair = <T>(
+      gauge: client.Gauge<'event' | 'channel'>,
+      rows: T[],
+      labelsOf: (row: T) => { event: string; channel: string },
+      valueOf: (row: T) => number,
+    ) => {
+      const totals = new Map<
+        string,
+        { labels: { event: string; channel: string }; value: number }
+      >();
+      for (const row of rows) {
+        const labels = labelsOf(row);
+        const key = `${labels.event}\u0000${labels.channel}`;
+        const entry = totals.get(key) ?? { labels, value: 0 };
+        entry.value += valueOf(row);
+        totals.set(key, entry);
+      }
+      gauge.reset();
+      for (const { labels, value } of totals.values()) gauge.set(labels, value);
+    };
+    // Claims and votes take their incentive's Channel (null = shared).
+    const incentiveLabels = (channelId: string | null) =>
+      labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
+    const rewardChannel = new Map(rewards.map((r) => [r.id, r.channel_id]));
+    const pollChannel = new Map(polls.map((p) => [p.id, p.channel_id]));
+
+    setBySlugPair(
+      donatedCentsByChannel,
+      completedCentsByChannel,
+      (g) => labelsFor(g.event_id, g.channel_id),
+      (g) => g._sum.amount_cents ?? 0,
+    );
+    setBySlugPair(
+      donationsByChannel,
+      donationByChannel,
+      (g) => labelsFor(g.event_id, g.channel_id),
+      (g) => g._count._all,
+    );
+    setBySlugPair(
+      rewardClaimsByChannel,
+      claimGroups,
+      (g) => incentiveLabels(rewardChannel.get(g.reward_id) ?? null),
+      (g) => g._count._all,
+    );
+    setBySlugPair(
+      pollVotesByChannel,
+      voteGroups,
+      (g) => incentiveLabels(pollChannel.get(g.poll_id) ?? null),
+      (g) => g._count._all,
+    );
     for (const { type, count } of adjustmentCounts) {
       balanceAdjustmentsTotal.set({ type }, count);
     }

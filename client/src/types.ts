@@ -184,6 +184,30 @@ export interface Channel {
   is_active: boolean;
 }
 
+/** A charity Event (a marathon, or a one-day stream event) that groups
+ *  Channels. Only active Events are open for donations. */
+export interface Event {
+  id: string;
+  name: string;
+  slug: string;
+  is_active: boolean;
+  // Where donations that name no channel are routed. Required (and must be an
+  // active channel of this event) before the event can be activated.
+  primary_channel_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Public view of an active Event with its active Channels (#115). Used by the
+ *  /donate/<event>[/<channel>] link tree; internal fields are omitted. */
+export interface PublicEvent {
+  id: string;
+  name: string;
+  slug: string;
+  primary_channel_id: string | null;
+  channels: Channel[];
+}
+
 export type AuctionStatus =
   'OPEN' | 'CLOSED' | 'AWAITING_PAYMENT' | 'SETTLED' | 'UNSOLD' | 'CANCELLED';
 
@@ -322,6 +346,10 @@ export interface AdminDonation {
   moderated_at?: string | null;
   moderated_by?: string | null;
   channel?: { id: string; name: string } | null;
+  // Routing (#115). Both null means the donation arrived while no single event
+  // was active — it stays unassigned until an admin assigns a channel.
+  channel_id?: string | null;
+  event_id?: string | null;
   status: DonationStatus;
   refund_id?: string | null;
   // What the donor selected/pledged toward (#58) — human-readable labels

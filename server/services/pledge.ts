@@ -9,6 +9,7 @@ import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
 import { buildDonationCreatedPayload } from './webhooks/delivery.js';
 import { withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
@@ -495,6 +496,8 @@ export async function createCheckoutForPledge(
         // wallet spend that fulfilled the pledge (the full total).
         const walletExternalId = `wallet-${crypto.randomUUID()}`;
         await withWebhooks(async (tx, emit) => {
+          // Same routing as every other donation: the pledge's Channel and its Event.
+          const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
           const created = await tx.donation.create({
             data: {
               external_id: walletExternalId,
@@ -502,7 +505,8 @@ export async function createCheckoutForPledge(
               amount_cents: pledge.total_cents,
               comment: fullPledge.comment ?? null,
               donor_name: fullPledge.display_name ?? null,
-              channel_id: fullPledge.channel_id ?? null,
+              channel_id: route.channelId,
+              event_id: route.eventId,
             },
           });
           await fulfillPledge(tx, fullPledge, donor.id);
@@ -519,7 +523,7 @@ export async function createCheckoutForPledge(
               donationId: created.id,
               externalId: walletExternalId,
               amountCents: pledge.total_cents,
-              channelId: fullPledge.channel_id ?? null,
+              channelId: route.channelId,
               donorRef: donor.id,
             }),
           );

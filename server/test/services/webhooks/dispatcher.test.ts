@@ -339,6 +339,7 @@ describe('webhook dispatcher', () => {
     expect(updated!.status).toBe('SUCCESS');
     expect(amqpMocks.connect).toHaveBeenCalledTimes(1);
     expect(amqpMocks.connect.mock.calls[0]?.[0]).toContain('heartbeat=30');
+    expect(amqpMocks.connect.mock.calls[0]?.[1]).toEqual({ timeout: 10_000 });
     expect(publish).toHaveBeenCalledTimes(1);
     const call = publish.mock.calls.at(0);
     expect(call).toBeDefined();

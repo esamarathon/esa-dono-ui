@@ -2,7 +2,9 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
+import { countedDonation } from '../lib/donationTotals.js';
+import { mountIdentityRoutes } from './identityRoutes.js';
+import { assignDonationChannel } from '../services/routing.js';
 import { sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
@@ -44,7 +46,8 @@ router.get('/stats', async (req, res) => {
     prisma.donor.count(),
     prisma.donation.count(),
     prisma.rewardClaim.count(),
-    prisma.donation.aggregate({ _sum: { amount_cents: true } }),
+    // Money totals: completed and wallet-refunded, not chargebacks (lib/donationTotals.ts).
+    prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
     prisma.pendingPledge.count(),
     prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
     // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
@@ -58,7 +61,7 @@ router.get('/stats', async (req, res) => {
     channels.map(async (channel) => {
       const [sum, count] = await Promise.all([
         prisma.donation.aggregate({
-          where: { channel_id: channel.id },
+          where: { channel_id: channel.id, ...countedDonation },
           _sum: { amount_cents: true },
         }),
         prisma.donation.count({ where: { channel_id: channel.id } }),
@@ -66,6 +69,8 @@ router.get('/stats', async (req, res) => {
       return {
         id: channel.id,
         name: channel.name,
+        slug: channel.slug,
+        event_id: channel.event_id,
         raised_cents: sum._sum.amount_cents ?? 0,
         donations: count,
       };
@@ -83,36 +88,8 @@ router.get('/stats', async (req, res) => {
   });
 });
 
-// Channels CRUD
-router.get('/channels', async (req, res) => {
-  res.json(await prisma.channel.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/channels', async (req, res) => {
-  try {
-    res.json(await createChannel(req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
-
-router.put('/channels/:id', async (req, res) => {
-  try {
-    res.json(await updateChannel(req.params.id, req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
-
-// Soft-delete: channels may be referenced by incentives/donations/pledges, so
-// deactivate instead of hard-deleting to preserve those references.
-router.delete('/channels/:id', async (req, res) => {
-  try {
-    res.json({ success: true, channel: await deactivateChannel(req.params.id) });
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
+// Channels and Events (routes/identityRoutes.ts)
+mountIdentityRoutes(router);
 
 // Donations
 const DONATION_STATUSES = ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'];
@@ -125,10 +102,25 @@ router.get('/donations', async (req, res) => {
   }
   const donations = await prisma.donation.findMany({
     where: statuses.length > 0 ? { status: { in: statuses } } : undefined,
-    include: { donor: { select: { email: true } }, channel: { select: { id: true, name: true } } },
+    include: {
+      donor: { select: { email: true } },
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
+    },
     orderBy: { created_at: 'desc' },
   });
   res.json(donations);
+});
+
+/**
+ * PATCH /admin/donations/:id/channel (PRD-0002 §E6)
+ * Assign an unassigned donation to a Channel (and so its Event), then publish it.
+ */
+router.patch('/donations/:id/channel', async (req, res) => {
+  try {
+    res.json(await assignDonationChannel(req.params.id, req.body?.channel_id));
+  } catch (e) {
+    sendError(res, e, '[donations]');
+  }
 });
 
 /**
@@ -140,6 +132,7 @@ router.get('/donations', async (req, res) => {
  * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
  * has a refund_id it is terminal: no further status changes are allowed.
  */
+
 router.patch('/donations/:id/status', async (req, res) => {
   const { status, reason } = req.body;
   if (!DONATION_STATUSES.includes(status)) {
@@ -190,7 +183,7 @@ router.patch('/donations/:id/status', async (req, res) => {
       data: { status, refund_id: adjustment.id },
       include: {
         donor: { select: { email: true } },
-        channel: { select: { id: true, name: true } },
+        channel: { select: { id: true, name: true, slug: true, event_id: true } },
       },
     });
     return res.json(updated);
@@ -199,7 +192,10 @@ router.patch('/donations/:id/status', async (req, res) => {
   const updated = await prisma.donation.update({
     where: { id: donation.id },
     data: { status },
-    include: { donor: { select: { email: true } }, channel: { select: { id: true, name: true } } },
+    include: {
+      donor: { select: { email: true } },
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
+    },
   });
   res.json(updated);
 });
@@ -389,6 +385,7 @@ router.post('/simulate-donation', async (req, res) => {
       comment,
       pledge_token,
       channel_id,
+      event_id,
       external_id,
       occurred_at,
     } = req.body;
@@ -431,6 +428,7 @@ router.post('/simulate-donation', async (req, res) => {
       comment: comment || null,
       pledgeToken: pledge_token || null,
       channelId: channel_id || null,
+      eventId: event_id || null,
       occurredAt,
     });
     if ('duplicate' in result) {
@@ -447,10 +445,14 @@ router.post('/simulate-donation', async (req, res) => {
         balance_remaining: result.donor.balance_remaining,
       },
       pledge: result.pledge || null,
+      donation: {
+        id: result.donation.id,
+        channel_id: result.donation.channel_id,
+        event_id: result.donation.event_id,
+      },
     });
   } catch (err) {
-    console.error('Simulate donation error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, '[simulate-donation]');
   }
 });
 

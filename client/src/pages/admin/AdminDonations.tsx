@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import adminClient from '../../api/admin';
+import adminClient, { assignDonationChannel } from '../../api/admin';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import {
   apiErrorMessage,
   type AdminDonation,
   type AdminClaim,
+  type Channel,
   type DonationStatus,
 } from '../../types';
 
@@ -24,9 +25,12 @@ const STATUS_COLORS: Record<DonationStatus, string> = {
 export default function AdminDonations() {
   const [donations, setDonations] = useState<AdminDonation[]>([]);
   const [claims, setClaims] = useState<AdminClaim[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('donations');
   const [statusFilter, setStatusFilter] = useState<DonationStatus[]>([]);
+  const [unassignedOnly, setUnassignedOnly] = useState(false);
+  const [assignChoice, setAssignChoice] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
 
   const reloadClaims = () => adminClient.get('/claims').then((r) => setClaims(r.data));
@@ -36,7 +40,11 @@ export default function AdminDonations() {
       .then((r) => setDonations(r.data));
 
   useEffect(() => {
-    Promise.all([reloadDonations([]), reloadClaims()]).finally(() => setLoading(false));
+    Promise.all([
+      reloadDonations([]),
+      reloadClaims(),
+      adminClient.get('/channels').then((r) => setChannels(r.data)),
+    ]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -63,6 +71,26 @@ export default function AdminDonations() {
     await adminClient.patch(`/claims/${claim.id}`, { status });
     await reloadClaims();
   };
+
+  /** A donation that named no event and no channel — it is not published until
+   *  an admin assigns it one (#115). */
+  const isUnassigned = (d: AdminDonation) => d.channel_id === null && d.event_id === null;
+
+  const channelName = (d: AdminDonation) => d.channel?.name ?? 'unassigned';
+
+  const handleAssign = async (d: AdminDonation) => {
+    const choice = assignChoice[d.id];
+    if (!choice) return;
+    setError('');
+    try {
+      await assignDonationChannel(d.id, choice);
+      await reloadDonations();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Failed to assign donation'));
+    }
+  };
+
+  const visibleDonations = unassignedOnly ? donations.filter(isUnassigned) : donations;
 
   if (loading) return <LoadingSpinner />;
 
@@ -116,12 +144,33 @@ export default function AdminDonations() {
                 </button>
               );
             })}
+            <button
+              onClick={() => setUnassignedOnly((v) => !v)}
+              className="font-mono text-[10px] px-2 py-1 rounded-sm font-bold tracking-wider uppercase"
+              style={{
+                background: unassignedOnly ? 'rgba(208,152,70,.16)' : 'transparent',
+                border: `1px solid ${unassignedOnly ? 'var(--d-yellow)' : 'rgba(239,238,236,.15)'}`,
+                color: unassignedOnly ? 'var(--d-yellow)' : 'var(--off-white, #efeeec)',
+                opacity: unassignedOnly ? 1 : 0.55,
+              }}
+            >
+              unassigned only
+            </button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-                  {['donor', 'email', 'amount', 'status', 'comment', 'date'].map((h) => (
+                  {[
+                    'donor',
+                    'email',
+                    'amount',
+                    'channel',
+                    'status',
+                    'comment',
+                    'date',
+                    'assign',
+                  ].map((h) => (
                     <th
                       key={h}
                       className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
@@ -132,7 +181,7 @@ export default function AdminDonations() {
                 </tr>
               </thead>
               <tbody>
-                {donations.map((d) => (
+                {visibleDonations.map((d) => (
                   <tr key={d.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                     <td className="px-4 py-2 font-data text-off-white">{d.donor_name ?? '-'}</td>
                     <td className="px-4 py-2 font-data text-off-white/55">
@@ -141,6 +190,7 @@ export default function AdminDonations() {
                     <td className="px-4 py-2 font-data font-bold text-off-white">
                       {fmt(d.amount_cents)}
                     </td>
+                    <td className="px-4 py-2 font-data text-off-white/55">{channelName(d)}</td>
                     <td className="px-4 py-2">
                       <select
                         value={d.status}
@@ -165,6 +215,34 @@ export default function AdminDonations() {
                     </td>
                     <td className="px-4 py-2 font-data text-off-white/55">
                       {new Date(d.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-2">
+                      {isUnassigned(d) && (
+                        <div className="flex items-center gap-1">
+                          <select
+                            aria-label={`assign channel for ${d.id}`}
+                            className="font-mono text-[10px] px-1 py-0.5 rounded-sm"
+                            value={assignChoice[d.id] ?? ''}
+                            onChange={(e) =>
+                              setAssignChoice((prev) => ({ ...prev, [d.id]: e.target.value }))
+                            }
+                          >
+                            <option value="">channel…</option>
+                            {channels.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => handleAssign(d)}
+                            disabled={!assignChoice[d.id]}
+                            className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                          >
+                            assign…
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

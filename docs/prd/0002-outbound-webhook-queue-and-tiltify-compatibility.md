@@ -191,9 +191,13 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
   `dono_webhook_queue_depth`, `dono_webhook_queue_oldest_pending_age_seconds`,
   `dono_webhook_queue_failed`, `dono_webhook_destination_last_success_timestamp_seconds`, and `dono_webhook_destination_active` (0/1, so the stall alert ignores paused Destinations).
 - **M2.** `dono_donations_unassigned` (see §E6).
-- **M3.** Business gauges `dono_donated_cents_total`, `dono_donations_total`,
-  `dono_reward_claims_total`, `dono_poll_votes_total` gain `event` and `channel` labels
-  (slug values; empty string for unassigned donations). The unlabelled global series stay.
+- **M3.** Per-Event and per-Channel breakdowns, as separate gauges labelled `event` and
+  `channel` (slug values; empty string when unassigned or shared):
+  `dono_donated_cents_by_channel`, `dono_donations_by_channel`,
+  `dono_reward_claims_by_channel`, `dono_poll_votes_by_channel`. The unlabelled global
+  gauges (`dono_donated_cents_total`, …) are unchanged. _Implementation note (#115):_
+  labels were not added to the existing gauges themselves, because a gauge that has both
+  an unlabelled total and labelled parts double-counts under PromQL `sum()`.
 - **M4.** Reference alert rules (deployed from `esamarathon/esa-observability`). No rule
   on last-success age alone: an idle Destination would alert.
 
@@ -260,8 +264,11 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
   `PATCH /api/admin/donations/:id/channel`. Assignment publishes the donation message and
   both totals messages. The donation keeps its original `completed_at`, so esa-layouts-v2
   adds it to the bar and plays the alert at assignment time.
-- **E7.** Totals count `status = COMPLETED` only, hidden donations included.
-  `/api/campaign` is fixed to the same rule (today it sums every status).
+- **E7.** Totals count `COMPLETED` and `REFUNDED` donations, hidden donations
+  included. ESA never refunds to the original payment method, only to the donor's
+  wallet, so a refunded donation is still money the charity holds. `CHARGEBACK` (the
+  bank took the money back) and `PENDING` (not paid) do not count. `/api/campaign`,
+  admin stats and the cents metrics share one rule (`server/lib/donationTotals.ts`).
 
 ### §T — Tiltify message format
 

@@ -118,9 +118,13 @@ async function main() {
   console.log(`   Moderator: ${DEV_MODERATOR_EMAIL} (role: MODERATOR)`);
   console.log(`   Admin:     ${DEV_ADMIN_EMAIL} (role: ADMIN)`);
   console.log('');
+  // Print the raw keys only to a person at a terminal: under systemd (the nightly
+  // staging reset) stdout goes to the journal, which must not hold secrets.
+  const showKey = (key: string) => (process.stdout.isTTY ? key : `${key.slice(0, 4)}…`);
   console.log('🔑 Raw keys (paste these directly into the /moderate and /admin login boxes):');
-  console.log(`   Moderator: ${MODERATOR_API_KEY}`);
-  console.log(`   Admin:     ${ADMIN_API_KEY}`);
+  console.log(`   Moderator: ${showKey(MODERATOR_API_KEY)}`);
+  console.log(`   Admin:     ${showKey(ADMIN_API_KEY)}`);
+  if (!process.stdout.isTTY) console.log('   (masked: not a terminal)');
   console.log('');
   console.log(
     '   (For a direct API call instead, prefix them: Authorization: Bearer key_mod_<key> / key_admin_<key>)',
