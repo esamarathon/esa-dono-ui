@@ -265,6 +265,7 @@ router.post('/rewards', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'REWARD',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         costCents: created.cost_cents,
@@ -314,6 +315,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -322,6 +324,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -333,6 +336,7 @@ router.put('/rewards/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'REWARD',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldCostCents: prior.cost_cents,
@@ -888,6 +892,7 @@ router.post('/polls', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'POLL',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         endsAt: created.ends_at,
@@ -934,6 +939,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -942,6 +948,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -957,6 +964,7 @@ router.put('/polls/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'POLL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldEndsAt,
@@ -1078,6 +1086,7 @@ router.post('/goals', async (req, res) => {
       buildIncentiveCreatedPayload({
         incentiveKind: 'GOAL',
         incentiveId: created.id,
+        channelId: created.channel_id,
         title: created.title,
         isActive: created.is_active,
         targetCents: created.target_cents,
@@ -1112,6 +1121,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveEnabledPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -1120,6 +1130,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveDisabledPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
         }),
       );
@@ -1131,6 +1142,7 @@ router.put('/goals/:id', async (req, res) => {
         buildIncentiveValueChangedPayload({
           incentiveKind: 'GOAL',
           incentiveId: updated.id,
+          channelId: updated.channel_id,
           title: updated.title,
           changedFields,
           oldTargetCents: prior.target_cents,
@@ -1159,6 +1171,7 @@ router.delete('/goals/:id', async (req, res) => {
           buildIncentiveDisabledPayload({
             incentiveKind: 'GOAL',
             incentiveId: prior.id,
+            channelId: prior.channel_id,
             title: prior.title,
           }),
         );

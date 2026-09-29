@@ -73,6 +73,8 @@ export type WebhookPayloadIncentiveCreated = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
+    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    channel_id: string | null;
     title: string;
     is_active: boolean;
   } & (
@@ -89,6 +91,8 @@ export type WebhookPayloadIncentiveEnabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
+    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    channel_id: string | null;
     title: string;
   };
 };
@@ -100,6 +104,8 @@ export type WebhookPayloadIncentiveDisabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
+    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    channel_id: string | null;
     title: string;
   };
 };
@@ -112,6 +118,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'REWARD';
         incentive_id: string;
+        channel_id: string | null;
         title: string;
         changed_fields: string[];
         old_cost_cents: number;
@@ -120,6 +127,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'POLL';
         incentive_id: string;
+        channel_id: string | null;
         title: string;
         changed_fields: string[];
         old_ends_at: string | null;
@@ -128,6 +136,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'GOAL';
         incentive_id: string;
+        channel_id: string | null;
         title: string;
         changed_fields: string[];
         old_target_cents: number;
@@ -343,6 +352,7 @@ export function buildDonationModeratedPayload(opts: {
 export function buildIncentiveCreatedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  channelId: string | null;
   title: string;
   isActive: boolean;
   costCents?: number;
@@ -352,6 +362,7 @@ export function buildIncentiveCreatedPayload(opts: {
   const base = {
     incentive_kind: opts.incentiveKind,
     incentive_id: opts.incentiveId,
+    channel_id: opts.channelId,
     title: opts.title,
     is_active: opts.isActive,
   };
@@ -382,6 +393,7 @@ export function buildIncentiveCreatedPayload(opts: {
 export function buildIncentiveEnabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveEnabled {
   return {
@@ -391,6 +403,7 @@ export function buildIncentiveEnabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      channel_id: opts.channelId,
       title: opts.title,
     },
   };
@@ -399,6 +412,7 @@ export function buildIncentiveEnabledPayload(opts: {
 export function buildIncentiveDisabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveDisabled {
   return {
@@ -408,6 +422,7 @@ export function buildIncentiveDisabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      channel_id: opts.channelId,
       title: opts.title,
     },
   };
@@ -416,6 +431,7 @@ export function buildIncentiveDisabledPayload(opts: {
 export function buildIncentiveValueChangedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  channelId: string | null;
   title: string;
   changedFields: string[];
   oldCostCents?: number;
@@ -433,6 +449,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'REWARD' as const,
         incentive_id: opts.incentiveId,
+        channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
         old_cost_cents: opts.oldCostCents ?? 0,
@@ -448,6 +465,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'POLL' as const,
         incentive_id: opts.incentiveId,
+        channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
         old_ends_at: opts.oldEndsAt?.toISOString() ?? null,
@@ -462,6 +480,7 @@ export function buildIncentiveValueChangedPayload(opts: {
     data: {
       incentive_kind: 'GOAL' as const,
       incentive_id: opts.incentiveId,
+      channel_id: opts.channelId,
       title: opts.title,
       changed_fields: opts.changedFields,
       old_target_cents: opts.oldTargetCents ?? 0,

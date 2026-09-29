@@ -170,10 +170,21 @@ describe('PII allowlist — donation.moderated payload', () => {
 });
 
 describe('PII allowlist — incentive payloads', () => {
+  it('carries the incentive channel_id (PRD-0002 §N2)', () => {
+    const payload = buildIncentiveEnabledPayload({
+      incentiveKind: 'POLL',
+      incentiveId: 'p-1',
+      channelId: 'ch-1',
+      title: 'Poll',
+    });
+    expect(payload.data.channel_id).toBe('ch-1');
+  });
+
   it('incentive.created (REWARD) has no forbidden keys', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      channelId: null,
       title: 'Test Reward',
       isActive: true,
       costCents: 500,
@@ -185,6 +196,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'POLL',
       incentiveId: 'p-1',
+      channelId: null,
       title: 'Test Poll',
       isActive: true,
       endsAt: null,
@@ -196,6 +208,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'GOAL',
       incentiveId: 'g-1',
+      channelId: null,
       title: 'Test Goal',
       isActive: true,
       targetCents: 10000,
@@ -207,6 +220,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveEnabledPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      channelId: null,
       title: 'Test',
     });
     expect(findForbiddenKeys(payload)).toHaveLength(0);
@@ -216,6 +230,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveDisabledPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      channelId: null,
       title: 'Test',
     });
     expect(findForbiddenKeys(payload)).toHaveLength(0);
@@ -225,6 +240,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveValueChangedPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      channelId: null,
       title: 'Test',
       changedFields: ['cost_cents'],
       oldCostCents: 500,

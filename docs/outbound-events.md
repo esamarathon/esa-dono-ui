@@ -18,6 +18,7 @@ Each Destination also picks a **payload format**. Design: [ADR-0009](adr/0009-ti
   - `donor_name` and `donor_comment` are the donor's public display data. They are null while the donation is hidden from the overlay.
   - `donation.hidden` / `donation.unhidden` are sent when a moderator hides or shows a donation.
   - Unassigned donations publish nothing until an admin assigns them.
+  - `incentive.*` messages carry `channel_id`: the Channel the incentive belongs to, or null when every Channel shares it.
 - **Tiltify-compatible** (`TILTIFY`, RabbitMQ only). Bare Tiltify-v5 objects for kollekt and esa-layouts-v2, with no envelope. The Destination's event types and routing key are ignored. The exchange defaults to `tiltify` and is declared `topic, durable, autoDelete`.
 
   | Routing key               | Body                                                                                                                                                                                                     | Sent when                                                                      |
