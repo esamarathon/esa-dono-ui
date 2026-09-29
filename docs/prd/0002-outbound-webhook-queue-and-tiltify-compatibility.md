@@ -351,6 +351,14 @@ team id), `campaign/{id}/rewards|targets|milestones|polls|matches`,
 shared-incentive handling are specified in their own issue. Until it ships, **kollekt
 cannot consume our messages**: an unknown campaign id makes it throw and drop the donation.
 
+**Decided in #117 (ADR-0010).**
+
+- **Mount path and responses:** mounted at `/api/tiltify`. Responses are bare (no `{ data }`), and an unknown id returns 404.
+- **Access:** public, with a per-IP rate limit (`RATE_LIMIT_TILTIFY`).
+- **Shared incentives** are listed under every Channel, and an Event lists none of its own. This needs a kollekt change (kollekt#36).
+- **Milestones and matches** are always `[]`.
+- **Totals:** `total_amount_raised` is the same number as the `fact.updated` message.
+
 ## Testing Decisions
 
 - Dispatcher tests replace the minute backoff assertion (1/2/4/8/60) with 5/15/60/180/180 s

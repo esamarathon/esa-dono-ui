@@ -1,4 +1,4 @@
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 
 /** An Error carrying an HTTP `status`, the convention routes already use (see services/pledge.ts). */
 export function httpError(status: number, message: string): Error & { status: number } {
@@ -18,4 +18,15 @@ export function sendError(res: Response, e: unknown, logPrefix = '[routes]'): vo
   }
   console.error(`${logPrefix} unexpected error:`, e);
   res.status(500).json({ error: 'Internal server error' });
+}
+
+/** Wrap an async handler: Express 4 does not catch a rejected promise. */
+export function handle(logPrefix: string, fn: (req: Request, res: Response) => Promise<unknown>) {
+  return async (req: Request, res: Response) => {
+    try {
+      await fn(req, res);
+    } catch (e) {
+      sendError(res, e, logPrefix);
+    }
+  };
 }

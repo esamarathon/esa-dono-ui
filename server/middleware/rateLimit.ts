@@ -40,4 +40,14 @@ const feedbackLimit = rateLimit({
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 
-export { spendLimit, authLimit, metricsLimit, feedbackLimit };
+// The Tiltify-compatible read API (/api/tiltify) is public like /donate. kollekt
+// polls each campaign every 5 s (~36 requests/min per campaign), so the default
+// is generous; keyed by IP.
+const tiltifyLimit = rateLimit({
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_TILTIFY) || 300,
+  keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ''),
+  handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
+});
+
+export { spendLimit, authLimit, metricsLimit, feedbackLimit, tiltifyLimit };
