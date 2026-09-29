@@ -28,6 +28,22 @@ export function tiltifyCurrency(): string {
   return (process.env.STRIPE_CURRENCY || 'usd').toUpperCase();
 }
 
+/**
+ * The donor's answer to a reward's question: the raw `claim_data` string (§T4), or
+ * null when the claim has none. A claim without fields is stored as `"{}"`, which a
+ * consumer would show as a literal answer.
+ */
+function customQuestion(claimData: string | null): string | null {
+  if (!claimData) return null;
+  try {
+    const parsed: unknown = JSON.parse(claimData);
+    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length === 0) return null;
+  } catch {
+    // Not JSON: pass the text through unchanged.
+  }
+  return claimData;
+}
+
 function money(cents: number) {
   return { currency: tiltifyCurrency(), value: (cents / 100).toFixed(2) };
 }
@@ -74,7 +90,7 @@ export async function buildTiltifyDonation(
     id: c.id,
     reward_id: c.reward_id,
     quantity: 1,
-    custom_question: c.claim_data ?? null,
+    custom_question: customQuestion(c.claim_data),
   }));
   const createdAt = donation.created_at.toISOString();
 

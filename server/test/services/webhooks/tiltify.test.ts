@@ -266,6 +266,8 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     for (const c of d.reward_claims) {
       expect(c.id).toMatch(UUID);
       expect(c).toMatchObject({ reward_id: reward.id, quantity: 1 });
+      // The DIGITAL reward has no fields: stored as "{}", sent as null.
+      expect(c.custom_question).toBeNull();
     }
     expect(d.poll_id).toBe(poll.id);
     expect(d.poll_option_id).toBe(nth(poll.options, 1).id);
@@ -437,6 +439,39 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       .send({ status: 'CHARGEBACK' })
       .expect(400);
     expect(await messages(tiltifyDest, again)).toHaveLength(0);
+  });
+
+  it('custom_question is the raw claim_data string, or null when the claim has none (§T4)', async () => {
+    const { buildTiltifyDonation } = await import('../../../services/webhooks/tiltifyPayload.js');
+    const donationId = await donate({
+      email: `cq-${rand()}@example.com`,
+      amount_cents: 500,
+      channel_id: channelId,
+    });
+    const donation = await prisma.donation.findUniqueOrThrow({ where: { id: donationId } });
+    const reward = await prisma.reward.create({
+      data: { title: 'Shoutout text', type: 'DIGITAL', cost_cents: 100 },
+    });
+    ids.rewards.push(reward.id);
+    const answer = JSON.stringify({ message: 'Hi chat' });
+    for (const claim_data of [answer, '{}', null]) {
+      await prisma.rewardClaim.create({
+        data: {
+          reward_id: reward.id,
+          donor_id: donation.donor_id,
+          donation_id: donationId,
+          claim_data,
+        },
+      });
+    }
+    const message = await buildTiltifyDonation(prisma, donationId);
+    const questions = (message!.payload.reward_claims as Array<{ custom_question: unknown }>).map(
+      (c) => c.custom_question,
+    );
+    // Rows created in the same millisecond have no fixed order: compare as a set.
+    expect(questions).toHaveLength(3);
+    expect(questions.filter((q) => q === null)).toHaveLength(2);
+    expect(questions).toContain(answer);
   });
 
   it('lists only what the donation paid for: a pledge item that failed is left out (§T4)', async () => {
