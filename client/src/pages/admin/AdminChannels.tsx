@@ -5,26 +5,36 @@ import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
 import ShareLinkButton from '../../components/ShareLinkButton';
-import { apiErrorMessage, type Channel } from '../../types';
+import { apiErrorMessage, type Channel, type Event } from '../../types';
 
-interface EventForm {
+interface ChannelForm {
   id?: string;
   name: string;
+  slug: string;
+  event_id: string;
   is_active: boolean;
 }
 
-const EMPTY: EventForm = { name: '', is_active: true };
+const EMPTY: ChannelForm = { name: '', slug: '', event_id: '', is_active: true };
+
+const SLUG_HELP =
+  'Changing a slug breaks overlay bindings and published links, so it is blocked while active.';
 
 type ChannelModal = 'create' | Channel | null;
 
 export default function AdminChannels() {
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ChannelModal>(null);
-  const [form, setForm] = useState<EventForm>(EMPTY);
+  const [form, setForm] = useState<ChannelForm>(EMPTY);
   const [error, setError] = useState('');
 
-  const reload = () => adminClient.get('/channels').then((r) => setChannels(r.data));
+  const reload = () =>
+    Promise.all([
+      adminClient.get('/channels').then((r) => setChannels(r.data)),
+      adminClient.get('/events').then((r) => setEvents(r.data)),
+    ]).then(() => undefined);
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
@@ -35,16 +45,22 @@ export default function AdminChannels() {
     setError('');
   };
   const openEdit = (s: Channel) => {
-    setForm({ ...s });
+    setForm({ id: s.id, name: s.name, slug: s.slug, event_id: s.event_id, is_active: s.is_active });
     setModal(s);
     setError('');
   };
 
   const handleSave = async () => {
     setError('');
+    const payload = {
+      name: form.name,
+      ...(form.slug ? { slug: form.slug } : {}),
+      ...(form.event_id ? { event_id: form.event_id } : {}),
+      is_active: form.is_active,
+    };
     try {
-      if (modal === 'create') await adminClient.post('/channels', form);
-      else if (modal) await adminClient.put(`/channels/${modal.id}`, form);
+      if (modal === 'create') await adminClient.post('/channels', payload);
+      else if (modal) await adminClient.put(`/channels/${modal.id}`, payload);
       await reload();
       setModal(null);
     } catch (e) {
@@ -58,6 +74,8 @@ export default function AdminChannels() {
     await adminClient.delete(`/channels/${id}`);
     await reload();
   };
+
+  const eventName = (id: string) => events.find((e) => e.id === id)?.name ?? '—';
 
   if (loading) return <LoadingSpinner />;
 
@@ -82,6 +100,9 @@ export default function AdminChannels() {
             <div className="flex justify-between items-center">
               <div>
                 <h2 className="font-data font-bold text-lg text-off-white">{s.name}</h2>
+                <p className="font-mono text-xs text-off-white/55 mt-1">
+                  slug: {s.slug} &middot; event: {eventName(s.event_id)}
+                </p>
                 <div className="mt-2">
                   <StatusBadge active={s.is_active} />
                 </div>
@@ -124,6 +145,34 @@ export default function AdminChannels() {
               value={form.name}
               onChange={(e) => setForm((d) => ({ ...d, name: e.target.value }))}
             />
+          </div>
+          <div className="mb-3">
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">slug</label>
+            <input
+              className="w-full px-3 py-2 text-sm"
+              placeholder="derived from the name"
+              disabled={modal !== 'create' && modal.is_active}
+              value={form.slug}
+              onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
+            />
+            {modal !== 'create' && modal.is_active && (
+              <p className="font-body text-xs text-off-white/55 mt-1">{SLUG_HELP}</p>
+            )}
+          </div>
+          <div className="mb-3">
+            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
+            <select
+              className="w-full px-3 py-2 text-sm"
+              value={form.event_id}
+              onChange={(e) => setForm((d) => ({ ...d, event_id: e.target.value }))}
+            >
+              <option value="">— none —</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="mb-3 flex items-center gap-2">
             <input

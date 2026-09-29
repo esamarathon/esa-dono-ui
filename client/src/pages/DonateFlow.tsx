@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
+import { getPublicEvent } from '../api/events';
+import type { PublicEvent } from '../types';
 import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
@@ -42,10 +44,56 @@ export default function DonateFlow() {
     prefillFromLink,
   } = useCart();
   const location = useLocation();
+  const { eventSlug, channelSlug } = useParams<{
+    eventSlug?: string;
+    channelSlug?: string;
+  }>();
 
   const [tab, setTab] = useState<Tab>(() => tabFromPathname(location.pathname));
   const [direction, setDirection] = useState<'next' | 'prev'>('next');
   const [prefillWarning, setPrefillWarning] = useState<string | null>(null);
+  // Slug-link state (#115): the Event fetched from /donate/<event>[/<channel>].
+  // `linkError` is the not-found message for an unknown event/channel slug.
+  const [slugEvent, setSlugEvent] = useState<PublicEvent | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  // Fetch the event named by the URL slug. Runs once per distinct slug and
+  // respects the cart's own loading state, mirroring the ?channel= deep link.
+  const consumedEventSlug = useRef<string | null>(null);
+  useEffect(() => {
+    if (!eventSlug || consumedEventSlug.current === eventSlug) return;
+    consumedEventSlug.current = eventSlug;
+    // A new slug (the route element is reused across /donate/<a> → /donate/<b>).
+    setSlugEvent(null);
+    setLinkError(null);
+    getPublicEvent(eventSlug)
+      .then((event) => setSlugEvent(event))
+      .catch(() => setLinkError("That event isn't open for donations."));
+  }, [eventSlug]);
+
+  // Select a channel named by the URL slug, an event's only channel, or its
+  // primary channel — once the event's channels are known.
+  const consumedSlugSelection = useRef<string | null>(null);
+  useEffect(() => {
+    const linkKey = `${slugEvent?.slug}/${channelSlug ?? ''}`;
+    if (loading || !slugEvent || consumedSlugSelection.current === linkKey) return;
+    consumedSlugSelection.current = linkKey;
+    const { channels: eventChannels } = slugEvent;
+    if (channelSlug) {
+      const match = eventChannels.find((c) => c.slug === channelSlug);
+      if (!match) {
+        setLinkError("That channel isn't open for donations.");
+        return;
+      }
+      selectChannel(match.id);
+      return;
+    }
+    const target =
+      eventChannels.length === 1
+        ? eventChannels[0]
+        : eventChannels.find((c) => c.id === slugEvent.primary_channel_id);
+    if (target) selectChannel(target.id);
+  }, [loading, slugEvent, channelSlug, selectChannel]);
 
   // Refetch the channel list once when the donate flow mounts (the channel
   // picker at the top of this page), rather than relying solely on the
@@ -135,6 +183,24 @@ export default function DonateFlow() {
   };
 
   if (loading) return <LoadingSpinner />;
+
+  if (linkError) {
+    return (
+      <div className="max-w-3xl mx-auto p-8">
+        <div className="p-4 rounded-sm" style={{ background: 'rgba(224,90,90,.16)' }}>
+          <p className="font-data" style={{ color: 'var(--red)' }}>
+            {linkError}
+          </p>
+          <Link
+            to="/donate"
+            className="font-data text-sm underline mt-2 inline-block text-d-yellow hover:text-off-white"
+          >
+            back to donations &rarr;
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const slideClass = direction === 'next' ? 'animate-slide-in-right' : 'animate-slide-in-left';
   const tabIndex = TABS.indexOf(tab);

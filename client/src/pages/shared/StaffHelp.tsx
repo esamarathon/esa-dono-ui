@@ -133,28 +133,66 @@ export default function StaffHelp({ role }: { role: Role }) {
         </p>
       </Section>
 
-      {/* ── CHANNELS ───────────────────────────────────────────── */}
-      <Section title="channels">
+      {/* ── EVENTS & CHANNELS ──────────────────────────────────── */}
+      <Section title="events & channels">
         <p>
-          A <Term>channel</Term> represents a donation event or stream target (e.g. a runner's
-          stream). Every donation must be routed to exactly one channel. Incentives can be{' '}
-          <Term>shared</Term> (available for any channel) or scoped to a specific channel.
+          An <Term>event</Term> is a charity event (a marathon, or a one-day stream event) that
+          groups channels (streams). A <Term>channel</Term> represents a single donation target
+          inside an event. Every donation is routed to exactly one channel, and so to exactly one
+          event. Incentives can be <Term>shared</Term> (available in any event/channel) or scoped to
+          a specific event or channel.
         </p>
-        <p>Key operations:</p>
+        <p>Key operations on an event:</p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <Term>Create</Term> — give the channel a name and set it active. Active channels appear
-            in the public donation picker.
+            <Term>Create</Term> — give the event a name. The <Term>slug</Term> is derived from the
+            name unless you supply one.
           </li>
           <li>
-            <Term>Edit</Term> — rename or toggle <Code>is_active</Code>. Deactivating a channel
-            hides it from new donations but preserves existing data.
+            <Term>Primary channel</Term> — donations that name no channel are routed here. It must
+            be an active channel of this event before the event can be activated.
+          </li>
+          <li>
+            <Term>Activate / deactivate</Term> — only active events are open for donations. The slug
+            of an active event is blocked from changing: changing a slug breaks overlay bindings and
+            published links, so it is blocked while active.
           </li>
           <li>
             <Term>Delete</Term> — soft-deletes (sets <Code>is_active: false</Code>). Existing
             donations are not affected.
           </li>
         </ul>
+        <p>Key operations on a channel:</p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <Term>Create</Term> — give the channel a name, choose its event, and set it active. The
+            slug is derived from the name unless you supply one.
+          </li>
+          <li>
+            <Term>Edit</Term> — rename or toggle <Code>is_active</Code>. A channel's slug is blocked
+            from changing while the channel is active, for the same reason as an event's. Active
+            channels appear in the public donation picker.
+          </li>
+          <li>
+            <Term>Delete</Term> — soft-deletes (sets <Code>is_active: false</Code>). Existing
+            donations are not affected.
+          </li>
+        </ul>
+        <p>
+          Deep links: an event is shareable at <Code>/donate/&lt;event-slug&gt;</Code>, and a single
+          channel at <Code>/donate/&lt;event-slug&gt;/&lt;channel-slug&gt;</Code>. A link to an
+          event with exactly one channel selects that channel; otherwise the event's primary channel
+          is selected.
+        </p>
+        {isAdmin && (
+          <p>
+            <Term>Unassigned donations</Term> — a donation that arrived while no single event was
+            active is recorded with no channel and no event. The donations list has an{' '}
+            <Term>unassigned only</Term> filter and an <Code>assign…</Code> control on those rows;
+            assigning a channel publishes the donation to that channel's event. Unassigned donations
+            do not reach overlays until they are assigned.
+          </p>
+        )}
       </Section>
 
       {/* ── REWARDS ────────────────────────────────────────────── */}

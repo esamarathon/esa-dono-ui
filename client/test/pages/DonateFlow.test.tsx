@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import DonateFlow from '../../src/pages/DonateFlow';
 import { CartProvider, useCart } from '../../src/context/CartContext';
 
@@ -16,11 +16,15 @@ vi.mock('../../src/api/goals', () => ({
 vi.mock('../../src/api/channels', () => ({
   getChannels: vi.fn(),
 }));
+vi.mock('../../src/api/events', () => ({
+  getPublicEvent: vi.fn(),
+}));
 
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
 import { getChannels } from '../../src/api/channels';
+import { getPublicEvent } from '../../src/api/events';
 
 // Exposes the drawer's open/closed state as text so tests can assert
 // whether clicking "review & checkout" actually opened it, without needing
@@ -35,7 +39,14 @@ function renderAt(path: string) {
     <MemoryRouter initialEntries={[path]}>
       <CartProvider>
         <DrawerOpenIndicator />
-        <DonateFlow />
+        <Routes>
+          <Route path="/donate/:eventSlug" element={<DonateFlow />} />
+          <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
+          <Route path="/donate" element={<DonateFlow />} />
+          <Route path="/rewards" element={<DonateFlow />} />
+          <Route path="/polls" element={<DonateFlow />} />
+          <Route path="/goals" element={<DonateFlow />} />
+        </Routes>
       </CartProvider>
     </MemoryRouter>,
   );
@@ -318,5 +329,105 @@ describe('DonateFlow (tabbed browse page)', () => {
     screen.getByText(/next/i).click();
     await screen.findByText(/no active polls/i);
     expect(await screen.findByTestId('visited-check-polls')).toBeDefined();
+  });
+
+  describe('slug deep links (#115)', () => {
+    const eventChannel = {
+      id: 'c1',
+      name: 'Main',
+      slug: 'main',
+      event_id: 'e1',
+      is_active: true,
+    };
+
+    /** The channel the cart persisted: proves WHICH channel the link selected. */
+    const storedChannelId = () =>
+      JSON.parse(sessionStorage.getItem('donation_cart_v1') ?? '{}').channelId as string | null;
+
+    it('selects the channel named by /donate/<event>/<channel>', async () => {
+      sessionStorage.setItem(
+        'donation_cart_v1',
+        JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
+      );
+      vi.mocked(getPublicEvent).mockResolvedValue({
+        id: 'e1',
+        name: 'Marathon',
+        slug: 'marathon',
+        primary_channel_id: 'c1',
+        channels: [eventChannel],
+      });
+      vi.mocked(getRewards).mockResolvedValue([]);
+
+      renderAt('/donate/marathon/main');
+
+      expect(getPublicEvent).toHaveBeenCalledWith('marathon');
+      // Selecting the channel reveals the tab bar / incentive lists.
+      expect(await screen.findByText(/no rewards available/i)).toBeInTheDocument();
+      await waitFor(() => expect(storedChannelId()).toBe('c1'));
+    });
+
+    it('falls back to the event primary channel for /donate/<event>', async () => {
+      sessionStorage.setItem(
+        'donation_cart_v1',
+        JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
+      );
+      vi.mocked(getPublicEvent).mockResolvedValue({
+        id: 'e1',
+        name: 'Marathon',
+        slug: 'marathon',
+        primary_channel_id: 'c2',
+        channels: [eventChannel, { ...eventChannel, id: 'c2', name: 'Side', slug: 'side' }],
+      });
+      vi.mocked(getRewards).mockResolvedValue([]);
+
+      renderAt('/donate/marathon');
+
+      expect(await screen.findByText(/no rewards available/i)).toBeInTheDocument();
+      // Two channels, so the primary (c2), not the first (c1), is selected.
+      await waitFor(() => expect(storedChannelId()).toBe('c2'));
+    });
+
+    it('selects the only channel of an event for /donate/<event>', async () => {
+      sessionStorage.setItem(
+        'donation_cart_v1',
+        JSON.stringify({ cart: [], topUp: '', comment: '', channelId: null }),
+      );
+      vi.mocked(getPublicEvent).mockResolvedValue({
+        id: 'e1',
+        name: 'Marathon',
+        slug: 'marathon',
+        primary_channel_id: null,
+        channels: [{ ...eventChannel, id: 'c3', slug: 'solo' }],
+      });
+      vi.mocked(getRewards).mockResolvedValue([]);
+
+      renderAt('/donate/marathon');
+
+      await waitFor(() => expect(storedChannelId()).toBe('c3'));
+    });
+
+    it('shows a not-found message for an unknown event slug', async () => {
+      vi.mocked(getPublicEvent).mockRejectedValue(new Error('404'));
+
+      renderAt('/donate/bogus');
+
+      expect(await screen.findByText(/That event isn't open for donations\./)).toBeInTheDocument();
+    });
+
+    it('shows a not-found message for an unknown channel slug', async () => {
+      vi.mocked(getPublicEvent).mockResolvedValue({
+        id: 'e1',
+        name: 'Marathon',
+        slug: 'marathon',
+        primary_channel_id: 'c1',
+        channels: [eventChannel],
+      });
+
+      renderAt('/donate/marathon/bogus');
+
+      expect(
+        await screen.findByText(/That channel isn't open for donations\./),
+      ).toBeInTheDocument();
+    });
   });
 });
