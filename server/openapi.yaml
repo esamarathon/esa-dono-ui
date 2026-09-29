@@ -627,7 +627,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/rewards:
     get:
@@ -677,7 +677,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/targets:
     get:
@@ -727,7 +727,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/polls:
     get:
@@ -777,7 +777,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/polls/{poll_id}:
     get:
@@ -805,7 +805,7 @@ paths:
         '404':
           description: Unknown campaign id, or the poll is not listed under it
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/milestones:
     get:
@@ -852,7 +852,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   /tiltify/campaign/{id}/matches:
     get:
@@ -879,7 +879,7 @@ paths:
         '404':
           description: Unknown Channel or Event id
         '429':
-          description: Rate limit (RATE_LIMIT_TILTIFY per minute per IP)
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   # ─── Pledge ───
   /pledge:

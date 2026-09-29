@@ -23,7 +23,8 @@ import { startWebhookDispatcher } from './services/webhooks/dispatcher.js';
 import prisma from './lib/prisma.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { metricsAuth } from './middleware/metricsAuth.js';
-import { metricsLimit } from './middleware/rateLimit.js';
+import { apiLimit, metricsLimit } from './middleware/rateLimit.js';
+import { trustProxySetting } from './lib/trustProxy.js';
 import { register } from './lib/metrics.js';
 import { startMetricsRefresh } from './services/metrics.js';
 import { startAuctionScheduler } from './services/auctionScheduler.js';
@@ -33,9 +34,9 @@ import { tracingMiddleware } from './lib/tracing.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Behind the nginx frontend proxy in production: trust the first hop so
-// req.ip (rate limiting) and secure-cookie detection reflect the real client.
-app.set('trust proxy', 1);
+// Behind reverse proxies (the nginx frontend, maybe more): trust TRUST_PROXY hops
+// so req.ip (rate limiting) and secure-cookie detection reflect the real client.
+app.set('trust proxy', trustProxySetting(process.env.TRUST_PROXY));
 
 app.use(cors());
 // Trace every request (including the raw-body webhook) so donation processing
@@ -74,6 +75,10 @@ app.get('/api/metrics', metricsLimit, metricsAuth, async (_req: Request, res: Re
   res.setHeader('Content-Type', register.contentType);
   res.send(await register.metrics());
 });
+
+// Global per-IP limit for everything below (#140). The Stripe webhook, uploads,
+// health and metrics are mounted above and are not counted.
+app.use('/api', apiLimit);
 
 app.get('/api/openapi.yaml', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/x-yaml');

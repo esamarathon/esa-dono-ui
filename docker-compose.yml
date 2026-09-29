@@ -32,7 +32,13 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
-      # Rate limits (req/min): spend per donor, auth and /api/metrics per IP.
+      # Proxy hops in front of Express (#140): 1 = the frontend nginx only; 2 when
+      # another reverse proxy (Caddy, Traefik, a load balancer) sits in front of it.
+      # Wrong here, and every client shares one rate-limit bucket.
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      # Rate limits (req/min): whole API per IP (backstop), spend per donor,
+      # auth and /api/metrics per IP.
+      - RATE_LIMIT_API=${RATE_LIMIT_API:-600}
       - RATE_LIMIT_SPEND=${RATE_LIMIT_SPEND:-20}
       - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-5}
       - RATE_LIMIT_METRICS=${RATE_LIMIT_METRICS:-30}
@@ -53,8 +59,6 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
-      # Tiltify-compatible read API (/api/tiltify, ADR-0010), req/min per IP.
-      - RATE_LIMIT_TILTIFY=${RATE_LIMIT_TILTIFY:-300}
       # Feedback widget (server/routes/feedback.ts). Leave empty to disable
       # (503); the `feedback` feature flag must also be enabled.
       - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}

@@ -40,7 +40,7 @@ Facts read from the consumers (kollekt@524f276, esa-layouts-v2@1c8ea49, ESATilti
    - This choice needs a kollekt change (kollekt#36): look up existing rows by id across all campaigns. Without it, the second Channel's sync fails on a duplicate key.
 4. **Milestones and matches** are always `[]` for a known id. We have neither. Deriving milestones from FundGoals would show each goal twice.
 5. **Totals.** `total_amount_raised` comes from the same functions as the `fact.updated` message (`channelTotalCents` / `eventTotalCents`: COMPLETED + REFUNDED, §E7; an Event is the sum of its assigned donations). layouts re-reads this route when a pushed total goes down, and must get the same number.
-6. **Auth.** The routes are public and read-only, like `/donate`, and the bridge had no auth either. They are rate-limited per IP by `RATE_LIMIT_TILTIFY` (default 300/min; kollekt makes about 36 requests/min per campaign). No donor data is exposed.
+6. **Auth.** The routes are public and read-only, like `/donate`, and the bridge had no auth either. They get no route-specific limit: the global per-IP API limit (`RATE_LIMIT_API`, default 600/min, #140) applies, sized for kollekt's polling (about 36 requests/min per campaign). No donor data is exposed.
 
 ## Consequences
 
