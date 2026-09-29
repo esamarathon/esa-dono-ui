@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
+import { sendError } from '../lib/httpError.js';
 
 const router = Router();
 
@@ -21,13 +22,17 @@ const publicEvent = {
  * Public list of active Events with their active Channels (PRD-0002 §E1).
  */
 router.get('/', async (_req: Request, res: Response) => {
-  res.json(
-    await prisma.event.findMany({
-      where: { is_active: true },
-      orderBy: { created_at: 'asc' },
-      select: publicEvent,
-    }),
-  );
+  try {
+    res.json(
+      await prisma.event.findMany({
+        where: { is_active: true },
+        orderBy: { created_at: 'asc' },
+        select: publicEvent,
+      }),
+    );
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
 });
 
 /**
@@ -35,12 +40,16 @@ router.get('/', async (_req: Request, res: Response) => {
  * One active Event by slug, for /donate/<event-slug>[/<channel-slug>] (§E3).
  */
 router.get('/:slug', async (req: Request, res: Response) => {
-  const event = await prisma.event.findFirst({
-    where: { slug: req.params.slug, is_active: true },
-    select: publicEvent,
-  });
-  if (!event) return res.status(404).json({ error: 'Event not found' });
-  res.json(event);
+  try {
+    const event = await prisma.event.findFirst({
+      where: { slug: req.params.slug, is_active: true },
+      select: publicEvent,
+    });
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    res.json(event);
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
 });
 
 export default router;

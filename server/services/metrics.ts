@@ -22,7 +22,7 @@ const donorsTotal = new client.Gauge({
 
 const donatedCentsTotal = new client.Gauge({
   name: 'dono_donated_cents_total',
-  help: 'Total amount donated across all donations, in cents',
+  help: 'Total amount donated (COMPLETED donations: refunds and chargebacks excluded), in cents',
   registers: [register],
 });
 
@@ -92,7 +92,7 @@ const eventsActive = new client.Gauge({
 // named "Event"); that count now has its own, correctly named gauge.
 const channelsActive = new client.Gauge({
   name: 'dono_channels_active',
-  help: 'Number of active Channels (streams)',
+  help: 'Number of active Channels',
   registers: [register],
 });
 
@@ -221,6 +221,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       webhookDeliveryGroups,
       unassignedDonationCount,
       donationByChannel,
+      completedCentsByChannel,
       claimGroups,
       rewards,
       voteGroups,
@@ -229,7 +230,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       channelRows,
     ] = await Promise.all([
       prisma.donor.count(),
-      prisma.donation.aggregate({ _sum: { amount_cents: true } }),
+      prisma.donation.aggregate({ where: { status: 'COMPLETED' }, _sum: { amount_cents: true } }),
       prisma.donation.count(),
       prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
       prisma.event.count({ where: { is_active: true } }),
@@ -258,10 +259,12 @@ export async function refreshBusinessMetrics(): Promise<void> {
         _max: { updated_at: true },
       }),
       prisma.donation.count({ where: { channel_id: null, event_id: null } }),
+      prisma.donation.groupBy({ by: ['event_id', 'channel_id'], _count: { _all: true } }),
+      // Money kept (PRD-0002 §E7): cents count COMPLETED donations only.
       prisma.donation.groupBy({
         by: ['event_id', 'channel_id'],
+        where: { status: 'COMPLETED' },
         _sum: { amount_cents: true },
-        _count: { _all: true },
       }),
       prisma.rewardClaim.groupBy({ by: ['reward_id'], _count: { _all: true } }),
       prisma.reward.findMany({ select: { id: true, channel_id: true } }),
@@ -296,62 +299,58 @@ export async function refreshBusinessMetrics(): Promise<void> {
       channel: (channelId && channelSlug.get(channelId)) || '',
     });
 
-    donatedCentsByChannel.reset();
-    donationsByChannel.reset();
-    // Several rows can resolve to the same label pair (an unknown Event id and a
-    // null one both give ''), so accumulate per pair instead of letting the last
-    // .set() win.
-    const donationTotals = new Map<
-      string,
-      { event: string; channel: string; cents: number; count: number }
-    >();
-    for (const g of donationByChannel) {
-      const labels = labelsFor(g.event_id, g.channel_id);
-      const key = `${labels.event}\u0000${labels.channel}`;
-      const entry = donationTotals.get(key) ?? { ...labels, cents: 0, count: 0 };
-      entry.cents += g._sum.amount_cents ?? 0;
-      entry.count += g._count._all;
-      donationTotals.set(key, entry);
-    }
-    for (const { event, channel, cents, count } of donationTotals.values()) {
-      donatedCentsByChannel.set({ event, channel }, cents);
-      donationsByChannel.set({ event, channel }, count);
-    }
-
-    const labelKey = (labels: { event: string; channel: string }) =>
-      `${labels.event}\u0000${labels.channel}`;
-
-    // Claims and votes are grouped by their incentive's Channel, then rolled up
-    // per slug pair — several incentives may share one Channel.
+    // Several rows can resolve to the same label pair (e.g. an unknown and a null
+    // Event both give ''), so values are summed per pair, never overwritten.
+    const setBySlugPair = <T>(
+      gauge: client.Gauge<'event' | 'channel'>,
+      rows: T[],
+      labelsOf: (row: T) => { event: string; channel: string },
+      valueOf: (row: T) => number,
+    ) => {
+      const totals = new Map<
+        string,
+        { labels: { event: string; channel: string }; value: number }
+      >();
+      for (const row of rows) {
+        const labels = labelsOf(row);
+        const key = `${labels.event}\u0000${labels.channel}`;
+        const entry = totals.get(key) ?? { labels, value: 0 };
+        entry.value += valueOf(row);
+        totals.set(key, entry);
+      }
+      gauge.reset();
+      for (const { labels, value } of totals.values()) gauge.set(labels, value);
+    };
+    // Claims and votes take their incentive's Channel (null = shared).
+    const incentiveLabels = (channelId: string | null) =>
+      labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
     const rewardChannel = new Map(rewards.map((r) => [r.id, r.channel_id]));
-    const claimTotals = new Map<string, { event: string; channel: string; count: number }>();
-    for (const g of claimGroups) {
-      const channelId = rewardChannel.get(g.reward_id) ?? null;
-      const labels = labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
-      const key = labelKey(labels);
-      const entry = claimTotals.get(key) ?? { ...labels, count: 0 };
-      entry.count += g._count._all;
-      claimTotals.set(key, entry);
-    }
-    rewardClaimsByChannel.reset();
-    for (const { event, channel, count } of claimTotals.values()) {
-      rewardClaimsByChannel.set({ event, channel }, count);
-    }
-
     const pollChannel = new Map(polls.map((p) => [p.id, p.channel_id]));
-    const voteTotals = new Map<string, { event: string; channel: string; count: number }>();
-    for (const g of voteGroups) {
-      const channelId = pollChannel.get(g.poll_id) ?? null;
-      const labels = labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
-      const key = labelKey(labels);
-      const entry = voteTotals.get(key) ?? { ...labels, count: 0 };
-      entry.count += g._count._all;
-      voteTotals.set(key, entry);
-    }
-    pollVotesByChannel.reset();
-    for (const { event, channel, count } of voteTotals.values()) {
-      pollVotesByChannel.set({ event, channel }, count);
-    }
+
+    setBySlugPair(
+      donatedCentsByChannel,
+      completedCentsByChannel,
+      (g) => labelsFor(g.event_id, g.channel_id),
+      (g) => g._sum.amount_cents ?? 0,
+    );
+    setBySlugPair(
+      donationsByChannel,
+      donationByChannel,
+      (g) => labelsFor(g.event_id, g.channel_id),
+      (g) => g._count._all,
+    );
+    setBySlugPair(
+      rewardClaimsByChannel,
+      claimGroups,
+      (g) => incentiveLabels(rewardChannel.get(g.reward_id) ?? null),
+      (g) => g._count._all,
+    );
+    setBySlugPair(
+      pollVotesByChannel,
+      voteGroups,
+      (g) => incentiveLabels(pollChannel.get(g.poll_id) ?? null),
+      (g) => g._count._all,
+    );
     for (const { type, count } of adjustmentCounts) {
       balanceAdjustmentsTotal.set({ type }, count);
     }

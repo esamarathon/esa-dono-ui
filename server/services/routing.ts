@@ -39,6 +39,9 @@ export async function resolveDonationRoute(
       select: { id: true, primary_channel_id: true },
     });
     if (!event) throw httpError(400, 'event_id does not match an event');
+    // No primary Channel: nothing to route to, so hold it for an admin to assign
+    // (a donation needs a Channel to be published).
+    if (!event.primary_channel_id) return { channelId: null, eventId: null };
     return { channelId: event.primary_channel_id, eventId: event.id };
   }
   const active = await db.event.findMany({

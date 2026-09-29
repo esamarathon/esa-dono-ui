@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import DonateFlow from '../../src/pages/DonateFlow';
 import { CartProvider, useCart } from '../../src/context/CartContext';
@@ -412,6 +412,24 @@ describe('DonateFlow (tabbed browse page)', () => {
       renderAt('/donate/bogus');
 
       expect(await screen.findByText(/That event isn't open for donations\./)).toBeInTheDocument();
+    });
+
+    it('clears the not-found state when following "back to donations"', async () => {
+      vi.mocked(getPublicEvent).mockRejectedValue(new Error('404'));
+      vi.mocked(getChannels).mockResolvedValue([
+        { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true },
+      ]);
+
+      renderAt('/donate/bogus');
+      await screen.findByText(/That event isn't open for donations\./);
+      fireEvent.click(screen.getByRole('link', { name: /back to donations/i }));
+
+      // Same DonateFlow instance (routes share the element): the message must go
+      // and the channel picker must come back.
+      await waitFor(() =>
+        expect(screen.queryByText(/That event isn't open for donations\./)).not.toBeInTheDocument(),
+      );
+      expect(await screen.findByRole('button', { name: /main/i })).toBeInTheDocument();
     });
 
     it('shows a not-found message for an unknown channel slug', async () => {

@@ -1,9 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
-import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
-import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
-import { sendError } from '../lib/httpError.js';
+import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
 import {
@@ -49,65 +47,8 @@ router.get('/stats', async (req, res) => {
   });
 });
 
-// Channels CRUD
-router.get('/channels', async (req, res) => {
-  res.json(await prisma.channel.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/channels', async (req, res) => {
-  try {
-    res.json(await createChannel(req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
-
-router.put('/channels/:id', async (req, res) => {
-  try {
-    res.json(await updateChannel(req.params.id, req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
-
-// Events (PRD-0002 §E1). Delete = deactivate: channels and donations reference them.
-router.get('/events', async (_req, res) => {
-  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/events', async (req, res) => {
-  try {
-    res.json(await createEvent(req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[events]');
-  }
-});
-
-router.put('/events/:id', async (req, res) => {
-  try {
-    res.json(await updateEvent(req.params.id, req.body ?? {}));
-  } catch (e) {
-    sendError(res, e, '[events]');
-  }
-});
-
-router.delete('/events/:id', async (req, res) => {
-  try {
-    res.json({ success: true, event: await deactivateEvent(req.params.id) });
-  } catch (e) {
-    sendError(res, e, '[events]');
-  }
-});
-
-// Soft-delete: channels may be referenced by incentives/donations/pledges, so
-// deactivate instead of hard-deleting to preserve those references.
-router.delete('/channels/:id', async (req, res) => {
-  try {
-    res.json({ success: true, channel: await deactivateChannel(req.params.id) });
-  } catch (e) {
-    sendError(res, e, '[channels]');
-  }
-});
+// Channels and Events (routes/identityRoutes.ts)
+mountIdentityRoutes(router);
 
 // Polls CRUD
 router.get('/polls', async (req, res) => {
@@ -467,7 +408,7 @@ router.get('/claims', async (req, res) => {
 router.get('/donations', async (req, res) => {
   const donations = await prisma.donation.findMany({
     include: {
-      channel: { select: { id: true, name: true } },
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
       pledge: { include: { items: true } },
     },
     orderBy: { created_at: 'desc' },

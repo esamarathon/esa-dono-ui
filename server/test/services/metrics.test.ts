@@ -80,14 +80,23 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('sets per-Event/Channel breakdown gauges with slug labels', async () => {
-    vi.mocked(prisma.donation.groupBy).mockResolvedValue([
-      // Assigned to a known channel+event.
-      { event_id: 'ev1', channel_id: 'ch1', _sum: { amount_cents: 5000 }, _count: { _all: 3 } },
-      // Explicit event but no channel, and event unknown to the lookup.
-      { event_id: 'gone', channel_id: null, _sum: { amount_cents: 700 }, _count: { _all: 1 } },
-      // Unassigned: both null.
-      { event_id: null, channel_id: null, _sum: { amount_cents: 100 }, _count: { _all: 1 } },
-    ] as any);
+    // Two groupBy calls: counts over every donation, cents over COMPLETED only
+    // (PRD-0002 §E7). ch1 has 3 donations, one of them refunded (900 cents).
+    vi.mocked(prisma.donation.groupBy).mockImplementation((async (args: any) =>
+      args.where?.status === 'COMPLETED'
+        ? [
+            { event_id: 'ev1', channel_id: 'ch1', _sum: { amount_cents: 5000 } },
+            { event_id: 'gone', channel_id: null, _sum: { amount_cents: 700 } },
+            { event_id: null, channel_id: null, _sum: { amount_cents: 100 } },
+          ]
+        : [
+            // Assigned to a known channel+event.
+            { event_id: 'ev1', channel_id: 'ch1', _count: { _all: 3 } },
+            // Explicit event but no channel, and event unknown to the lookup.
+            { event_id: 'gone', channel_id: null, _count: { _all: 1 } },
+            // Unassigned: both null.
+            { event_id: null, channel_id: null, _count: { _all: 1 } },
+          ]) as any);
     vi.mocked(prisma.reward.findMany).mockResolvedValue([
       { id: 'r1', channel_id: 'ch1' },
       { id: 'r2', channel_id: null },
@@ -121,9 +130,16 @@ describe('refreshBusinessMetrics', () => {
       return sample?.value as number | undefined;
     };
 
+    // COMPLETED cents only (the refunded 900 is excluded), but all 3 donations counted.
     expect(
       value('dono_donated_cents_by_channel', { event: 'event-one', channel: 'channel-one' }),
     ).toBe(5000);
+    expect(prisma.donation.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: 'COMPLETED' } }),
+    );
+    expect(prisma.donation.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: 'COMPLETED' } }),
+    );
     expect(value('dono_donations_by_channel', { event: 'event-one', channel: 'channel-one' })).toBe(
       3,
     );

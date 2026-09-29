@@ -461,6 +461,8 @@ describe('Pledge Service', () => {
     }, 10000);
 
     it('creates a Donation row when the wallet fully covers the pledge (#43)', async () => {
+      // Unique per run: a failed earlier run cannot collide with this one.
+      const email = `walletcovered-${crypto.randomUUID()}@example.com`;
       const reward = await prisma.reward.create({
         data: {
           title: 'Fully wallet-covered reward',
@@ -470,16 +472,16 @@ describe('Pledge Service', () => {
         },
       });
       const { pledge_token } = await createPledge({
-        email: 'walletcovered@example.com',
+        email,
         items: [{ kind: 'REWARD', target_id: reward.id }],
         channel_id: channelId,
       });
       const donor = await prisma.donor.create({
         data: {
-          email: 'walletcovered@example.com',
+          email,
           total_donated: 10000,
           balance_remaining: 10000,
-          magic_token: 'tok-wallet-covered',
+          magic_token: `tok-wallet-${crypto.randomUUID()}`,
           token_expires_at: new Date(Date.now() + 60000),
         },
       });
@@ -492,7 +494,7 @@ describe('Pledge Service', () => {
           balance_remaining: donor.balance_remaining,
           magic_token: donor.magic_token,
         },
-        'walletcovered@example.com',
+        email,
       );
 
       // Wallet covers the entire 500-cent pledge — no Stripe charge.
@@ -505,6 +507,9 @@ describe('Pledge Service', () => {
       expect(donation!.amount_cents).toBe(500);
       expect(donation!.external_id).toMatch(/^wallet-/);
       expect(donation!.channel_id).toBe(channelId);
+      // Routed like every other donation: the channel's Event is set too (§E4).
+      const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } });
+      expect(donation!.event_id).toBe(channel.event_id);
 
       // The pledge is FULFILLED and linked back to the wallet donation.
       const pledge = await prisma.pendingPledge.findUnique({ where: { pledge_token } });

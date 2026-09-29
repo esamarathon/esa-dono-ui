@@ -199,6 +199,23 @@ describe('Donation routing (resolveDonationRoute via HTTP)', () => {
     });
   });
 
+  it('an event_id whose event has no primary channel leaves the donation unassigned (assignable)', async () => {
+    const event = await makeEvent(`No Primary ${rand()}`);
+    const channel = await makeChannel(event.id, true);
+
+    const res = await donate({ email: `noprimary-${rand()}@example.com`, event_id: event.id });
+
+    expect(res.status).toBe(200);
+    // Not half-routed (event set, channel null): that could never be assigned.
+    expect(res.body.donation).toMatchObject({ channel_id: null, event_id: null });
+    const assign = await request(createApp())
+      .patch(`/api/admin/donations/${res.body.donation.id}/channel`)
+      .set(AUTH)
+      .send({ channel_id: channel.id });
+    expect(assign.status).toBe(200);
+    expect(assign.body).toMatchObject({ channel_id: channel.id, event_id: event.id });
+  });
+
   it('rejects an unknown channel_id with 400', async () => {
     const res = await donate({
       email: `badch-${rand()}@example.com`,

@@ -180,9 +180,7 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
               value={form.slug}
               onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
             />
-            {isActiveModal && (
-              <p className="font-body text-xs text-off-white/55 mt-1">{SLUG_HELP}</p>
-            )}
+            <p className="font-body text-xs text-off-white/55 mt-1">{SLUG_HELP}</p>
           </div>
           {modal !== 'create' && (
             <div className="mb-3">

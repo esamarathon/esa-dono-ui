@@ -60,8 +60,18 @@ export default function DonateFlow() {
   // Fetch the event named by the URL slug. Runs once per distinct slug and
   // respects the cart's own loading state, mirroring the ?channel= deep link.
   const consumedEventSlug = useRef<string | null>(null);
+  const consumedSlugSelection = useRef<string | null>(null);
   useEffect(() => {
-    if (!eventSlug || consumedEventSlug.current === eventSlug) return;
+    if (!eventSlug) {
+      // Back on plain /donate (the route element is reused): drop the link state
+      // so the picker shows again and the same slug can be followed again later.
+      consumedEventSlug.current = null;
+      consumedSlugSelection.current = null;
+      setSlugEvent(null);
+      setLinkError(null);
+      return;
+    }
+    if (consumedEventSlug.current === eventSlug) return;
     consumedEventSlug.current = eventSlug;
     // A new slug (the route element is reused across /donate/<a> → /donate/<b>).
     setSlugEvent(null);
@@ -73,7 +83,6 @@ export default function DonateFlow() {
 
   // Select a channel named by the URL slug, an event's only channel, or its
   // primary channel — once the event's channels are known.
-  const consumedSlugSelection = useRef<string | null>(null);
   useEffect(() => {
     const linkKey = `${slugEvent?.slug}/${channelSlug ?? ''}`;
     if (loading || !slugEvent || consumedSlugSelection.current === linkKey) return;
