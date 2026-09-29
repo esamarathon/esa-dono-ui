@@ -9,9 +9,14 @@ const mockTxPendingPledge = {
   findUnique: vi.fn().mockResolvedValue(null),
   findFirst: vi.fn().mockResolvedValue(null),
 };
+// Routing (PRD-0002 §E5): no active Event, so these donations stay unassigned.
+const mockTxEvent = { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn() };
+const mockTxChannel = { findUnique: vi.fn() };
 const mockTx = {
   donor: mockTxDonor,
   donation: mockTxDonation,
+  event: mockTxEvent,
+  channel: mockTxChannel,
   pendingPledge: mockTxPendingPledge,
   webhookDestination: mockTxWebhookDestination,
 };
@@ -44,6 +49,7 @@ describe('processDonation', () => {
     mockTxPendingPledge.findUnique.mockResolvedValue(null);
     mockTxPendingPledge.findFirst.mockResolvedValue(null);
     mockTxWebhookDestination.findMany.mockResolvedValue([]);
+    mockTxEvent.findMany.mockResolvedValue([]);
   });
 
   it('creates donor and donation for first-time donor', async () => {

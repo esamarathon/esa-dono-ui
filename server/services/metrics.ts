@@ -32,6 +32,50 @@ const donationsTotal = new client.Gauge({
   registers: [register],
 });
 
+/**
+ * Donations with no Channel and no Event yet (PRD-0002 §E6): they wait for an
+ * admin to assign one with PATCH /admin/donations/:id/channel. Alert on > 0.
+ */
+const donationsUnassigned = new client.Gauge({
+  name: 'dono_donations_unassigned',
+  help: 'Donations waiting to be assigned to a Channel',
+  registers: [register],
+});
+
+// Per-Event and per-Channel breakdowns (PRD-0002 §M3) are separate labelled
+// gauges, never labels added to the unlabelled globals above: a gauge carrying
+// both an unlabelled total and labelled parts double-counts under PromQL sum().
+// Labels hold slug values; '' means unassigned or shared.
+const BY_CHANNEL_LABELS = ['event', 'channel'] as const;
+
+const donatedCentsByChannel = new client.Gauge({
+  name: 'dono_donated_cents_by_channel',
+  help: 'Donation amount in cents, by Event and Channel slug',
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const donationsByChannel = new client.Gauge({
+  name: 'dono_donations_by_channel',
+  help: 'Number of donations, by Event and Channel slug',
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const rewardClaimsByChannel = new client.Gauge({
+  name: 'dono_reward_claims_by_channel',
+  help: "Reward claims, by the slug of the reward's Event and Channel",
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
+const pollVotesByChannel = new client.Gauge({
+  name: 'dono_poll_votes_by_channel',
+  help: "Poll votes, by the slug of the poll's Event and Channel",
+  labelNames: BY_CHANNEL_LABELS,
+  registers: [register],
+});
+
 const pledgesOpen = new client.Gauge({
   name: 'dono_pledges_open',
   help: 'Number of pending pledges currently open',
@@ -40,7 +84,15 @@ const pledgesOpen = new client.Gauge({
 
 const eventsActive = new client.Gauge({
   name: 'dono_events_active',
-  help: 'Number of active events',
+  help: 'Number of active Events (charity events)',
+  registers: [register],
+});
+
+// Before #115 dono_events_active counted active Channels (the concept was once
+// named "Event"); that count now has its own, correctly named gauge.
+const channelsActive = new client.Gauge({
+  name: 'dono_channels_active',
+  help: 'Number of active Channels (streams)',
   registers: [register],
 });
 
@@ -156,6 +208,7 @@ export async function refreshBusinessMetrics(): Promise<void> {
       donationCount,
       pledgeCount,
       activeEventCount,
+      activeChannelCount,
       claimCount,
       pollVoteCount,
       adjustmentCounts,
@@ -166,11 +219,20 @@ export async function refreshBusinessMetrics(): Promise<void> {
       unsoldAuctions,
       webhookDestinations,
       webhookDeliveryGroups,
+      unassignedDonationCount,
+      donationByChannel,
+      claimGroups,
+      rewards,
+      voteGroups,
+      polls,
+      eventRows,
+      channelRows,
     ] = await Promise.all([
       prisma.donor.count(),
       prisma.donation.aggregate({ _sum: { amount_cents: true } }),
       prisma.donation.count(),
       prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
+      prisma.event.count({ where: { is_active: true } }),
       prisma.channel.count({ where: { is_active: true } }),
       prisma.rewardClaim.count(),
       prisma.pollVote.count({ where: { reversed_at: null } }),
@@ -195,6 +257,22 @@ export async function refreshBusinessMetrics(): Promise<void> {
         _min: { created_at: true },
         _max: { updated_at: true },
       }),
+      prisma.donation.count({ where: { channel_id: null, event_id: null } }),
+      prisma.donation.groupBy({
+        by: ['event_id', 'channel_id'],
+        _sum: { amount_cents: true },
+        _count: { _all: true },
+      }),
+      prisma.rewardClaim.groupBy({ by: ['reward_id'], _count: { _all: true } }),
+      prisma.reward.findMany({ select: { id: true, channel_id: true } }),
+      prisma.pollVote.groupBy({
+        by: ['poll_id'],
+        where: { reversed_at: null },
+        _count: { _all: true },
+      }),
+      prisma.poll.findMany({ select: { id: true, channel_id: true } }),
+      prisma.event.findMany({ select: { id: true, slug: true } }),
+      prisma.channel.findMany({ select: { id: true, slug: true, event_id: true } }),
     ]);
 
     donorsTotal.set(donorCount);
@@ -202,8 +280,78 @@ export async function refreshBusinessMetrics(): Promise<void> {
     donationsTotal.set(donationCount);
     pledgesOpen.set(pledgeCount);
     eventsActive.set(activeEventCount);
+    channelsActive.set(activeChannelCount);
     rewardClaimsTotal.set(claimCount);
     pollVotesTotal.set(pollVoteCount);
+    donationsUnassigned.set(unassignedDonationCount);
+
+    // Slug lookups for the labelled breakdowns: one query each, then resolve in
+    // memory. Unknown or null ids fall back to '' so a stale reference never
+    // creates a bogus slug series.
+    const eventSlug = new Map(eventRows.map((e) => [e.id, e.slug]));
+    const channelSlug = new Map(channelRows.map((c) => [c.id, c.slug]));
+    const channelEvent = new Map(channelRows.map((c) => [c.id, c.event_id]));
+    const labelsFor = (eventId: string | null, channelId: string | null) => ({
+      event: (eventId && eventSlug.get(eventId)) || '',
+      channel: (channelId && channelSlug.get(channelId)) || '',
+    });
+
+    donatedCentsByChannel.reset();
+    donationsByChannel.reset();
+    // Several rows can resolve to the same label pair (an unknown Event id and a
+    // null one both give ''), so accumulate per pair instead of letting the last
+    // .set() win.
+    const donationTotals = new Map<
+      string,
+      { event: string; channel: string; cents: number; count: number }
+    >();
+    for (const g of donationByChannel) {
+      const labels = labelsFor(g.event_id, g.channel_id);
+      const key = `${labels.event}\u0000${labels.channel}`;
+      const entry = donationTotals.get(key) ?? { ...labels, cents: 0, count: 0 };
+      entry.cents += g._sum.amount_cents ?? 0;
+      entry.count += g._count._all;
+      donationTotals.set(key, entry);
+    }
+    for (const { event, channel, cents, count } of donationTotals.values()) {
+      donatedCentsByChannel.set({ event, channel }, cents);
+      donationsByChannel.set({ event, channel }, count);
+    }
+
+    const labelKey = (labels: { event: string; channel: string }) =>
+      `${labels.event}\u0000${labels.channel}`;
+
+    // Claims and votes are grouped by their incentive's Channel, then rolled up
+    // per slug pair — several incentives may share one Channel.
+    const rewardChannel = new Map(rewards.map((r) => [r.id, r.channel_id]));
+    const claimTotals = new Map<string, { event: string; channel: string; count: number }>();
+    for (const g of claimGroups) {
+      const channelId = rewardChannel.get(g.reward_id) ?? null;
+      const labels = labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
+      const key = labelKey(labels);
+      const entry = claimTotals.get(key) ?? { ...labels, count: 0 };
+      entry.count += g._count._all;
+      claimTotals.set(key, entry);
+    }
+    rewardClaimsByChannel.reset();
+    for (const { event, channel, count } of claimTotals.values()) {
+      rewardClaimsByChannel.set({ event, channel }, count);
+    }
+
+    const pollChannel = new Map(polls.map((p) => [p.id, p.channel_id]));
+    const voteTotals = new Map<string, { event: string; channel: string; count: number }>();
+    for (const g of voteGroups) {
+      const channelId = pollChannel.get(g.poll_id) ?? null;
+      const labels = labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
+      const key = labelKey(labels);
+      const entry = voteTotals.get(key) ?? { ...labels, count: 0 };
+      entry.count += g._count._all;
+      voteTotals.set(key, entry);
+    }
+    pollVotesByChannel.reset();
+    for (const { event, channel, count } of voteTotals.values()) {
+      pollVotesByChannel.set({ event, channel }, count);
+    }
     for (const { type, count } of adjustmentCounts) {
       balanceAdjustmentsTotal.set({ type }, count);
     }

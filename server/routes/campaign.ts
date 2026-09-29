@@ -14,7 +14,10 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const goalCents = Number(process.env.CAMPAIGN_GOAL_CENTS || '500000');
 
+    // Money actually kept (PRD-0002 §E7): refunds and chargebacks do not count.
+    // Hidden donations still count; hiding is a display decision.
     const { _sum } = await prisma.donation.aggregate({
+      where: { status: 'COMPLETED' },
       _sum: { amount_cents: true },
     });
 

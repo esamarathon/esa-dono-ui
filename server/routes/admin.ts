@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
+import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
+import { assignDonationChannel } from '../services/routing.js';
 import { sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
@@ -104,6 +106,35 @@ router.put('/channels/:id', async (req, res) => {
   }
 });
 
+// Events (PRD-0002 §E1). Delete = deactivate: channels and donations reference them.
+router.get('/events', async (_req, res) => {
+  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
+});
+
+router.post('/events', async (req, res) => {
+  try {
+    res.json(await createEvent(req.body ?? {}));
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
+});
+
+router.put('/events/:id', async (req, res) => {
+  try {
+    res.json(await updateEvent(req.params.id, req.body ?? {}));
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
+});
+
+router.delete('/events/:id', async (req, res) => {
+  try {
+    res.json({ success: true, event: await deactivateEvent(req.params.id) });
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
+});
+
 // Soft-delete: channels may be referenced by incentives/donations/pledges, so
 // deactivate instead of hard-deleting to preserve those references.
 router.delete('/channels/:id', async (req, res) => {
@@ -140,6 +171,18 @@ router.get('/donations', async (req, res) => {
  * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
  * has a refund_id it is terminal: no further status changes are allowed.
  */
+/**
+ * PATCH /admin/donations/:id/channel (PRD-0002 §E6)
+ * Assign an unassigned donation to a Channel (and so its Event), then publish it.
+ */
+router.patch('/donations/:id/channel', async (req, res) => {
+  try {
+    res.json(await assignDonationChannel(req.params.id, req.body?.channel_id));
+  } catch (e) {
+    sendError(res, e, '[donations]');
+  }
+});
+
 router.patch('/donations/:id/status', async (req, res) => {
   const { status, reason } = req.body;
   if (!DONATION_STATUSES.includes(status)) {
@@ -389,6 +432,7 @@ router.post('/simulate-donation', async (req, res) => {
       comment,
       pledge_token,
       channel_id,
+      event_id,
       external_id,
       occurred_at,
     } = req.body;
@@ -431,6 +475,7 @@ router.post('/simulate-donation', async (req, res) => {
       comment: comment || null,
       pledgeToken: pledge_token || null,
       channelId: channel_id || null,
+      eventId: event_id || null,
       occurredAt,
     });
     if ('duplicate' in result) {
@@ -447,10 +492,14 @@ router.post('/simulate-donation', async (req, res) => {
         balance_remaining: result.donor.balance_remaining,
       },
       pledge: result.pledge || null,
+      donation: {
+        id: result.donation.id,
+        channel_id: result.donation.channel_id,
+        event_id: result.donation.event_id,
+      },
     });
   } catch (err) {
-    console.error('Simulate donation error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, '[simulate-donation]');
   }
 });
 

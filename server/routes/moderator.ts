@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
+import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
 import { sendError } from '../lib/httpError.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
@@ -66,6 +67,35 @@ router.put('/channels/:id', async (req, res) => {
     res.json(await updateChannel(req.params.id, req.body ?? {}));
   } catch (e) {
     sendError(res, e, '[channels]');
+  }
+});
+
+// Events (PRD-0002 §E1). Delete = deactivate: channels and donations reference them.
+router.get('/events', async (_req, res) => {
+  res.json(await prisma.event.findMany({ orderBy: { created_at: 'asc' } }));
+});
+
+router.post('/events', async (req, res) => {
+  try {
+    res.json(await createEvent(req.body ?? {}));
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
+});
+
+router.put('/events/:id', async (req, res) => {
+  try {
+    res.json(await updateEvent(req.params.id, req.body ?? {}));
+  } catch (e) {
+    sendError(res, e, '[events]');
+  }
+});
+
+router.delete('/events/:id', async (req, res) => {
+  try {
+    res.json({ success: true, event: await deactivateEvent(req.params.id) });
+  } catch (e) {
+    sendError(res, e, '[events]');
   }
 });
 

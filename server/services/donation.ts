@@ -5,6 +5,7 @@ import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
 import { buildDonationCreatedPayload } from './webhooks/delivery.js';
 import { withWebhooks } from './webhooks/outbox.js';
+import { resolveDonationRoute } from './routing.js';
 import { withSpan } from '../lib/tracing.js';
 
 interface ProcessDonationOptions {
@@ -16,6 +17,8 @@ interface ProcessDonationOptions {
   pledgeToken?: string | null;
   shippingCents?: number;
   channelId?: string | null;
+  /** Route to this Event's primary Channel when no Channel is given (PRD-0002 §E5). */
+  eventId?: string | null;
   /** Backdates Donation.created_at (#62) — e.g. when recording a donation
    * actually received on an external platform on an earlier date. Defaults
    * to now when omitted. */
@@ -55,6 +58,7 @@ export async function processDonation({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  eventId = null,
   occurredAt = null,
 }: ProcessDonationOptions) {
   return withSpan('donation.process', async () => {
@@ -67,6 +71,7 @@ export async function processDonation({
       pledgeToken,
       shippingCents,
       channelId,
+      eventId,
       occurredAt,
     });
   });
@@ -81,6 +86,7 @@ async function processDonationInner({
   pledgeToken,
   shippingCents = 0,
   channelId = null,
+  eventId = null,
   occurredAt = null,
 }: ProcessDonationOptions) {
   const normalizedEmail = email.trim().toLowerCase();
@@ -90,7 +96,12 @@ async function processDonationInner({
 
   let result: {
     donor: { id: string; magic_token: string | null; email: string; balance_remaining: number };
-    donation: { id: string; external_id: string };
+    donation: {
+      id: string;
+      external_id: string;
+      channel_id: string | null;
+      event_id: string | null;
+    };
     pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
   } | null = null;
   try {
@@ -114,6 +125,18 @@ async function processDonationInner({
         },
       });
 
+      // Resolve the pledge first: its Channel routes the donation (PRD-0002 §E5).
+      let pledge: Awaited<ReturnType<typeof resolvePledge>> = null;
+      try {
+        pledge = await resolvePledge({ pledgeToken, email: normalizedEmail, amountCents }, tx);
+      } catch (pledgeErr) {
+        console.error('Pledge resolution error (non-fatal):', pledgeErr);
+      }
+      const route = await resolveDonationRoute(tx, {
+        channelId: pledge?.channel_id ?? channelId,
+        eventId,
+      });
+
       const donation = await tx.donation.create({
         data: {
           external_id: externalId,
@@ -121,24 +144,15 @@ async function processDonationInner({
           amount_cents: amountCents,
           donor_name: donorName,
           comment: comment ?? null,
-          channel_id: channelId ?? null,
+          channel_id: route.channelId,
+          event_id: route.eventId,
           ...(occurredAt ? { created_at: occurredAt } : {}),
         },
       });
 
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
-      // The donation's channel: a fulfilled pledge's channel wins (see update below).
-      let routedChannelId: string | null = channelId ?? null;
-      try {
-        const pledge = await resolvePledge(
-          {
-            pledgeToken,
-            email: normalizedEmail,
-            amountCents,
-          },
-          tx,
-        );
-        if (pledge) {
+      if (pledge) {
+        try {
           pledgeResult = await fulfillPledge(tx, pledge, donor.id);
           await tx.donation.update({
             where: { id: donation.id },
@@ -146,24 +160,25 @@ async function processDonationInner({
               pledge: { connect: { id: pledge.id } },
               ...(pledge.comment ? { comment: pledge.comment } : {}),
               ...(pledge.display_name ? { donor_name: pledge.display_name } : {}),
-              ...(pledge.channel_id ? { channel_id: pledge.channel_id } : {}),
             },
           });
-          if (pledge.channel_id) routedChannelId = pledge.channel_id;
+        } catch (pledgeErr) {
+          console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
         }
-      } catch (pledgeErr) {
-        console.error('Pledge fulfillment error (non-fatal):', pledgeErr);
       }
 
-      await emit('donation.created', () =>
-        buildDonationCreatedPayload({
-          donationId: donation.id,
-          externalId,
-          amountCents,
-          channelId: routedChannelId,
-          donorRef: donor.id,
-        }),
-      );
+      // An unassigned donation is published when an admin assigns it (§E6).
+      if (route.channelId || route.eventId) {
+        await emit('donation.created', () =>
+          buildDonationCreatedPayload({
+            donationId: donation.id,
+            externalId,
+            amountCents,
+            channelId: route.channelId,
+            donorRef: donor.id,
+          }),
+        );
+      }
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
         console.error('Email error:', err),
