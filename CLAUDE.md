@@ -82,6 +82,8 @@ After building, always confirm the stack _functions_ — not just that the image
 ADMIN_API_KEY=change-me FRONTEND_PORT=18080 ./scripts/smoke-test.sh
 ```
 
+**Behind an external proxy** (Caddy, a TLS terminator, a load balancer) in front of the frontend container, set **`TRUST_PROXY=2`** (one more per extra proxy). Otherwise every visitor shares one rate-limit bucket (#140). See `docs/deployment.md` § Client IP and `TRUST_PROXY`.
+
 The CI `container-test` job runs this against the freshly built runtime images, and `docker-publish.yml` runs it against the just-pushed `:<sha>` images (not `:latest`, so it verifies exactly what this run built, on any branch) after the Trivy gate.
 
 Images publish to `ghcr.io/esamarathon/esa-dono-ui/{backend,frontend}` via
