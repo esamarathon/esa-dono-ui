@@ -116,13 +116,18 @@ echo "==> Backend healthy"
 # --- 4. Re-seed deterministic baseline ------------------------------------
 echo "==> Seeding demo baseline"
 if [ "$SEED_BASE" = "$BASE" ]; then
-  ./seed-dev.sh "$BASE" "$CLIENT" "$KEY"
+  ADMIN_API_KEY="$KEY" ./seed-dev.sh "$BASE" "$CLIENT"
 else
   # Direct path was unreachable — seed from a throwaway container on the
   # same Docker network as the backend, so seed-dev.sh's curl/jq calls reach
   # it via the service DNS name instead of a host port.
-  docker run --rm --network "$NETWORK" -v "$(pwd)/seed-dev.sh:/seed-dev.sh:ro" "$SEED_HELPER_IMAGE" \
-    bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl jq >/dev/null 2>&1 && bash /seed-dev.sh '$SEED_BASE' '$CLIENT' '$KEY'"
+  # Secrets are passed by name only, never on a command line (visible in ps):
+  # seed-dev.sh reads the admin key from ADMIN_API_KEY when no argument is given.
+  ADMIN_API_KEY="$KEY" docker run --rm --network "$NETWORK" -v "$(pwd)/seed-dev.sh:/seed-dev.sh:ro" \
+    -e ADMIN_API_KEY \
+    -e SEED_RABBITMQ_URL -e SEED_RABBITMQ_EXCHANGE -e SEED_RABBITMQ_ROUTING_KEY -e SEED_RABBITMQ_DESCRIPTION \
+    "$SEED_HELPER_IMAGE" \
+    bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl jq >/dev/null 2>&1 && bash /seed-dev.sh '$SEED_BASE' '$CLIENT'"
 fi
 
 # --- 4b. Re-seed persistent moderator/admin accounts + key banner ---------

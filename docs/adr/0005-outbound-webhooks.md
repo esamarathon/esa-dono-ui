@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-19
 
-**Status:** Accepted
+**Status:** Accepted — **superseded in part by [ADR-0007](0007-webhook-delivery-semantics.md)** (delivery model, FIFO and retry semantics). Transports, signing and the PII allowlist below still apply.
 
 ## Context
 

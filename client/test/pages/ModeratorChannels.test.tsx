@@ -12,41 +12,53 @@ vi.mock('../../src/api/moderator', () => ({ default: moderatorClient }));
 
 import ModeratorChannels from '../../src/pages/moderator/ModeratorChannels';
 
+const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
+
+function mockGet(channels: unknown[], events: unknown[] = []) {
+  moderatorClient.get.mockImplementation((path: string) =>
+    Promise.resolve({ data: path === '/events' ? events : channels }),
+  );
+}
+
 describe('ModeratorChannels', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('lists channels', async () => {
-    moderatorClient.get.mockResolvedValue({ data: [{ id: 'c1', name: 'Main', is_active: true }] });
+  it('lists channels with their slug and event name', async () => {
+    mockGet([channel], [{ id: 'e1', name: 'Marathon', is_active: true }]);
 
     render(<ModeratorChannels />);
 
     expect(await screen.findByText('Main')).toBeInTheDocument();
+    expect(screen.getByText(/slug: main/)).toBeInTheDocument();
+    expect(screen.getByText(/event: Marathon/)).toBeInTheDocument();
   });
 
   it('shows the empty state', async () => {
-    moderatorClient.get.mockResolvedValue({ data: [] });
+    mockGet([]);
 
     render(<ModeratorChannels />);
 
     expect(await screen.findByText(/No channels yet/)).toBeInTheDocument();
   });
 
-  it('creates a channel', async () => {
-    moderatorClient.get.mockResolvedValue({ data: [] });
-    moderatorClient.post.mockResolvedValue({ data: { id: 'c2', name: 'New', is_active: true } });
+  it('creates a channel with a slug and event', async () => {
+    mockGet([], [{ id: 'e1', name: 'Marathon', is_active: true }]);
+    moderatorClient.post.mockResolvedValue({ data: { id: 'c2', name: 'New' } });
 
     render(<ModeratorChannels />);
 
     fireEvent.click(await screen.findByRole('button', { name: '+ new channel' }));
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'New' } });
+    fireEvent.change(screen.getAllByRole('textbox')[0]!, { target: { value: 'New' } });
+    fireEvent.change(screen.getAllByRole('textbox')[1]!, { target: { value: 'new' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'e1' } });
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
 
     await waitFor(() =>
       expect(moderatorClient.post).toHaveBeenCalledWith(
         '/channels',
-        expect.objectContaining({ name: 'New' }),
+        expect.objectContaining({ name: 'New', slug: 'new', event_id: 'e1' }),
       ),
     );
   });
@@ -56,7 +68,7 @@ describe('ModeratorChannels', () => {
       'confirm',
       vi.fn(() => true),
     );
-    moderatorClient.get.mockResolvedValue({ data: [{ id: 'c1', name: 'Main', is_active: true }] });
+    mockGet([channel]);
     moderatorClient.delete.mockResolvedValue({ data: { success: true } });
 
     render(<ModeratorChannels />);
@@ -68,14 +80,14 @@ describe('ModeratorChannels', () => {
   });
 
   it('edits a channel', async () => {
-    moderatorClient.get.mockResolvedValue({ data: [{ id: 'c1', name: 'Main', is_active: true }] });
-    moderatorClient.put.mockResolvedValue({ data: { id: 'c1', name: 'Renamed', is_active: true } });
+    mockGet([channel]);
+    moderatorClient.put.mockResolvedValue({ data: { id: 'c1', name: 'Renamed' } });
 
     render(<ModeratorChannels />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
-    expect(screen.getByRole('textbox')).toHaveValue('Main');
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Renamed' } });
+    expect(screen.getAllByRole('textbox')[0]!).toHaveValue('Main');
+    fireEvent.change(screen.getAllByRole('textbox')[0]!, { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
 
     await waitFor(() =>
@@ -86,6 +98,17 @@ describe('ModeratorChannels', () => {
     );
   });
 
+  it('blocks the slug field while editing an active channel (#115)', async () => {
+    mockGet([channel]);
+
+    render(<ModeratorChannels />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+
+    expect(screen.getAllByRole('textbox')[1]!).toBeDisabled();
+    expect(screen.getByText(/Changing a slug breaks overlay bindings/)).toBeInTheDocument();
+  });
+
   it('copies a /donate?channel=<id> deep link for a channel (#49)', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -94,7 +117,7 @@ describe('ModeratorChannels', () => {
       writable: true,
     });
 
-    moderatorClient.get.mockResolvedValue({ data: [{ id: 'c1', name: 'Main', is_active: true }] });
+    mockGet([channel]);
 
     render(<ModeratorChannels />);
 

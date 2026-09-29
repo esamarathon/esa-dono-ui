@@ -156,11 +156,28 @@ Wait a moment and retry - the database might be in use by background tasks.
 
 ## Daily Staging Resets
 
-Since the seed uses database operations (not filesystem), the accounts and banner automatically survive the daily staging reset cycle:
+`demo-reset.timer` (04:01 UTC) runs `scripts/reset-demo.sh` through
+`demo-reset.service`. It loads the host's `.env` and runs these steps:
 
-1. Database is reset/cleared
-2. Migrations run (via docker-entrypoint)
-3. Simply re-run the seed script after reset to recreate the dev accounts and banner
+1. Drop the database volume (`docker compose down -v`) and start the stack
+   again. The backend entrypoint applies every migration.
+2. Run `seed-dev.sh` from a helper container on the app network. It creates
+   the demo Channels, incentives and donations and, when `SEED_RABBITMQ_URL`
+   is set, the RabbitMQ Destination ("MQ Server", exchange `tiltify`, routing
+   key `dono-platform.donation`).
+3. Run `prisma/seed.ts` in the backend container. It creates the dev accounts,
+   the key banner, and one active Event with a primary Channel (Main Marathon).
+
+To keep the staging RabbitMQ Destination across resets, add this line to the
+host's `.env`. The broker is the `staging-rabbitmq` container, reachable as
+`rabbitmq` on the app network, with credentials in
+`~/projects/staging-mq/.env`:
+
+```bash
+SEED_RABBITMQ_URL=amqp://<user>:<password>@rabbitmq:5672
+```
+
+Destinations you create by hand in the admin UI are deleted by the nightly reset.
 
 ## Integration into Staging Deployment
 

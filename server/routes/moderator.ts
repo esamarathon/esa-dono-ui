@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
 import {
@@ -15,7 +16,7 @@ import {
 // return it via any other path) in a JSON response. Moderators can see
 // donor_name, spend amounts, claim/entry content, and moderation metadata,
 // but never the donor's email address — only ADMIN routes (server/routes/
-// admin.ts, gated by X-Admin-Key) are allowed to expose it.
+// admin.ts, gated by the admin key or an ADMIN session) are allowed to expose it.
 //
 // This has regressed once already (fixed in 87ad5e4, then again for the
 // donations endpoints): the pattern `donor: { select: { email: ... } } }` was
@@ -46,57 +47,8 @@ router.get('/stats', async (req, res) => {
   });
 });
 
-// Channels CRUD
-router.get('/channels', async (req, res) => {
-  res.json(await prisma.channel.findMany({ orderBy: { created_at: 'asc' } }));
-});
-
-router.post('/channels', async (req, res) => {
-  const { name, is_active } = req.body;
-  if (!name || !String(name).trim()) {
-    return res.status(400).json({ error: 'name is required' });
-  }
-  try {
-    const channel = await prisma.channel.create({
-      data: { name: String(name).trim(), is_active: is_active ?? true },
-    });
-    res.json(channel);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Channel name already exists' });
-    }
-    throw e;
-  }
-});
-
-router.put('/channels/:id', async (req, res) => {
-  const { name, is_active } = req.body;
-  try {
-    const channel = await prisma.channel.update({
-      where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name: String(name).trim() } : {}),
-        ...(is_active !== undefined ? { is_active } : {}),
-      },
-    });
-    res.json(channel);
-  } catch (e) {
-    if ((e as { code?: string }).code === 'P2002') {
-      return res.status(409).json({ error: 'Channel name already exists' });
-    }
-    throw e;
-  }
-});
-
-// Soft-delete: channels may be referenced by incentives/donations/pledges, so
-// deactivate instead of hard-deleting to preserve those references.
-router.delete('/channels/:id', async (req, res) => {
-  const channel = await prisma.channel.update({
-    where: { id: req.params.id },
-    data: { is_active: false },
-  });
-  res.json({ success: true, channel });
-});
+// Channels and Events (routes/identityRoutes.ts)
+mountIdentityRoutes(router);
 
 // Polls CRUD
 router.get('/polls', async (req, res) => {
@@ -456,7 +408,7 @@ router.get('/claims', async (req, res) => {
 router.get('/donations', async (req, res) => {
   const donations = await prisma.donation.findMany({
     include: {
-      channel: { select: { id: true, name: true } },
+      channel: { select: { id: true, name: true, slug: true, event_id: true } },
       pledge: { include: { items: true } },
     },
     orderBy: { created_at: 'desc' },
@@ -563,34 +515,77 @@ router.get('/donations', async (req, res) => {
   );
 });
 
+/**
+ * PATCH /moderator/donations/:id — `{ moderated?, hidden_from_overlay? }`, at least one.
+ *
+ * - `moderated` is the review toggle: native `donation.moderated` only. It does NOT
+ *   republish on TILTIFY, because the body would not change and a republish of an
+ *   anonymous donation removes it from the overlay (PRD-0002 §T8).
+ * - `hidden_from_overlay` hides the donation from the stream overlay: native
+ *   `donation.hidden` / `donation.unhidden`, and a TILTIFY republish (as `"Anonymous"`
+ *   without `completed_at` when hidden, the full donation when shown; §T5–T6).
+ *   Setting the value it already has publishes nothing.
+ */
 router.patch('/donations/:id', async (req, res) => {
-  const { moderated } = req.body;
-  if (typeof moderated !== 'boolean') {
+  const { moderated, hidden_from_overlay: hidden } = req.body;
+  if (moderated === undefined && hidden === undefined) {
+    return res
+      .status(400)
+      .json({ error: 'Provide moderated and/or hidden_from_overlay (booleans)' });
+  }
+  if (moderated !== undefined && typeof moderated !== 'boolean') {
     return res.status(400).json({ error: 'moderated must be a boolean' });
+  }
+  if (hidden !== undefined && typeof hidden !== 'boolean') {
+    return res.status(400).json({ error: 'hidden_from_overlay must be a boolean' });
   }
   const moderatorEmail = req.donor?.email || 'moderator';
 
-  const donation = await prisma.donation.update({
-    where: { id: req.params.id },
-    data: moderated
+  const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
+    await import('../services/webhooks/delivery.js');
+  const { withWebhooks } = await import('../services/webhooks/outbox.js');
+  const reviewFields = (value: boolean) =>
+    value
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
-      : { moderated: false, moderated_at: null, moderated_by: null },
-    include: { donor: { select: { id: true } } },
+      : { moderated: false, moderated_at: null, moderated_by: null };
+
+  const donation = await withWebhooks(async (tx, emit, tiltify) => {
+    // Read inside the transaction, so two concurrent hides publish once.
+    const existing = await tx.donation.findUnique({
+      where: { id: req.params.id },
+      select: { hidden_from_overlay: true },
+    });
+    if (!existing) return null;
+    const updated = await tx.donation.update({
+      where: { id: req.params.id },
+      data: {
+        ...(moderated === undefined ? {} : reviewFields(moderated)),
+        ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
+      },
+    });
+    if (moderated !== undefined) {
+      await emit('donation.moderated', () =>
+        buildDonationModeratedPayload({
+          donationId: updated.id,
+          externalId: updated.external_id,
+          donorRef: updated.donor_id,
+          moderated,
+          moderatedAt: updated.moderated_at,
+        }),
+      );
+    }
+    // An unassigned donation was never published, so there is nothing to hide (§E6).
+    const published = updated.channel_id !== null || updated.event_id !== null;
+    if (hidden !== undefined && hidden !== existing.hidden_from_overlay && published) {
+      await emit(hidden ? 'donation.hidden' : 'donation.unhidden', () =>
+        buildDonationVisibilityPayload(updated),
+      );
+      await tiltify.donation(updated.id);
+    }
+    return updated;
   });
 
-  const { emitWebhookEvent, buildDonationModeratedPayload } =
-    await import('../services/eventDelivery.js');
-  emitWebhookEvent(
-    'donation.moderated',
-    buildDonationModeratedPayload({
-      donationId: donation.id,
-      externalId: donation.external_id,
-      donorRef: donation.donor.id,
-      moderated,
-      moderatedAt: donation.moderated_at,
-    }),
-  );
-
+  if (!donation) return res.status(404).json({ error: 'Donation not found' });
   res.json(donation);
 });
 

@@ -123,7 +123,7 @@ export default function StaffHelp({ role }: { role: Role }) {
         <p>
           The dashboard gives a live count of key objects.{' '}
           {isAdmin
-            ? 'Admin dashboard shows total raised (in cents), donors, donations, claims, pledges, and a per-channel raised/count breakdown.'
+            ? "Admin dashboard shows total raised, donors, donations, claims, pledges, and a per-channel raised/count breakdown. Totals count completed and refunded donations (refunds go to the donor's wallet), not chargebacks."
             : 'Moderator dashboard shows pending custom poll entries, active polls, active rewards, and active goals.'}
         </p>
         <p>
@@ -133,28 +133,67 @@ export default function StaffHelp({ role }: { role: Role }) {
         </p>
       </Section>
 
-      {/* ── CHANNELS ───────────────────────────────────────────── */}
-      <Section title="channels">
+      {/* ── EVENTS & CHANNELS ──────────────────────────────────── */}
+      <Section title="events & channels">
         <p>
-          A <Term>channel</Term> represents a donation event or stream target (e.g. a runner's
-          stream). Every donation must be routed to exactly one channel. Incentives can be{' '}
-          <Term>shared</Term> (available for any channel) or scoped to a specific channel.
+          An <Term>event</Term> is a charity event (a marathon, or a one-day stream event) that
+          groups channels (streams). A <Term>channel</Term> represents a single donation target
+          inside an event. Every donation is routed to exactly one channel, and so to exactly one
+          event. Incentives can be <Term>shared</Term> (available in every channel) or scoped to one
+          channel.
         </p>
-        <p>Key operations:</p>
+        <p>Key operations on an event:</p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <Term>Create</Term> — give the channel a name and set it active. Active channels appear
-            in the public donation picker.
+            <Term>Create</Term> — give the event a name. The <Term>slug</Term> is derived from the
+            name unless you supply one.
           </li>
           <li>
-            <Term>Edit</Term> — rename or toggle <Code>is_active</Code>. Deactivating a channel
-            hides it from new donations but preserves existing data.
+            <Term>Primary channel</Term> — donations that name no channel are routed here. It must
+            be an active channel of this event before the event can be activated.
+          </li>
+          <li>
+            <Term>Activate / deactivate</Term> — only active events are open for donations. The slug
+            of an active event is blocked from changing: changing a slug breaks overlay bindings and
+            published links, so it is blocked while active.
           </li>
           <li>
             <Term>Delete</Term> — soft-deletes (sets <Code>is_active: false</Code>). Existing
             donations are not affected.
           </li>
         </ul>
+        <p>Key operations on a channel:</p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <Term>Create</Term> — give the channel a name, choose its event, and set it active. The
+            slug is derived from the name unless you supply one.
+          </li>
+          <li>
+            <Term>Edit</Term> — rename or toggle <Code>is_active</Code>. A channel's slug is blocked
+            from changing while the channel is active, for the same reason as an event's. Active
+            channels appear in the public donation picker.
+          </li>
+          <li>
+            <Term>Delete</Term> — soft-deletes (sets <Code>is_active: false</Code>). Existing
+            donations are not affected.
+          </li>
+        </ul>
+        <p>
+          Deep links: an event is shareable at <Code>/donate/&lt;event-slug&gt;</Code>, and a single
+          channel at <Code>/donate/&lt;event-slug&gt;/&lt;channel-slug&gt;</Code>. A link to an
+          event with exactly one channel selects that channel; otherwise the event's primary channel
+          is selected.
+        </p>
+        {isAdmin && (
+          <p>
+            <Term>Unassigned donations</Term> — a donation that named no channel, when no single
+            event was active or its event had no primary channel, is recorded with no channel and no
+            event. The donations list has an <Term>unassigned only</Term> filter and an{' '}
+            <Code>assign…</Code> control on those rows; assigning a channel publishes the donation
+            to that channel's event. Unassigned donations do not reach overlays until they are
+            assigned.
+          </p>
+        )}
       </Section>
 
       {/* ── REWARDS ────────────────────────────────────────────── */}
@@ -349,9 +388,9 @@ export default function StaffHelp({ role }: { role: Role }) {
           ]}
         />
         <p>
-          Toggle a claim's status using the status button on the claims page. For physical rewards,
-          mark <Term>FULFILLED</Term> once the item has been dispatched. For digital rewards, mark
-          fulfilled once the code or file has been sent.
+          {isAdmin
+            ? "Toggle a claim's status using the status button on the claims page. For physical rewards, mark FULFILLED once the item has been dispatched. For digital rewards, mark fulfilled once the code or file has been sent."
+            : 'The moderator claims view is read-only; an admin updates fulfillment status.'}
         </p>
         {isAdmin && (
           <p>
@@ -365,17 +404,31 @@ export default function StaffHelp({ role }: { role: Role }) {
       {/* ── DONATIONS ──────────────────────────────────────────── */}
       <Section title="donations">
         <p>
-          The donations list shows all completed donations. Each row includes the amount, channel,
-          timestamp, and donor name.{' '}
+          The donations list shows donations of every status, with a status filter. Each row
+          includes the amount, channel, timestamp, and donor name.{' '}
           {isAdmin
             ? 'Admin view also includes donor email.'
             : 'Moderator view never shows donor email (privacy invariant).'}
         </p>
         <p>
           <Term>Moderation flag</Term> — toggle the <Code>moderated</Code> flag on any donation to
-          record that a human has reviewed it. This flag is used by downstream tools (overlays,
-          exports). It does <em>not</em> block or hide the donation.
+          record that a human has reviewed it. It is sent only to native-format destinations that
+          subscribe to it; overlays never see it. It does <em>not</em> block or hide the donation.
         </p>
+        <p>
+          <Term>Hide from overlay</Term> — removes the donation from the stream overlay (it is
+          re-sent as "Anonymous" with no message). The donation still counts toward totals.
+          Un-hiding re-adds it and plays the alert again.
+        </p>
+        {isAdmin && (
+          <p>
+            <Term>Status</Term> — set with the status control on a donation row. A{' '}
+            <Code>REFUNDED</Code> donation goes back to the donor's wallet: it still counts toward
+            totals and nothing is sent to overlays. A <Code>CHARGEBACK</Code> lowers the totals and
+            the overlays get the new totals. Both claw back what is left of the donation in the
+            donor's balance, and are final.
+          </p>
+        )}
         {isAdmin && (
           <p>
             The admin donations list is the only place in the UI where donor emails appear alongside
@@ -470,9 +523,12 @@ export default function StaffHelp({ role }: { role: Role }) {
       {isAdmin && (
         <Section title="destinations (webhooks & rabbitmq)">
           <p>
-            <Term>Destinations</Term> are outbound event delivery targets. Every significant
-            platform event (incentive created, donation processed, pledge fulfilled, etc.) is
-            delivered to all enabled destinations.
+            <Term>Destinations</Term> are where webhook messages are sent. Every significant
+            platform change (donation created, moderated, hidden or shown again; incentive created,
+            enabled, disabled or changed) is sent, in order, to every active native-format
+            destination subscribed to it. A Tiltify-compatible destination instead gets donations
+            and totals only; kollekt and esa-layouts-v2 read incentives from the Tiltify-compatible
+            API at <Code>/api/tiltify/</Code>.
           </p>
           <Table
             headers={['type', 'notes']}
@@ -490,6 +546,10 @@ export default function StaffHelp({ role }: { role: Role }) {
           <p>Managing destinations:</p>
           <ul className="list-disc pl-5 space-y-1">
             <li>
+              <Term>Payload format</Term> — <Term>Native</Term> is our envelope, for our own tools.{' '}
+              <Term>Tiltify-compatible</Term> is RabbitMQ only, for kollekt and esa-layouts-v2.
+            </li>
+            <li>
               <Term>Create</Term> — provide a URL (HTTP) or exchange config (RABBITMQ). A signing
               secret is auto-generated if not supplied.
             </li>
@@ -498,11 +558,23 @@ export default function StaffHelp({ role }: { role: Role }) {
               before rotating to avoid a delivery gap.
             </li>
             <li>
-              <Term>Delivery log</Term> — paginated history of deliveries for a destination (status,
-              timestamp, event type). Use to diagnose missed events.
+              <Term>Delivery log</Term> — recent deliveries for a destination (status, attempts,
+              next attempt, last error). Successful rows are kept 2 hours, failed rows 24 hours;
+              waiting rows are never removed.
             </li>
             <li>
               <Term>Test ping</Term> — queues a <Code>ping</Code> delivery to verify connectivity.
+            </li>
+            <li>
+              <Term>Stalls</Term> — If a destination is down or answers with an error (including 4xx
+              such as 429), its messages wait and are retried forever, every few seconds up to every
+              3 minutes, in order. Nothing is skipped. Fix the destination and delivery resumes by
+              itself. Set it inactive to pause it.
+            </li>
+            <li>
+              <Term>Requeue</Term> — A delivery shows FAILED only when the message itself was
+              malformed (a bug). After the fix, use requeue on the row or requeue all failed; it is
+              re-sent at its original position.
             </li>
           </ul>
         </Section>
@@ -516,9 +588,10 @@ export default function StaffHelp({ role }: { role: Role }) {
             testing, onboarding, or to manually credit a donor outside the normal flow.
           </p>
           <p>
-            Fields: <Term>donor email</Term>, <Term>amount</Term>, optional{' '}
-            <Term>pledge token</Term> (links the donation to an existing pending pledge), optional{' '}
-            <Term>channel</Term>, and optional <Term>comment</Term>.
+            Fields: <Term>donor email</Term>, <Term>amount</Term>, optional <Term>donor name</Term>,{' '}
+            <Term>channel</Term> and <Term>comment</Term>. To record a real donation received
+            outside Stripe, also set the <Term>external reference</Term> (the other platform's
+            transaction id; must be unique) and the <Term>date received</Term>.
           </p>
           <p>
             The response includes a <Term>magic link</Term>. Share it with the donor (or open it

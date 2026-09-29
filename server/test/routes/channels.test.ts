@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import channelsRouter from '../../routes/channels.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -34,25 +35,39 @@ async function makeModerator() {
 describe('Channels', () => {
   const createdChannelIds: string[] = [];
   const createdDonorIds: string[] = [];
+  const createdEventIds: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ADMIN_API_KEY = 'test-admin-key';
+    await ensureDefaultEvent(prisma);
   });
 
   afterAll(async () => {
     await prisma.donation.deleteMany({ where: { donor_id: { in: createdDonorIds } } });
     await prisma.donor.deleteMany({ where: { id: { in: createdDonorIds } } });
+    // Events may point at a channel we created (FK), so clear those first.
+    await prisma.event.updateMany({
+      where: {
+        OR: [{ primary_channel_id: { in: createdChannelIds } }, { id: { in: createdEventIds } }],
+      },
+      data: { primary_channel_id: null },
+    });
+    // Channels created on a test Event by a helper (createTestChannel) are not in
+    // createdChannelIds; without this the Event delete fails on the FK and leaks.
+    await prisma.channel.deleteMany({ where: { event_id: { in: createdEventIds } } });
     await prisma.channel.deleteMany({ where: { id: { in: createdChannelIds } } });
+    await prisma.event.deleteMany({ where: { id: { in: createdEventIds } } });
     await prisma.$disconnect();
   });
 
   describe('GET /api/channels (public)', () => {
     it('returns only active channels', async () => {
-      const active = await prisma.channel.create({
-        data: { name: `Public Active ${crypto.randomUUID()}` },
+      const active = await createTestChannel(prisma, {
+        name: `Public Active ${crypto.randomUUID()}`,
       });
-      const inactive = await prisma.channel.create({
-        data: { name: `Public Inactive ${crypto.randomUUID()}`, is_active: false },
+      const inactive = await createTestChannel(prisma, {
+        name: `Public Inactive ${crypto.randomUUID()}`,
+        is_active: false,
       });
       createdChannelIds.push(active.id, inactive.id);
 
@@ -100,7 +115,7 @@ describe('Channels', () => {
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
 
-    it('rejects duplicate event names', async () => {
+    it('rejects duplicate channel names', async () => {
       const name = `Dup Event ${crypto.randomUUID()}`;
       const first = await request(createApp()).post('/api/admin/channels').send({ name }).set(auth);
       createdChannelIds.push(first.body.id);
@@ -113,8 +128,8 @@ describe('Channels', () => {
     });
 
     it('includes per-channel raised totals in /admin/stats', async () => {
-      const channel = await prisma.channel.create({
-        data: { name: `Stats Event ${crypto.randomUUID()}` },
+      const channel = await createTestChannel(prisma, {
+        name: `Stats Channel ${crypto.randomUUID()}`,
       });
       createdChannelIds.push(channel.id);
 
@@ -167,6 +182,192 @@ describe('Channels', () => {
         .send({ is_active: false });
       expect(updateRes.status).toBe(200);
       expect(updateRes.body.is_active).toBe(false);
+    });
+  });
+
+  describe('channel identity rules', () => {
+    const auth = { Authorization: 'Bearer key_admin_test-admin-key' };
+    const rand = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+
+    async function makeEvent(name: string, slug = `qa-${rand()}`) {
+      const event = await prisma.event.create({ data: { name, slug } });
+      createdEventIds.push(event.id);
+      return event;
+    }
+
+    it('derives a slug from the name and uses the given event_id', async () => {
+      const suffix = rand();
+      const res = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ name: `QA Stream ${suffix}`, event_id: DEFAULT_EVENT_ID })
+        .set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body.slug).toBe(`qa-stream-${suffix}`);
+      expect(res.body.event_id).toBe(DEFAULT_EVENT_ID);
+      createdChannelIds.push(res.body.id);
+    });
+
+    it('uses the only event when event_id is omitted, and requires it when there are several', async () => {
+      // Other test files may leave extra Events behind, so assert whichever rule
+      // applies to the Events that exist right now; both branches are real checks.
+      const suffix = rand();
+      const events = await prisma.event.count();
+      const res = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ name: `QA Fallback ${suffix}` })
+        .set(auth);
+      if (events === 1) {
+        expect(res.status).toBe(200);
+        expect(res.body.slug).toBe(`qa-fallback-${suffix}`);
+        expect(res.body.event_id).toBe(DEFAULT_EVENT_ID);
+        createdChannelIds.push(res.body.id);
+      } else {
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/event_id is required/);
+      }
+    });
+
+    it('rejects a non-boolean is_active with 400 (it must not bypass the primary-channel rule)', async () => {
+      const event = await makeEvent(`Bool Guard ${rand()}`);
+      const channel = await createTestChannel(prisma, {
+        name: `Bool ${rand()}`,
+        event_id: event.id,
+      });
+      createdChannelIds.push(channel.id);
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: channel.id, is_active: true },
+      });
+
+      for (const value of ['false', 0, null]) {
+        const res = await request(createApp())
+          .put(`/api/admin/channels/${channel.id}`)
+          .send({ is_active: value })
+          .set(auth);
+        expect(res.status).toBe(400);
+      }
+      expect((await prisma.channel.findUnique({ where: { id: channel.id } }))!.is_active).toBe(
+        true,
+      );
+    });
+
+    it('rejects an invalid slug with 400', async () => {
+      const res = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ name: `Bad Slug ${rand()}`, slug: 'Bad.Slug', event_id: DEFAULT_EVENT_ID })
+        .set(auth);
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a slug already used by an Event with 409', async () => {
+      const slug = `qa-taken-${rand()}`;
+      await makeEvent(`Taken ${rand()}`, slug);
+
+      const res = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ name: `Taken Slug ${rand()}`, slug, event_id: DEFAULT_EVENT_ID })
+        .set(auth);
+      expect(res.status).toBe(409);
+    });
+
+    it('rejects an unknown event_id with 400', async () => {
+      const res = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ name: `Unknown Event ${rand()}`, event_id: 'does-not-exist' })
+        .set(auth);
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a slug change on an active channel with 409', async () => {
+      const channel = await createTestChannel(prisma, { name: `Active Slug ${rand()}` });
+      createdChannelIds.push(channel.id);
+
+      const res = await request(createApp())
+        .put(`/api/admin/channels/${channel.id}`)
+        .send({ slug: `qa-new-${rand()}` })
+        .set(auth);
+      expect(res.status).toBe(409);
+    });
+
+    it('allows a slug change on an inactive channel', async () => {
+      const channel = await createTestChannel(prisma, {
+        name: `Inactive Slug ${rand()}`,
+        is_active: false,
+      });
+      createdChannelIds.push(channel.id);
+      const newSlug = `qa-inactive-${rand()}`;
+
+      const res = await request(createApp())
+        .put(`/api/admin/channels/${channel.id}`)
+        .send({ slug: newSlug })
+        .set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body.slug).toBe(newSlug);
+    });
+
+    it('protects the primary channel of an active event from deactivation/deletion', async () => {
+      const event = await makeEvent(`Primary Guard ${rand()}`);
+      const channel = await createTestChannel(prisma, {
+        name: `Primary ${rand()}`,
+        event_id: event.id,
+      });
+      createdChannelIds.push(channel.id);
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: channel.id, is_active: true },
+      });
+
+      const deactivateRes = await request(createApp())
+        .put(`/api/admin/channels/${channel.id}`)
+        .send({ is_active: false })
+        .set(auth);
+      expect(deactivateRes.status).toBe(409);
+
+      const deleteRes = await request(createApp())
+        .delete(`/api/admin/channels/${channel.id}`)
+        .set(auth);
+      expect(deleteRes.status).toBe(409);
+
+      // Once the event is no longer active, the channel may be deactivated.
+      await prisma.event.update({ where: { id: event.id }, data: { is_active: false } });
+
+      const retryRes = await request(createApp())
+        .delete(`/api/admin/channels/${channel.id}`)
+        .set(auth);
+      expect(retryRes.status).toBe(200);
+      expect(retryRes.body.channel.is_active).toBe(false);
+    });
+
+    it('rejects moving the primary channel of an active event to another event with 409', async () => {
+      const event = await makeEvent(`Move Guard ${rand()}`);
+      const otherEvent = await makeEvent(`Move Target ${rand()}`);
+      const channel = await createTestChannel(prisma, {
+        name: `Move Primary ${rand()}`,
+        event_id: event.id,
+      });
+      createdChannelIds.push(channel.id);
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: channel.id, is_active: true },
+      });
+
+      const res = await request(createApp())
+        .put(`/api/admin/channels/${channel.id}`)
+        .send({ event_id: otherEvent.id })
+        .set(auth);
+      expect(res.status).toBe(409);
+    });
+
+    it('applies the slug rule through /api/moderator/channels too', async () => {
+      const { token } = await makeModerator();
+      const channel = await createTestChannel(prisma, { name: `Mod Slug ${rand()}` });
+      createdChannelIds.push(channel.id);
+
+      const res = await request(createApp())
+        .put(`/api/moderator/channels/${channel.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ slug: `qa-mod-${rand()}` });
+      expect(res.status).toBe(409);
     });
   });
 });

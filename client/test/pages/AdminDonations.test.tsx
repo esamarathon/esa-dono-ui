@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const adminClient = vi.hoisted(() => ({
   get: vi.fn(),
   patch: vi.fn(),
 }));
 
-vi.mock('../../src/api/admin', () => ({ default: adminClient }));
+const assignDonationChannel = vi.hoisted(() => vi.fn());
+
+vi.mock('../../src/api/admin', () => ({ default: adminClient, assignDonationChannel }));
 
 import AdminDonations from '../../src/pages/admin/AdminDonations';
 
@@ -18,6 +20,9 @@ const donation = {
   created_at: '2026-01-01T00:00:00Z',
   donor: { email: 'alice@example.com' },
   status: 'COMPLETED',
+  channel_id: 'c1',
+  event_id: 'e1',
+  channel: { id: 'c1', name: 'Main' },
 };
 
 const claim = {
@@ -90,5 +95,60 @@ describe('AdminDonations', () => {
     fireEvent.change(screen.getByDisplayValue('COMPLETED'), { target: { value: 'REFUNDED' } });
 
     expect(adminClient.patch).toHaveBeenCalledWith('/donations/d1/status', { status: 'REFUNDED' });
+  });
+
+  it('shows a channel name for assigned donations and "unassigned" otherwise (#115)', async () => {
+    const unassigned = { ...donation, id: 'd2', channel_id: null, event_id: null, channel: null };
+    adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/donations' ? [donation, unassigned] : [] }),
+    );
+
+    render(<AdminDonations />);
+
+    expect(await screen.findByText('Main')).toBeInTheDocument();
+    expect(screen.getByText('unassigned')).toBeInTheDocument();
+  });
+
+  it('filters to unassigned donations only (#115)', async () => {
+    const unassigned = { ...donation, id: 'd2', channel_id: null, event_id: null, channel: null };
+    adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data: path === '/donations' ? [donation, unassigned] : [],
+      }),
+    );
+
+    render(<AdminDonations />);
+
+    expect(await screen.findAllByText('Alice')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'unassigned only' }));
+
+    await waitFor(() => expect(screen.getAllByText('Alice')).toHaveLength(1));
+  });
+
+  it('assigns an unassigned donation to a channel (#115)', async () => {
+    const unassigned = { ...donation, id: 'd2', channel_id: null, event_id: null, channel: null };
+    adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data:
+          path === '/donations'
+            ? [unassigned]
+            : path === '/channels'
+              ? [{ id: 'c9', name: 'Side' }]
+              : [],
+      }),
+    );
+    assignDonationChannel.mockResolvedValue({ data: { ...unassigned, channel_id: 'c9' } });
+
+    render(<AdminDonations />);
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /assign channel for d2/ }), {
+      target: { value: 'c9' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'assign…' }));
+
+    await waitFor(() => expect(assignDonationChannel).toHaveBeenCalledWith('d2', 'c9'));
   });
 });

@@ -52,8 +52,8 @@ The codebase is **TypeScript (strict)** across both workspaces (see
   It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
 - `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
 - Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too
-  (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, `eslint.config.ts` — the
-  last loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is
+  (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, and one `eslint.config.ts` per
+  workspace — loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is
   `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts`
   PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
 
@@ -64,7 +64,7 @@ The codebase is **TypeScript (strict)** across both workspaces (see
 Two production images (mirrors the esa-waypoint split backend/frontend pattern):
 
 - **`Dockerfile.backend`** — Express + Prisma API. Multi-stage:
-  - `test` target: full dev deps + source, entrypoint runs `scripts/run-tests.mjs` (used by CI `container-test`).
+  - `test` target: full dev deps + source, entrypoint runs `scripts/run-tests.ts` (used by CI `container-test`).
   - `runtime` target: production API. Built from a slim `runtime-deps` stage (`npm ci --omit=dev`; `tsx` and `prisma` are production deps so no dev toolchain is shipped, and the base image's bundled npm is stripped). Applies `prisma migrate deploy` on startup via `docker-entrypoint.backend.sh`, runs non-root, SQLite lives in the `/data` volume (`DATABASE_URL=file:/data/dono.db`), health check on `/api/health`.
 - **`Dockerfile.frontend`** — builds the Vite SPA and serves it via `nginx-unprivileged` on port 8080. `nginx.conf` (templated to `default.conf.template`) does SPA fallback and proxies `/api/` → `http://backend:3001`. Uses the built-in `15-local-resolvers` script (`NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1`) so DNS resolution works on both Docker and Podman.
 
@@ -81,6 +81,8 @@ After building, always confirm the stack _functions_ — not just that the image
 ```bash
 ADMIN_API_KEY=change-me FRONTEND_PORT=18080 ./scripts/smoke-test.sh
 ```
+
+**Behind an external proxy** (Caddy, a TLS terminator, a load balancer) in front of the frontend container, set **`TRUST_PROXY=2`** (one more per extra proxy). Otherwise every visitor shares one rate-limit bucket (#140). See `docs/deployment.md` § Client IP and `TRUST_PROXY`.
 
 The CI `container-test` job runs this against the freshly built runtime images, and `docker-publish.yml` runs it against the just-pushed `:<sha>` images (not `:latest`, so it verifies exactly what this run built, on any branch) after the Trivy gate.
 
@@ -116,28 +118,45 @@ To re-run the seed (e.g., after clearing the DB or updating env keys):
 cd server && npx prisma db seed
 ```
 
+## Vocabulary
+
+Read `CONTEXT.md` before naming anything. **Event** means the charity event (a marathon or
+a one-day stream event). A notification sent to a Destination is a **webhook message** —
+not an "event". Webhook code under `server/services/webhooks/` uses "message"
+(`WebhookDestination`, `WebhookDelivery`, `message_type`, `emitWebhookMessage`); an ESLint
+warning flags new `Event`-named identifiers there. The wire keeps "event" where it is an
+external contract (`X-Webhook-Event`, `x-webhook-event`, admin API `event_types`,
+delivery-log `event_type`). See `docs/adr/0006-webhook-vocabulary.md`.
+
 ## Architecture
 
-npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.js`).
+npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.ts`).
 
 ### Server
 
 - `server/index.ts` — Express entry point. The Stripe webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
-- `server/lib/prisma.ts` — Prisma singleton using `globalThis` cache to survive hot reloads.
+- `server/lib/prisma.ts` — Prisma singleton using `globalThis` cache to survive hot reloads. For SQLite it forces `connection_limit=1` (concurrent interactive transactions otherwise deadlock) and a 15 s transaction `maxWait`. **Inside a transaction, always use the `tx` client**: a query on the global `prisma` from inside a transaction waits for that transaction and times out (ADR-0007).
 - `server/services/stripe.ts` — Stripe SDK wrapper: `createCheckoutSession()` (hosted Checkout for a pledge), `verifyWebhook()` (signature verification via `stripe.webhooks.constructEvent`, or JSON parse when no secret), `isStripeConfigured()`. Degrades gracefully when `STRIPE_SECRET_KEY` is unset.
 - `server/services/donation.ts` — Shared `processDonation()` (upserts donor + donation, sends magic link, auto-fulfills pledge) used by both webhook and simulation. Also exports `checkBlockedWords()` for custom poll entry validation.
 - `server/services/spend.ts` — Reusable `tx`-aware spend helpers (`claimRewardTx`, `votePollTx`, `contributeGoalTx`) shared between HTTP routes and pledge fulfillment.
-- `server/services/pledge.ts` — Pledge lifecycle: `createPledge()` (validates items + optional comment ≤500 chars via `checkBlockedWords`, requires a valid active `event_id` and rejects items whose incentive belongs to a different event, persists `PendingPledge`), `resolvePledge()` (by token or email fallback), `fulfillPledge()` (executes items inside a donation transaction), `createCheckoutForPledge()` (creates a Stripe Checkout Session for deterministic linkage).
+- `server/services/pledge.ts` — Pledge lifecycle: `createPledge()` (validates items + optional comment ≤500 chars via `checkBlockedWords`, requires a valid active `channel_id` and rejects items whose incentive belongs to a different channel, persists `PendingPledge`), `resolvePledge()` (by token or email fallback), `fulfillPledge()` (executes items inside a donation transaction), `createCheckoutForPledge()` (creates a Stripe Checkout Session for deterministic linkage).
 - `server/services/email.ts` — Nodemailer magic link sender; called fire-and-forget from the webhook handler.
+- `server/services/webhooks/` — outbound webhook messages (ADR-0007, runbook in `docs/outbound-events.md`). `outbox.ts` `withWebhooks(fn)` is the **only** way to emit: it runs the change and `emit(type, () => payload)` in one transaction (delivery rows + per-destination `seq` commit or roll back with the change) and wakes the dispatcher after commit. `delivery.ts` — `emitWebhookMessage(tx, …)`, payload builders, `signPayload()`. `dispatcher.ts` — strict per-destination FIFO drain: head = lowest-`seq` `PENDING` row with **no** time filter (not due → stall, never skip); endpoint failures (any transport error, any non-2xx incl. 4xx, missing RabbitMQ config) retry forever with 5/15/60/180 s backoff; message failures (empty/unparseable payload) → `FAILED`, queue moves on; in-process single-flight; 5 s safety tick; retention sweep deletes `SUCCESS` > 2 h and `FAILED` > 24 h, never `PENDING`. Admin requeue: `POST /api/admin/destinations/:id/deliveries/:deliveryId/requeue` and `/requeue-failed` (keep original `seq`). Prisma models `WebhookDestination`/`WebhookDestinationSeq`/`WebhookDelivery` map to tables `WebhookEndpoint`/`WebhookEndpointSeq`/`WebhookDelivery`; `message_type` maps to column `event_type`; `message_id` is one UUID per message (AMQP `messageId`). **Payload formats** (ADR-0009, runbook § Formats): a Destination is `NATIVE` (envelope, filtered by `event_types`) or `TILTIFY`. `TILTIFY` is RabbitMQ-only (400 on HTTP), and its routing key is carried per delivery (`WebhookDelivery.routing_key`). The `tiltify` exchange is asserted once per connection. `withWebhooks(async (tx, emit, tiltify) => …)` exposes `tiltify.donation(id)` and `tiltify.totals(channelId)`. Builders are in `tiltifyPayload.ts` and read inside the transaction, so call them after the change. They are no-ops when no `TILTIFY` Destination is active. Emit points: donation created/assigned → native `donation.created` + Tiltify donation + two totals. A status change that moves the totals (chargeback; not a wallet refund, `countsTowardTotals`) → totals. Moderator hide/show (`PATCH /api/moderator/donations/:id` `{ hidden_from_overlay }`) → `donation.hidden`/`unhidden` + a Tiltify donation (hidden = `"Anonymous"`, null comment, no `completed_at`). The `moderated` toggle → native only. `RewardClaim`/`PollVote`/`FundContribution.donation_id` link the rows to the donation whose pledge paid for them; the Tiltify donation lists those rows (not pledge items, which can fail), and a write-in vote only once its option is `ACTIVE`. Contract tests: `server/test/services/webhooks/tiltify.test.ts`.
 - `server/middleware/adminAuth.ts` — Checks the `Authorization: Bearer key_admin_<key>` credential against `ADMIN_API_KEY` env var (ADR 0004).
 - `server/middleware/donorAuth.ts` — Resolves the donor magic token from the `dono_session` httpOnly cookie (browser) or `Authorization: Bearer <token>` (API) to a `Donor` record; sets `req.donor`. The legacy `?token=` query param was removed.
 - `server/lib/session.ts` — httpOnly `dono_session` cookie helpers (set/clear/read); the cookie value is the donor magic token, so revocation is unchanged.
 - `server/lib/authHeader.ts` — Parses `Authorization: Bearer` into a typed credential (`donor_` / `key_admin_` / `key_mod_` prefixes; bare = donor token).
 - `server/middleware/moderatorAuth.ts` — Grants moderator access via a `Bearer key_admin_`/`key_mod_` key match, or a donor (via `donorAuth`) whose effective `role` is `MODERATOR`/`ADMIN`.
 - `server/lib/roles.ts` — Role constants (`USER`/`MODERATOR`/`ADMIN`), `hasModeratorAccess()`/`hasAdminAccess()`, and `resolveEffectiveRole()` which re-checks the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists on every authenticated request (never downgrading below the donor's persisted `role`).
-- `server/middleware/moderatorAuth.ts` — Grants moderator access via a `Bearer key_admin_`/`key_mod_` key match, or a donor (via `donorAuth`) whose effective `role` is `MODERATOR`/`ADMIN`.
-- `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, events, and custom entry approval. Also exposes read access to **all donations** plus `PATCH /donations/:id` to toggle a `moderated` flag (`moderated_at`/`moderated_by`), so downstream tools (exports, leaderboards, future Discord role sync) can rely on which donations a human has reviewed. **Never selects/includes `donor.email`** in any handler — see the invariant comment at the top of the file and `test/routes/moderator-donor-email.test.ts`, which statically scans the whole file so a reintroduced leak fails CI regardless of which endpoint it's added to (this has regressed twice: fixed for claims/custom-entries, then again for donations, because the first fix wasn't swept file-wide and had no regression test). Only `server/routes/admin.ts` (gated by `X-Admin-Key`) may expose donor email.
-- `server/routes/events.ts` — `GET /api/events`, public list of active events (used by the `/donate` event picker). Event CRUD itself lives in `admin.ts`/`moderator.ts` (see Events below).
+- `server/routes/moderator.ts` — Moderator CRUD for polls, rewards, goals, claims, channels, and custom entry approval. Also exposes read access to **all donations** plus `PATCH /donations/:id` to toggle a `moderated` flag (`moderated_at`/`moderated_by`), so downstream tools (exports, leaderboards, future Discord role sync) can rely on which donations a human has reviewed. **Never selects/includes `donor.email`** in any handler — see the invariant comment at the top of the file and `server/test/routes/moderator-donor-email.test.ts`, which statically scans the whole file so a reintroduced leak fails CI regardless of which endpoint it's added to (this has regressed twice: fixed for claims/custom-entries, then again for donations, because the first fix wasn't swept file-wide and had no regression test). Only `server/routes/admin.ts` (gated by the admin key or an ADMIN session, `middleware/adminAuth.ts`) may expose donor email.
+- `server/routes/channels.ts` — `GET /api/channels`, public list of active channels (used by the `/donate` channel picker). Channel CRUD lives in `admin.ts`/`moderator.ts` and delegates to `services/channels.ts` (see Events and Channels below).
+- `server/routes/tiltify.ts` + `server/services/tiltifyApi.ts`: the Tiltify-compatible read API at `/api/tiltify` (ADR-0010, PRD-0002 §R). It replaces ESATiltifyBridge for kollekt and esa-layouts-v2. Routes: `campaigns/{id}` (a Channel with `team_id` = its Event, or an Event with `team_id: null`) and `campaign/{id}/rewards|targets|polls|polls/{poll_id}|milestones|matches`.
+  - Responses are **bare** Tiltify-v5 objects and arrays; an unknown id returns 404.
+  - Public; only the global API limit (`RATE_LIMIT_API`) applies.
+  - Shared incentives (`channel_id = null`) are listed under every Channel; an Event lists none (kollekt#36 must look up incentives by id across campaigns).
+  - Milestones and matches are `[]`.
+  - `total_amount_raised` uses `channelTotalCents`/`eventTotalCents` from `lib/donationTotals.ts`, the same numbers as the `fact.updated` message.
+  - Contract tests: `server/test/routes/tiltify.test.ts`. Consumer config: `docs/outbound-events.md` § Consumer setup.
 - `server/routes/feedback.ts` — `POST /api/feedback`, public/unauthenticated multipart endpoint for the floating feedback widget (text + optional screenshot + session metadata). Gated on the `feedback` feature flag (404 when disabled) and rate-limited via `RATE_LIMIT_FEEDBACK`. Delegates to `server/services/feedback.ts`, which posts to the `DISCORD_FEEDBACK_WEBHOOK_URL` Discord webhook (503 if unset, 502 on Discord failure/non-2xx). Nothing is persisted — the server is a stateless proxy; metadata keys resembling `email`/`token` are stripped before forwarding.
 
 ### Moderator Setup
@@ -146,7 +165,7 @@ Donors have a `role` field (`USER` | `MODERATOR` | `ADMIN`, `ADMIN` implies mode
 
 - Set `ADMIN_EMAILS`/`MODERATOR_EMAILS` env vars (comma-separated) to allowlist emails. `resolveEffectiveRole()` re-checks these allowlists on every authenticated request (in `donorAuth`), granting the role without ever persisting it as a result of a donation. Allowlist resolution is **gated on `Donor.email_verified`** — the email must have been verified via an OAuth login (Google/Discord) before it earns an allowlist role, so a self-supplied Stripe checkout email can never buy moderator/admin access. Donors not on an allowlist keep their persisted `role` (default `USER`), which an `ADMIN_API_KEY` holder can change explicitly via `PATCH /api/admin/donors/:id/role`.
 - `MODERATOR_API_KEY`/`ADMIN_API_KEY` also grant moderator access directly via `Authorization: Bearer key_mod_<key>`/`Bearer key_admin_<key>` — an operational fallback independent of the donor/role system, useful for bootstrapping or scripting.
-- Moderators/admins access their dashboard at `/moderate` via their magic link (Navbar shows a "Moderate" link when `hasModeratorAccess(donor.role)`), or by entering a moderator key directly in the `/moderate` login gate. They can CRUD polls/rewards/goals, view claims (read-only — fulfillment status/toggle was removed from the moderator view, #56; only `/api/admin/*` retains a claim-status PATCH), and approve custom poll entries. They cannot access `/api/admin/*` routes (require the admin key).
+- Moderators/admins access their dashboard at `/moderate` via their magic link (the user menu, `client/src/components/UserMenu.tsx`, shows a "Moderate" link when `hasModeratorAccess(donor.role)`), or by entering a moderator key directly in the `/moderate` login gate. They can CRUD polls/rewards/goals, view claims (read-only — fulfillment status/toggle was removed from the moderator view, #56; only `/api/admin/*` retains a claim-status PATCH), and approve custom poll entries. They cannot access `/api/admin/*` routes (require the admin key).
 - **SSO / verified identity**: `server/services/oauth.ts` + `server/routes/auth.ts` implement OAuth login for Google, Discord, and Twitch. `GET /api/auth/:provider` starts the flow (CSRF `state` in an HttpOnly cookie); the callback exchanges the code, upserts the donor by verified email (creating an empty donor on first sign-in), sets the `dono_session` httpOnly cookie, and redirects to `/wallet` (the token never appears in the URL). Google/Discord assert the email is verified (setting `Donor.email_verified = true`); Twitch has no verification flag, so its email stays unverified. A donor can also request a fresh magic link by email via `POST /api/auth/request-token` (rotates the token, uniform response to avoid enumeration).
 
 ### Webhook flow (`server/routes/webhook.ts`)
@@ -170,17 +189,35 @@ The smart donation cart lets donors select incentives before donating. The flow:
 
 All balance changes (reward claims, poll votes, goal contributions) use `prisma.$transaction` with the shared `tx`-aware helpers in `server/services/spend.ts` to keep `Donor.balance_remaining` and the associated record creation atomic. Both HTTP routes and pledge fulfillment use the same helpers.
 
-### Events
+### Events and Channels
 
-A `Event` model (`id`, `name`, `is_active`) lets one deployment run multiple concurrent donation events/campaigns (e.g. two simultaneous runs) while routing each donation to the correct overlay/event. Key invariants:
+Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 
-- **Every donation is required to route to exactly one event.** `POST /api/pledge` rejects a missing/unknown/inactive `event_id` with 400 — this is not optional, since downstream overlays key off it.
-- **Incentives are either event-specific or shared.** `Reward`, `Poll`, and `FundGoal` each have a nullable `event_id`: `null` means the incentive is shared and shows up (and can be added to the cart) regardless of which event is selected; a set value scopes it to that one event.
-- **Incentives cannot be mixed across events in a single donation.** `createPledge()` rejects any cart item whose incentive `event_id` is set and differs from the pledge's `event_id` (`"... belongs to a different event and cannot be added to this cart"`). Shared incentives are always allowed.
-- **The event propagates from pledge to donation.** `processDonation()` copies `pledge.event_id` onto the created `Donation` on fulfillment (`server/services/donation.ts`); non-pledge donations (e.g. `POST /api/admin/simulate-donation`) can pass `event_id` directly via the `eventId` option.
-- **Events are admin/moderator-managed**, not env-configured — `GET/POST /api/admin/events`, `PUT/DELETE /api/admin/events/:id` (mirrored under `/api/moderator/events`). Deleting an event **deactivates** it (`is_active: false`) rather than removing the row, since incentives/donations/pledges may still reference it.
-- **Per-event totals are admin-only.** `GET /api/admin/stats` includes a `events: [{ id, name, raised_cents, donations }]` breakdown; the public `/api/campaign` endpoint intentionally keeps a single overall raised/goal total — there is no public per-event leaderboard.
-- **Client**: the `/donate` page requires selecting an event (via `CartContext.selectEvent`) before showing any incentives — the reward/poll/goal lists returned by the context are pre-filtered to shared + the selected event. Switching events with event-specific items already in the cart triggers a confirm dialog (`CartContext.pendingEventId` / `confirmEventSwitch` / `cancelEventSwitch`) that drops those items on confirmation and keeps shared ones — the "no mixing incentives across events" rule enforced client-side before the server ever sees the request.
+- **Event** (`Event`: `id`, `name`, `slug`, `is_active`, `primary_channel_id`) — the charity event: a marathon or a one-day stream event. Tiltify calls it a _team campaign_. An Event can only be active with an active **primary channel** of its own (`services/events.ts` `assertCanActivateEvent`); the primary channel of an active Event cannot be deactivated or moved to another Event (409).
+- **Channel** (`Channel`: `id`, `name`, `slug`, `event_id`, `is_active`) — one stream within an Event. Tiltify calls it a _campaign_. Every Channel belongs to exactly one Event.
+- **Slugs** (`lib/slugs.ts`) — `^[a-z0-9]+(-[a-z0-9]+)*$`, 3–64 chars, not reserved, unique across Events **and** Channels. They appear in URLs and AMQP routing keys (`<slug>.donation`), so a slug cannot change while its Event/Channel is active. No `.`: it is the AMQP topic separator.
+- **Ids are UUIDs** (`@default(uuid())`) — kollekt requires them.
+- Channel create/update/deactivate goes through `services/channels.ts` (shared by `/api/admin/channels` and `/api/moderator/channels`). `slug` defaults to one derived from `name`; `event_id` defaults to the only Event when exactly one exists (the migration creates `default-event`). `prisma db seed` makes one Event active with a primary Channel.
+- **Event API** (`services/events.ts`): `GET/POST /api/admin/events`, `PUT/DELETE /api/admin/events/:id` (delete = deactivate), mirrored under `/api/moderator/events`. New Events start inactive. The slug is fixed while active; the primary must be one of the Event's Channels; activating requires an active primary. Public: `GET /api/events` (active Events with their active Channels) and `GET /api/events/:slug` (`routes/events.ts`).
+- **Donation routing** (`services/routing.ts` `resolveDonationRoute`, PRD-0002 §E5), applied in `processDonation()` for every path (pledge, Stripe webhook, `simulate-donation`):
+  1. a fulfilled pledge's Channel, or an explicit `channel_id` → that Channel and its Event;
+  2. else `event_id` → that Event's primary Channel;
+  3. else exactly one active Event → its primary Channel;
+  4. else **unassigned** (`channel_id` and `event_id` null) and **no webhook message is queued**.
+
+  An admin assigns it with `PATCH /api/admin/donations/:id/channel`, which sets both ids and publishes `donation.created` in the same transaction. A donation is never reassigned (409).
+
+- **Donate URLs**: `/donate/<event-slug>` and `/donate/<event-slug>/<channel-slug>` preselect the Channel. `/donate` keeps its picker; `?channel=<id>` still works.
+- **Every pledge routes to exactly one channel.** `POST /api/pledge` rejects a missing/unknown/inactive `channel_id` with 400. `processDonation()` copies the fulfilled pledge's `channel_id` onto the `Donation`; non-pledge donations (`POST /api/admin/simulate-donation`) may pass `channel_id` directly.
+- **Incentives are channel-scoped or shared.** `Reward`, `Poll`, `FundGoal` and `Auction` have a nullable `channel_id`: `null` = shared (available from any channel); a set value scopes it to that Channel. `createPledge()` rejects an item whose incentive belongs to a different Channel.
+- `Donation.event_id` is set by routing (above). `hidden_from_overlay` is the moderator's Hide from overlay (see `server/services/webhooks/` above).
+- **Per-channel totals are admin-only.** `GET /api/admin/stats` includes `channels: [...]`. The public `/api/campaign` keeps one overall total. **Money totals count `COMPLETED` and `REFUNDED` donations**. Refunds only ever go to the donor's wallet, so the charity keeps the money. `CHARGEBACK` and `PENDING` do not count, and hidden donations do. One rule is shared by `/api/campaign`, `/api/admin/stats` and the cents metrics: `lib/donationTotals.ts` (PRD-0002 §E7).
+- **Metrics** (`services/metrics.ts`, docs in `docs/webhooks-and-metrics.md`):
+  - `dono_donations_unassigned` counts donations waiting to be assigned.
+  - Per-Event/Channel breakdowns are **separate** gauges labelled `event`/`channel` (slugs, `""` when unassigned or shared): `dono_{donated_cents,donations,reward_claims,poll_votes}_by_channel`. They are separate so `sum()` never double-counts the unlabelled totals.
+  - Cents gauges follow the same money-total rule (`COMPLETED` + `REFUNDED`).
+  - `dono_events_active` counts Events; `dono_channels_active` counts Channels.
+- **Client**: `/donate` requires selecting a channel (`CartContext.selectChannel`) before showing incentives, pre-filtered to shared + that channel. Switching channels with channel-scoped items in the cart asks for confirmation (`pendingChannelId` / `confirmChannelSwitch`) and drops those items.
 
 ### Client
 
@@ -218,6 +255,9 @@ SQLite via Prisma. All monetary values are **integer cents**. `RewardClaim.claim
 | `RATE_LIMIT_SPEND`                            | Spend-endpoint rate limit (req/min), default `20`                                                                                                                                                                                                                                                                         |
 | `RATE_LIMIT_AUTH`                             | Auth-endpoint rate limit (req/min), default `5`                                                                                                                                                                                                                                                                           |
 | `RATE_LIMIT_FEEDBACK`                         | Feedback-endpoint rate limit (req/min per IP), default `5`                                                                                                                                                                                                                                                                |
+| `RATE_LIMIT_API`                              | Global per-IP rate limit on all of `/api/*` except the Stripe webhook, health, metrics and uploads (req/min), default `600` (#140)                                                                                                                                                                                        |
+| `TRUST_PROXY`                                 | Reverse-proxy hops in front of Express (`app.set('trust proxy')`), default `1` (the frontend nginx). Set `2` behind another proxy such as Caddy, or every client shares one rate-limit bucket (#140)                                                                                                                      |
+| `WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS`             | RabbitMQ publisher-confirm timeout (ms) for outbound webhook messages, default `10000`. Must also be in `docker-compose.yml`'s passthrough (it is).                                                                                                                                                                       |
 | `DISCORD_FEEDBACK_WEBHOOK_URL`                | Discord incoming webhook URL the feedback widget posts to; unset returns 503 (graceful degradation, client shows retry)                                                                                                                                                                                                   |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                 | Backend OTLP HTTP endpoint, default `http://otelcol:4318` (the esa-observability gateway). Tracing is **disabled by default** — set `OTEL_TRACES_ENABLED=true` to enable.                                                                                                                                                 |
 | `OTEL_SERVICE_NAME`                           | Backend `service.name` resource attribute, default `esa-dono-backend`. Keep it stable — VictoriaTraces stores it as a stream field.                                                                                                                                                                                       |
@@ -240,7 +280,7 @@ VictoriaMetrics stack via OTLP HTTP:
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - W3C `traceparent` propagation links frontend and backend spans into a single
   distributed trace. The browser instruments axios/XHR (auto-injects the header),
-  the server middleware (`server/middleware`/`tracingMiddleware`) continues it.
+  the server middleware (`tracingMiddleware` in `server/lib/tracing.ts`) continues it.
 - `docker-compose.yml` does **not** join the `esa-observability_default` network by
   default (added complexity/dependency an admin opts into, not a hard requirement).
   To reach `otelcol` for tracing, an admin adds `networks: default: name:
