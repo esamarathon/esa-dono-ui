@@ -1,10 +1,10 @@
-import { Router, type Request, type Response } from 'express';
-import { sendError } from '../lib/httpError.js';
+import { Router, type Request } from 'express';
+import { handle } from '../lib/httpError.js';
 import { tiltifyLimit } from '../middleware/rateLimit.js';
 import {
   getCampaign,
   getPoll,
-  listNone,
+  listMilestonesOrMatches,
   listPolls,
   listRewards,
   listTargets,
@@ -21,54 +21,21 @@ import {
 const router = Router();
 router.use(tiltifyLimit);
 
-/** Send `value`, or 404 when the service returned null (unknown id). */
-function reply(res: Response, value: unknown) {
-  if (value === null) {
-    res.status(404).json({ error: 'Not found' });
-    return;
-  }
-  res.json(value);
+function serve(read: (campaignId: string, req: Request) => Promise<unknown>) {
+  return handle('[tiltify]', async (req, res) => {
+    res.json(await read(String(req.params.id), req));
+  });
 }
 
-function route(read: (req: Request) => Promise<unknown>) {
-  return async (req: Request, res: Response) => {
-    try {
-      reply(res, await read(req));
-    } catch (e) {
-      sendError(res, e, '[tiltify]');
-    }
-  };
-}
-
-const id = (req: Request) => String(req.params.id);
-
-router.get(
-  '/campaigns/:id',
-  route((req) => getCampaign(id(req))),
-);
-router.get(
-  '/campaign/:id/rewards',
-  route((req) => listRewards(id(req))),
-);
-router.get(
-  '/campaign/:id/targets',
-  route((req) => listTargets(id(req))),
-);
-router.get(
-  '/campaign/:id/polls',
-  route((req) => listPolls(id(req))),
-);
+router.get('/campaigns/:id', serve(getCampaign));
+router.get('/campaign/:id/rewards', serve(listRewards));
+router.get('/campaign/:id/targets', serve(listTargets));
+router.get('/campaign/:id/polls', serve(listPolls));
 router.get(
   '/campaign/:id/polls/:poll_id',
-  route((req) => getPoll(id(req), String(req.params.poll_id))),
+  serve((campaignId, req) => getPoll(campaignId, String(req.params.poll_id))),
 );
-router.get(
-  '/campaign/:id/milestones',
-  route((req) => listNone(id(req))),
-);
-router.get(
-  '/campaign/:id/matches',
-  route((req) => listNone(id(req))),
-);
+router.get('/campaign/:id/milestones', serve(listMilestonesOrMatches));
+router.get('/campaign/:id/matches', serve(listMilestonesOrMatches));
 
 export default router;

@@ -1,19 +1,8 @@
-import type { Request, Response, Router } from 'express';
+import type { Router } from 'express';
 import prisma from '../lib/prisma.js';
-import { sendError } from '../lib/httpError.js';
+import { handle } from '../lib/httpError.js';
 import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
 import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
-
-/** Wrap an async handler: Express 4 does not catch a rejected promise. */
-function handle(logPrefix: string, fn: (req: Request, res: Response) => Promise<unknown>) {
-  return async (req: Request, res: Response) => {
-    try {
-      await fn(req, res);
-    } catch (e) {
-      sendError(res, e, logPrefix);
-    }
-  };
-}
 
 /**
  * Channel and Event management (ADR-0008, PRD-0002 §E1), identical for admins

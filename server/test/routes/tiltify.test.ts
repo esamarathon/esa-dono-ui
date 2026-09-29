@@ -31,6 +31,12 @@ function createApp() {
 }
 const get = (path: string) => request(createApp()).get(`/api/tiltify${path}`);
 
+/** kollekt deserializes `inserted_at`/`updated_at` as `DateTime?`: ISO-8601 UTC. */
+function expectDate(value: unknown) {
+  expect(value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
+  expect(Number.isNaN(Date.parse(value as string))).toBe(false);
+}
+
 function expectAmount(amount: unknown, value?: string) {
   expect(amount).toEqual({
     currency: expect.stringMatching(/^[A-Z]{3}$/),
@@ -154,6 +160,8 @@ describe('Tiltify-compatible REST API (#117)', () => {
       expect(res.body.id).toMatch(UUID);
       expect(res.body.team_id).toMatch(UUID); // kollekt Guid.Parse(team_id)
       expect(res.body.slug).toMatch(/^tapi-a-/);
+      expectDate(res.body.inserted_at);
+      expectDate(res.body.updated_at);
       // 10.00 completed + 2.50 refunded; the chargeback does not count.
       expectAmount(res.body.total_amount_raised, '12.50');
       expect(res.body.amount_raised).toEqual(res.body.total_amount_raised);
@@ -214,7 +222,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
         quantity_remaining: 7,
       });
       expectAmount(shared.amount, '5.00');
-      expect(shared.inserted_at).toEqual(expect.any(String)); // kollekt DateTime?
+      expectDate(shared.inserted_at); // kollekt DateTime?
       for (const id of [sharedReward, ownRewardA]) expect(id).toMatch(UUID); // kollekt Guid
     });
 
@@ -250,6 +258,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
       expect(target).toMatchObject({ name: 'Shared goal', active: true });
       expectAmount(target.amount, '1000.00');
       expectAmount(target.amount_raised, '25.50');
+      expectDate(target.inserted_at);
     });
   });
 
@@ -264,6 +273,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
       // layouts keeps a poll only when active && amount_raised.value && id && name && options.
       expect(poll).toMatchObject({ id: sharedPoll, name: 'Shared poll', active: true });
       expectAmount(poll.amount_raised, '15.00');
+      expectDate(poll.inserted_at);
       expect(poll.options).toHaveLength(1);
       expect(poll.options[0]).toMatchObject({ id: approvedOption, name: 'Approved' });
       expectAmount(poll.options[0].amount_raised, '10.00');

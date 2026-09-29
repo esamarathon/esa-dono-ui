@@ -45,7 +45,7 @@ kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible mes
 - **Shared incentives** (no Channel) are listed under every Channel, and an Event lists none of its own.
 - **Always empty:** milestones and matches are `[]`.
 
-A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Event**. Find their uuids and slugs at `/admin/events`, or with `GET /api/events`.
+A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Event**. Find their uuids and slugs at `/admin/events`. `GET /api/events` also shows them, but only for active Events and Channels.
 
 | Consumer       | Setting                                    | Value                                                                                                    |
 | -------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
