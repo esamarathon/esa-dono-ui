@@ -47,9 +47,14 @@ describe('Channels', () => {
     await prisma.donor.deleteMany({ where: { id: { in: createdDonorIds } } });
     // Events may point at a channel we created (FK), so clear those first.
     await prisma.event.updateMany({
-      where: { primary_channel_id: { in: createdChannelIds } },
+      where: {
+        OR: [{ primary_channel_id: { in: createdChannelIds } }, { id: { in: createdEventIds } }],
+      },
       data: { primary_channel_id: null },
     });
+    // Channels created on a test Event by a helper (createTestChannel) are not in
+    // createdChannelIds; without this the Event delete fails on the FK and leaks.
+    await prisma.channel.deleteMany({ where: { event_id: { in: createdEventIds } } });
     await prisma.channel.deleteMany({ where: { id: { in: createdChannelIds } } });
     await prisma.event.deleteMany({ where: { id: { in: createdEventIds } } });
     await prisma.$disconnect();

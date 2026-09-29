@@ -28,24 +28,25 @@ Both expect **bare Tiltify-v5 objects**: the top level is the donation, with no 
      - `donor_name` is the display name or `"Anonymous"`, never empty.
      - `campaign_id` is the Channel id, and `team_event_id` is the Event id.
      - The scalar incentive fields carry the first item, because kollekt reads them today. The arrays (`reward_claims`, `poll_votes`, `target_contributions`) carry the full set, for kollekt#35. An array in a scalar field would break kollekt's deserializer and lose the whole donation.
-     - `reward_claims[].id` is a real `RewardClaim.id`: claims are linked to the donation that paid for them (`RewardClaim.donation_id`).
+     - The incentives are what the donation **actually paid for**, not what the pledge asked for, because a pledge item can fail at fulfilment (sold out, poll ended). `RewardClaim`, `PollVote` and `FundContribution` carry the `donation_id` that paid for them. `reward_claims[].id` is a real `RewardClaim.id`. A write-in vote (`POLL_CUSTOM`) is listed only once its option is approved. Approval does not republish, because that would replay the overlay alert.
    - **Totals**, key `<slug>.fact.updated`, `{ id, slug, name, total_amount_raised }`, one for the Channel and one for its Event. Consumers match a total on `id`, so one message cannot carry both.
 3. **When they are sent**, always through `withWebhooks` (`tiltify.donation(id)`, `tiltify.totals(channelId)`):
 
-   | Change                                | TILTIFY messages                                           | NATIVE message       |
-   | ------------------------------------- | ---------------------------------------------------------- | -------------------- |
-   | Donation created (routed)             | donation, Channel total, Event total                       | `donation.created`   |
-   | Unassigned donation assigned          | donation, Channel total, Event total                       | `donation.created`   |
-   | Donation created unassigned           | nothing                                                    | nothing              |
-   | Status change (refund, chargeback, …) | Channel total, Event total                                 | nothing              |
-   | Hidden from overlay                   | donation as `"Anonymous"`, comment null, no `completed_at` | `donation.hidden`    |
-   | Shown again                           | full donation                                              | `donation.unhidden`  |
-   | `moderated` review toggle             | nothing                                                    | `donation.moderated` |
-   | Incentive changes                     | nothing                                                    | `incentive.*`        |
+   | Change                                                      | TILTIFY messages                                           | NATIVE message       |
+   | ----------------------------------------------------------- | ---------------------------------------------------------- | -------------------- |
+   | Donation created (routed)                                   | donation, Channel total, Event total                       | `donation.created`   |
+   | Unassigned donation assigned                                | donation, Channel total, Event total                       | `donation.created`   |
+   | Donation created unassigned                                 | nothing                                                    | nothing              |
+   | Chargeback (or another status change that moves the totals) | Channel total, Event total                                 | nothing              |
+   | Refund                                                      | nothing                                                    | nothing              |
+   | Hidden from overlay                                         | donation as `"Anonymous"`, comment null, no `completed_at` | `donation.hidden`    |
+   | Shown again                                                 | full donation                                              | `donation.unhidden`  |
+   | `moderated` review toggle                                   | nothing                                                    | `donation.moderated` |
+   | Incentive changes                                           | nothing                                                    | `incentive.*`        |
    - **Hiding** exploits the esa-layouts-v2 removal branch: an overlay that shows the donation removes it, and one that never saw it does not add it, because there is no `completed_at`. kollekt upserts by id and shows `"Anonymous"`.
    - **Showing again** republishes the full donation. The overlay re-adds it **and plays the alert again**, so the moderator UI asks for confirmation.
    - **The `moderated` toggle does not republish**, because the body would not change. A republish of an anonymous donation would also remove it from the overlay (see Consequences).
-   - **Refunds.** ESA refunds only to the donor's wallet, never to the payment method, so a refunded donation is still money the charity holds. Money totals count `COMPLETED` and `REFUNDED` (`lib/donationTotals.ts`). A refund therefore changes no total, and a chargeback lowers it. Every status change republishes the totals: they are recomputed, so an unchanged total is harmless.
+   - **Refunds.** ESA refunds only to the donor's wallet, never to the payment method, so a refunded donation is still money the charity holds. Money totals count `COMPLETED` and `REFUNDED` (`lib/donationTotals.ts`). A refund therefore changes no total and publishes nothing. A chargeback lowers the totals and publishes them. The rule is "publish when the status moves into or out of the counted set".
 
 4. **Native additions** (§N2), kept minimal:
    - `donation.created` gains `event_id`, `donor_name`, `donor_comment` and `hidden_from_overlay`. Name and comment are public display data and are null while the donation is hidden.

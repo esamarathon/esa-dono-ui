@@ -1,7 +1,10 @@
 import prisma from '../../lib/prisma.js';
 import {
+  buildDonationCreatedPayload,
   emitTiltifyMessage,
   emitWebhookMessage,
+  type DonationForPayload,
+  type PayloadFormat,
   type WebhookMessageType,
   type WebhookPayload,
   type WebhookTx,
@@ -52,24 +55,29 @@ export async function withWebhooks<T>(
     const emit: EmitWebhook = async (messageType, build) => {
       for (const id of await emitWebhookMessage(tx, messageType, build)) woken.add(id);
     };
-    // Skip the (several-query) builders when nothing would receive the result.
-    const tiltifyActive = async () =>
-      (await tx.webhookDestination.count({
-        where: { is_active: true, payload_format: 'TILTIFY' },
-      })) > 0;
+    // The active TILTIFY Destinations, read once per transaction. With none, the
+    // (several-query) builders are skipped.
+    let tiltifyTargets: Promise<string[]> | undefined;
+    const targets = () =>
+      (tiltifyTargets ??= tx.webhookDestination
+        .findMany({
+          where: { is_active: true, payload_format: 'TILTIFY' satisfies PayloadFormat },
+          select: { id: true },
+        })
+        .then((rows) => rows.map((r) => r.id)));
     const queue = async (messages: TiltifyMessage[]) => {
-      for (const message of messages) {
-        for (const id of await emitTiltifyMessage(tx, message)) woken.add(id);
-      }
+      const ids = await targets();
+      for (const message of messages) await emitTiltifyMessage(tx, ids, message);
+      for (const id of ids) if (messages.length > 0) woken.add(id);
     };
     const tiltify: EmitTiltify = {
       async donation(donationId) {
-        if (!(await tiltifyActive())) return;
+        if ((await targets()).length === 0) return;
         const message = await buildTiltifyDonation(tx, donationId);
         if (message) await queue([message]);
       },
       async totals(channelId) {
-        if (!channelId || !(await tiltifyActive())) return;
+        if (!channelId || (await targets()).length === 0) return;
         await queue(await buildTiltifyTotals(tx, channelId));
       },
     };
@@ -77,4 +85,21 @@ export async function withWebhooks<T>(
   });
   for (const id of woken) wakeDispatcher(id);
   return result;
+}
+
+/**
+ * Publish a donation that was just routed to a Channel (created or assigned):
+ * native `donation.created`, and for TILTIFY the donation plus the Channel and
+ * Event totals (PRD-0002 §T4, §T7). Pass the donation as it is AFTER the change.
+ * An unassigned donation publishes nothing (§E6).
+ */
+export async function publishRoutedDonation(
+  emit: EmitWebhook,
+  tiltify: EmitTiltify,
+  donation: DonationForPayload,
+): Promise<void> {
+  if (!donation.channel_id && !donation.event_id) return;
+  await emit('donation.created', () => buildDonationCreatedPayload(donation));
+  await tiltify.donation(donation.id);
+  await tiltify.totals(donation.channel_id);
 }

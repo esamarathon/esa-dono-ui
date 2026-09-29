@@ -544,21 +544,22 @@ router.patch('/donations/:id', async (req, res) => {
   const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
     await import('../services/webhooks/delivery.js');
   const { withWebhooks } = await import('../services/webhooks/outbox.js');
-  const existing = await prisma.donation.findUnique({
-    where: { id: req.params.id },
-    select: { hidden_from_overlay: true },
-  });
-  if (!existing) return res.status(404).json({ error: 'Donation not found' });
+  const reviewFields = (value: boolean) =>
+    value
+      ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
+      : { moderated: false, moderated_at: null, moderated_by: null };
 
   const donation = await withWebhooks(async (tx, emit, tiltify) => {
+    // Read inside the transaction, so two concurrent hides publish once.
+    const existing = await tx.donation.findUnique({
+      where: { id: req.params.id },
+      select: { hidden_from_overlay: true },
+    });
+    if (!existing) return null;
     const updated = await tx.donation.update({
       where: { id: req.params.id },
       data: {
-        ...(moderated === undefined
-          ? {}
-          : moderated
-            ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
-            : { moderated: false, moderated_at: null, moderated_by: null }),
+        ...(moderated === undefined ? {} : reviewFields(moderated)),
         ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
       },
     });
@@ -584,6 +585,7 @@ router.patch('/donations/:id', async (req, res) => {
     return updated;
   });
 
+  if (!donation) return res.status(404).json({ error: 'Donation not found' });
   res.json(donation);
 });
 

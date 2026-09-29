@@ -57,7 +57,11 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     eventId = event.id;
     eventSlug = event.slug;
     const channel = await prisma.channel.create({
-      data: { name: 'Contract Channel', slug: `tiltify-chan-${rand()}`, event_id: eventId },
+      data: {
+        name: `Contract Channel ${rand()}`,
+        slug: `tiltify-chan-${rand()}`,
+        event_id: eventId,
+      },
     });
     channelId = channel.id;
     channelSlug = channel.slug;
@@ -100,7 +104,10 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     });
     await prisma.webhookDestination.deleteMany({ where: { id: { in: ids.destinations } } });
     await prisma.rewardClaim.deleteMany({ where: { reward_id: { in: ids.rewards } } });
+    // Everything a test donor created, before the donor itself (FKs).
+    await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: ids.donors } } });
     await prisma.pollVote.deleteMany({ where: { poll_id: { in: ids.polls } } });
+    await prisma.pollOption.deleteMany({ where: { poll_id: { in: ids.polls } } });
     await prisma.fundContribution.deleteMany({ where: { goal_id: { in: ids.goals } } });
     await prisma.pledgeItem.deleteMany({ where: { pledge_id: { in: ids.pledges } } });
     await prisma.pendingPledge.deleteMany({ where: { id: { in: ids.pledges } } });
@@ -108,7 +115,6 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     await prisma.donation.deleteMany({ where: { donor_id: { in: ids.donors } } });
     await prisma.donor.deleteMany({ where: { id: { in: ids.donors } } });
     await prisma.reward.deleteMany({ where: { id: { in: ids.rewards } } });
-    await prisma.pollOption.deleteMany({ where: { poll_id: { in: ids.polls } } });
     await prisma.poll.deleteMany({ where: { id: { in: ids.polls } } });
     await prisma.fundGoal.deleteMany({ where: { id: { in: ids.goals } } });
     await prisma.channel.deleteMany({ where: { id: channelId } });
@@ -276,7 +282,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     expect(channelTotal).toMatchObject({
       id: channelId,
       slug: channelSlug,
-      name: 'Contract Channel',
+      name: expect.stringMatching(/^Contract Channel /),
     });
     expect(eventTotal).toMatchObject({ id: eventId, slug: eventSlug, name: 'Tiltify Contract' });
     expect(channelTotal.total_amount_raised.currency).toBe('USD');
@@ -385,15 +391,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     ]);
   });
 
-  it('a refund keeps the totals; a chargeback lowers them (§T7, lib/donationTotals.ts)', async () => {
-    const totalOf = async (afterSeq: number) => {
-      const msgs = await messages(tiltifyDest, afterSeq);
-      expect(msgs.map((m) => m.routing_key)).toEqual([
-        `${channelSlug}.fact.updated`,
-        `${eventSlug}.fact.updated`,
-      ]);
-      return Number(nth(msgs, 0).body.total_amount_raised.value);
-    };
+  it('a refund publishes nothing; a chargeback publishes lower totals (§T7, lib/donationTotals.ts)', async () => {
     const refunded = await donate({
       email: `ref-${rand()}@example.com`,
       amount_cents: 1000,
@@ -404,24 +402,112 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       amount_cents: 2500,
       channel_id: channelId,
     });
+    const beforeAll = await lastSeq(tiltifyDest);
 
-    let before = await lastSeq(tiltifyDest);
+    // A refund goes to the donor's wallet: the charity keeps the money, no total moves.
     await request(createApp())
       .patch(`/api/admin/donations/${refunded}/status`)
       .set(AUTH)
       .send({ status: 'REFUNDED' })
       .expect(200);
-    const afterRefund = await totalOf(before);
+    expect(await messages(tiltifyDest, beforeAll)).toHaveLength(0);
 
-    before = await lastSeq(tiltifyDest);
     await request(createApp())
       .patch(`/api/admin/donations/${charged}/status`)
       .set(AUTH)
       .send({ status: 'CHARGEBACK' })
       .expect(200);
-    const afterChargeback = await totalOf(before);
+    const msgs = await messages(tiltifyDest, beforeAll);
+    expect(msgs.map((m) => m.routing_key)).toEqual([
+      `${channelSlug}.fact.updated`,
+      `${eventSlug}.fact.updated`,
+    ]);
+    const channelTotal = Number(nth(msgs, 0).body.total_amount_raised.value);
+    const expected = await prisma.donation.aggregate({
+      where: { channel_id: channelId, status: { in: ['COMPLETED', 'REFUNDED'] } },
+      _sum: { amount_cents: true },
+    });
+    expect(channelTotal).toBeCloseTo((expected._sum.amount_cents ?? 0) / 100, 2);
 
-    expect(afterRefund - afterChargeback).toBeCloseTo(25, 2);
+    // A second status change on a refunded donation is refused, and publishes nothing.
+    const again = await lastSeq(tiltifyDest);
+    await request(createApp())
+      .patch(`/api/admin/donations/${refunded}/status`)
+      .set(AUTH)
+      .send({ status: 'CHARGEBACK' })
+      .expect(400);
+    expect(await messages(tiltifyDest, again)).toHaveLength(0);
+  });
+
+  it('lists only what the donation paid for: a pledge item that failed is left out (§T4)', async () => {
+    // A sold-out reward fails at fulfilment; the goal contribution still succeeds.
+    const reward = await prisma.reward.create({
+      data: { title: 'Last one', type: 'DIGITAL', cost_cents: 100, quantity_total: 1 },
+    });
+    ids.rewards.push(reward.id);
+    const goal = await prisma.fundGoal.create({ data: { title: 'Goal 2', target_cents: 5000 } });
+    ids.goals.push(goal.id);
+    const email = `skip-${rand()}@example.com`;
+    const pledge = await createPledge({
+      email,
+      channel_id: channelId,
+      items: [
+        { kind: 'REWARD', target_id: reward.id },
+        { kind: 'GOAL', target_id: goal.id, amount_cents: 250 },
+      ],
+    });
+    ids.pledges.push(
+      (
+        await prisma.pendingPledge.findUniqueOrThrow({
+          where: { pledge_token: pledge.pledge_token },
+        })
+      ).id,
+    );
+    await prisma.reward.update({ where: { id: reward.id }, data: { quantity_claimed: 1 } });
+
+    const before = await lastSeq(tiltifyDest);
+    await donate({ email, amount_cents: pledge.total_cents, pledge_token: pledge.pledge_token });
+    const d = nth(await messages(tiltifyDest, before), 0).body;
+    expect(d.reward_claims).toEqual([]);
+    expect(d.reward_id).toBeNull();
+    expect(d.target_id).toBe(goal.id);
+    expect(d.target_contributions).toEqual([
+      { target_id: goal.id, amount: { currency: 'USD', value: '2.50' } },
+    ]);
+  });
+
+  it('a write-in poll vote is listed only once its option is approved (§T4)', async () => {
+    const poll = await prisma.poll.create({
+      data: { title: 'Write-in', is_active: true, allow_custom_entries: true, auto_approve: false },
+    });
+    ids.polls.push(poll.id);
+    const email = `custom-${rand()}@example.com`;
+    const pledge = await createPledge({
+      email,
+      channel_id: channelId,
+      items: [
+        {
+          kind: 'POLL_CUSTOM',
+          target_id: poll.id,
+          poll_id: poll.id,
+          amount_cents: 300,
+          data: { label: 'My idea' },
+        },
+      ],
+    });
+    ids.pledges.push(
+      (
+        await prisma.pendingPledge.findUniqueOrThrow({
+          where: { pledge_token: pledge.pledge_token },
+        })
+      ).id,
+    );
+    const before = await lastSeq(tiltifyDest);
+    await donate({ email, amount_cents: pledge.total_cents, pledge_token: pledge.pledge_token });
+    const d = nth(await messages(tiltifyDest, before), 0).body;
+    expect(d.poll_votes).toEqual([]);
+    expect(d.poll_id).toBeNull();
+    expect(d.poll_option_id).toBeNull();
   });
 
   it('an unassigned donation publishes nothing until it is assigned (§E6)', async () => {

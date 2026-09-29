@@ -48,20 +48,28 @@ export async function buildTiltifyDonation(
     where: { id: donationId },
     include: {
       channel: { select: { id: true, slug: true, event_id: true } },
-      reward_claims: { orderBy: { created_at: 'asc' } },
-      pledge: { include: { items: { orderBy: { created_at: 'asc' } } } },
+      // What the donation actually paid for: a pledge item that failed at
+      // fulfilment has no row. Reversed rows are left out.
+      reward_claims: { where: { reversed_at: null }, orderBy: { created_at: 'asc' } },
+      // A write-in (POLL_CUSTOM) vote counts once its option is approved (ACTIVE).
+      poll_votes: {
+        where: { reversed_at: null, poll_option: { status: 'ACTIVE' } },
+        orderBy: { created_at: 'asc' },
+      },
+      contributions: { where: { reversed_at: null }, orderBy: { created_at: 'asc' } },
     },
   });
   if (!donation?.channel) return null;
 
   const hidden = donation.hidden_from_overlay;
-  const items = donation.pledge?.items ?? [];
-  const votes = items
-    .filter((i) => i.kind === 'POLL_VOTE' && i.poll_id)
-    .map((i) => ({ poll_id: i.poll_id!, poll_option_id: i.target_id }));
-  const contributions = items
-    .filter((i) => i.kind === 'GOAL')
-    .map((i) => ({ target_id: i.target_id, amount: money(i.amount_cents) }));
+  const votes = donation.poll_votes.map((v) => ({
+    poll_id: v.poll_id,
+    poll_option_id: v.poll_option_id,
+  }));
+  const contributions = donation.contributions.map((c) => ({
+    target_id: c.goal_id,
+    amount: money(c.amount_cents),
+  }));
   const claims = donation.reward_claims.map((c) => ({
     id: c.id,
     reward_id: c.reward_id,

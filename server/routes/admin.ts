@@ -2,10 +2,10 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { countedDonation } from '../lib/donationTotals.js';
+import { countedDonation, countsTowardTotals } from '../lib/donationTotals.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
-import { sendError } from '../lib/httpError.js';
+import { httpError, sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { processDonation } from '../services/donation.js';
@@ -27,6 +27,8 @@ import {
   buildIncentiveEnabledPayload,
   buildIncentiveDisabledPayload,
   buildIncentiveValueChangedPayload,
+  PAYLOAD_FORMATS,
+  TILTIFY_DEFAULT_EXCHANGE,
 } from '../services/webhooks/delivery.js';
 
 const router = Router();
@@ -139,63 +141,66 @@ router.patch('/donations/:id/status', async (req, res) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
-  const donation = await prisma.donation.findUnique({
-    where: { id: req.params.id },
-    include: { donor: true },
-  });
-  if (!donation) return res.status(404).json({ error: 'Donation not found' });
-  if (donation.refund_id) {
-    return res
-      .status(400)
-      .json({ error: 'Donation is refunded/charged back and cannot change status' });
-  }
-  if (donation.status === status) {
-    return res.status(400).json({ error: 'Donation already has this status' });
-  }
-
-  const include = {
-    donor: { select: { email: true } },
-    channel: { select: { id: true, name: true, slug: true, event_id: true } },
-  } as const;
-
-  // One transaction for the balance clawback, the status and the totals messages.
-  const updated = await withWebhooks(async (tx, _emit, tiltify) => {
-    let refundId: string | undefined;
-    if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-      // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
-      // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
-      // Donation.status value.
-      const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
-      const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
-      await tx.donor.update({
-        where: { id: donation.donor_id },
-        data: { balance_remaining: { decrement: clawback } },
+  try {
+    // One transaction, reading inside it: the checks, the balance clawback, the
+    // status and the totals messages see one state (a double submit cannot claw
+    // back twice).
+    const updated = await withWebhooks(async (tx, _emit, tiltify) => {
+      const donation = await tx.donation.findUnique({
+        where: { id: req.params.id },
+        include: { donor: true },
       });
-      const adjustment = await tx.balanceAdjustment.create({
-        data: {
-          donor_id: donation.donor_id,
-          amount_cents: -clawback,
-          balance_after_cents: donation.donor.balance_remaining - clawback,
-          type: adjustmentType,
-          reason: reason || `Donation ${status.toLowerCase()}`,
-          reference_id: donation.id,
-          created_by: 'admin',
+      if (!donation) throw httpError(404, 'Donation not found');
+      if (donation.refund_id) {
+        throw httpError(400, 'Donation is refunded/charged back and cannot change status');
+      }
+      if (donation.status === status) {
+        throw httpError(400, 'Donation already has this status');
+      }
+
+      let refundId: string | undefined;
+      if (status === 'REFUNDED' || status === 'CHARGEBACK') {
+        // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
+        // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
+        // Donation.status value.
+        const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
+        const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
+        await tx.donor.update({
+          where: { id: donation.donor_id },
+          data: { balance_remaining: { decrement: clawback } },
+        });
+        const adjustment = await tx.balanceAdjustment.create({
+          data: {
+            donor_id: donation.donor_id,
+            amount_cents: -clawback,
+            balance_after_cents: donation.donor.balance_remaining - clawback,
+            type: adjustmentType,
+            reason: reason || `Donation ${status.toLowerCase()}`,
+            reference_id: donation.id,
+            created_by: 'admin',
+          },
+        });
+        refundId = adjustment.id;
+      }
+      const row = await tx.donation.update({
+        where: { id: donation.id },
+        data: { status, ...(refundId ? { refund_id: refundId } : {}) },
+        include: {
+          donor: { select: { email: true } },
+          channel: { select: { id: true, name: true, slug: true, event_id: true } },
         },
       });
-      refundId = adjustment.id;
-    }
-    const row = await tx.donation.update({
-      where: { id: donation.id },
-      data: { status, ...(refundId ? { refund_id: refundId } : {}) },
-      include,
+      // Publish the totals only when they move (PRD-0002 §T7): a chargeback lowers
+      // them; a refund goes to the donor's wallet and does not (lib/donationTotals.ts).
+      if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
+        await tiltify.totals(row.channel_id);
+      }
+      return row;
     });
-    // A status change can move the money totals (a chargeback lowers them; a
-    // refund does not, lib/donationTotals.ts). Totals are recomputed, so publishing
-    // an unchanged total is harmless (PRD-0002 §T7).
-    await tiltify.totals(row.channel_id);
-    return row;
-  });
-  res.json(updated);
+    res.json(updated);
+  } catch (e) {
+    sendError(res, e, '[admin/donations/status]');
+  }
 });
 
 // Claims
@@ -1402,14 +1407,12 @@ router.get('/destinations', async (req, res) => {
   );
 });
 
-const PAYLOAD_FORMATS = ['NATIVE', 'TILTIFY'];
-
 /**
  * PRD-0002 §T1: the Tiltify format is RabbitMQ-only (no consumer reads a bare
  * Tiltify body over HTTP). Returns an error message, or null when valid.
  */
 function payloadFormatError(destType: string, format: unknown): string | null {
-  if (!PAYLOAD_FORMATS.includes(format as string)) {
+  if (!(PAYLOAD_FORMATS as readonly unknown[]).includes(format)) {
     return 'payload_format must be NATIVE or TILTIFY';
   }
   if (format === 'TILTIFY' && destType !== 'RABBITMQ') {
@@ -1481,7 +1484,7 @@ router.post('/destinations', async (req, res) => {
       description: description ?? null,
       destination_type: destType,
       amqp_url: amqp_url ?? null,
-      amqp_exchange: amqp_exchange ?? (format === 'TILTIFY' ? 'tiltify' : ''),
+      amqp_exchange: amqp_exchange ?? (format === 'TILTIFY' ? TILTIFY_DEFAULT_EXCHANGE : ''),
       amqp_routing_key: amqp_routing_key ?? null,
       payload_format: format,
     },

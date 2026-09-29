@@ -64,6 +64,8 @@ export async function votePollTx(
   pollId: string,
   pollOptionId: string,
   cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
 ) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -97,6 +99,7 @@ export async function votePollTx(
       poll_option_id: pollOptionId,
       donor_id: donorId,
       amount_cents: cents,
+      donation_id: donationId,
     },
   });
   await tx.pollOption.update({
@@ -146,6 +149,8 @@ export async function proposeCustomEntryTx(
   pollId: string,
   label: string,
   cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
 ) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
@@ -215,6 +220,7 @@ export async function proposeCustomEntryTx(
       poll_option_id: option.id,
       donor_id: donorId,
       amount_cents: cents,
+      donation_id: donationId,
     },
   });
 
@@ -228,7 +234,14 @@ export async function proposeCustomEntryTx(
   return { cost: cents, option, entry, status: optionStatus };
 }
 
-export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, cents: number) {
+export async function contributeGoalTx(
+  tx: Tx,
+  donorId: string,
+  goalId: string,
+  cents: number,
+  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
+  donationId: string | null = null,
+) {
   if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
     throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
       status: 400,
@@ -253,7 +266,7 @@ export async function contributeGoalTx(tx: Tx, donorId: string, goalId: string, 
     data: { balance_remaining: { decrement: cents } },
   });
   await tx.fundContribution.create({
-    data: { goal_id: goal.id, donor_id: donorId, amount_cents: cents },
+    data: { goal_id: goal.id, donor_id: donorId, amount_cents: cents, donation_id: donationId },
   });
   await tx.fundGoal.update({
     where: { id: goal.id },

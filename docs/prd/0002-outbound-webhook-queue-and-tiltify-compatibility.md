@@ -317,9 +317,10 @@ Numbered so issues and reviews can cite them (`PRD-0002 §Q3`).
   alert**; the admin UI warns before confirming.
 - **T7. Totals message**, key `<slug>.fact.updated`, body
   `{ id, slug, name, total_amount_raised: { currency, value } }`. Published for the
-  Channel **and** its Event whenever a total can change: donation created, assigned, or
-  any status change. A refund goes to the donor's wallet and does not change the total
-  (§E7); a chargeback lowers it. Totals are recomputed, so an unchanged total is harmless. Consumers match on `id`, so one message cannot carry both totals.
+  Channel **and** its Event whenever a total changes: donation created or assigned, and a status change that
+  moves the donation into or out of the counted statuses (§E7). A chargeback lowers the
+  total and publishes; a refund goes to the donor's wallet, changes no total, and
+  publishes nothing. Consumers match on `id`, so one message cannot carry both totals.
 - **T8.** The `moderated` review toggle does **not** republish on `TILTIFY`: the body does
   not change, and a republish of an anonymous donation would remove it from the overlay.
 - **T9.** `"Anonymous"` is our convention for donors with no display name. Consequence:

@@ -1,7 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { buildDonationCreatedPayload } from './webhooks/delivery.js';
-import { withWebhooks } from './webhooks/outbox.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
 
 /** Where a donation is routed. Both null = unassigned (PRD-0002 §E5, §E6). */
 export interface DonationRoute {
@@ -72,9 +71,7 @@ export async function assignDonationChannel(donationId: string, channelId: unkno
       where: { id: donationId },
       data: { channel_id: route.channelId, event_id: route.eventId },
     });
-    await emit('donation.created', () => buildDonationCreatedPayload(updated));
-    await tiltify.donation(updated.id);
-    await tiltify.totals(updated.channel_id);
+    await publishRoutedDonation(emit, tiltify, updated);
     return updated;
   });
 }

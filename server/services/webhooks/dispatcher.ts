@@ -2,7 +2,7 @@ import type { WebhookDelivery, WebhookDestination } from '@prisma/client';
 import http from 'http';
 import https from 'https';
 import prisma from '../../lib/prisma.js';
-import { signPayload } from './delivery.js';
+import { signPayload, TILTIFY_DEFAULT_EXCHANGE } from './delivery.js';
 
 /** Retry delays in seconds, indexed by attempt count after the failure (1-based). */
 export const BACKOFF_SECONDS = [5, 15, 60, 180] as const;
@@ -138,7 +138,7 @@ async function amqpPublish(
   const url = withHeartbeat(dest.amqp_url!);
   const tiltify = dest.payload_format === 'TILTIFY';
   // The Tiltify consumers read the `tiltify` exchange (PRD-0002 §T3).
-  const exchange = dest.amqp_exchange || (tiltify ? 'tiltify' : '');
+  const exchange = dest.amqp_exchange || (tiltify ? TILTIFY_DEFAULT_EXCHANGE : '');
 
   let cached = amqpCache.get(dest.id);
 

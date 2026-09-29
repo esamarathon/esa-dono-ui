@@ -1,5 +1,13 @@
+import type { TiltifyMessage } from './tiltifyPayload.js';
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
+
+/** A Destination's payload format (ADR-0009): our envelope, or bare Tiltify-v5 objects. */
+export const PAYLOAD_FORMATS = ['NATIVE', 'TILTIFY'] as const;
+export type PayloadFormat = (typeof PAYLOAD_FORMATS)[number];
+
+/** The exchange a TILTIFY Destination publishes to when none is set (PRD-0002 §T2). */
+export const TILTIFY_DEFAULT_EXCHANGE = 'tiltify';
 
 export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
@@ -183,7 +191,7 @@ export async function emitWebhookMessage(
   // NATIVE Destinations only: TILTIFY ones receive Tiltify-shaped messages
   // (emitTiltifyMessage) and ignore event_types (PRD-0002 §T3).
   const destinations = await tx.webhookDestination.findMany({
-    where: { is_active: true, payload_format: 'NATIVE' },
+    where: { is_active: true, payload_format: 'NATIVE' satisfies PayloadFormat },
     select: { id: true, event_types: true },
   });
   const subscribed = destinations.filter((d) => {
@@ -208,63 +216,61 @@ export async function emitWebhookMessage(
   }
 
   for (const { id } of subscribed) {
-    const { seq } = await tx.webhookDestinationSeq.upsert({
-      where: { destination_id: id },
-      create: { destination_id: id, seq: 1 },
-      update: { seq: { increment: 1 } },
-    });
-    await tx.webhookDelivery.create({
-      data: {
-        destination_id: id,
-        seq,
-        message_id: messageId,
-        message_type: messageType,
-        payload: body,
-        status: buildError ? 'FAILED' : 'PENDING',
-        last_error: buildError,
-        next_attempt_at: new Date(),
-      },
+    await enqueueDelivery(tx, id, {
+      message_id: messageId,
+      message_type: messageType,
+      payload: body,
+      status: buildError ? 'FAILED' : 'PENDING',
+      last_error: buildError,
     });
   }
   return subscribed.map((d) => d.id);
 }
 
+/** Append one row to a Destination's queue with the next `seq` (ADR-0007). */
+async function enqueueDelivery(
+  tx: WebhookTx,
+  destinationId: string,
+  row: {
+    message_id: string;
+    message_type: string;
+    payload: string;
+    status: 'PENDING' | 'FAILED';
+    last_error?: string | null;
+    routing_key?: string;
+  },
+): Promise<void> {
+  const { seq } = await tx.webhookDestinationSeq.upsert({
+    where: { destination_id: destinationId },
+    create: { destination_id: destinationId, seq: 1 },
+    update: { seq: { increment: 1 } },
+  });
+  await tx.webhookDelivery.create({
+    data: { destination_id: destinationId, seq, next_attempt_at: new Date(), ...row },
+  });
+}
+
 /**
- * Queue one Tiltify-shaped message (PRD-0002 §T) for every active TILTIFY
- * Destination, inside the caller's transaction. The routing key is per message
- * (`<slug>.donation`, `<slug>.fact.updated`), not the Destination's. Returns the
- * Destinations that received a row.
+ * Queue one Tiltify-shaped message (PRD-0002 §T) for the given TILTIFY
+ * Destinations, inside the caller's transaction. The routing key is per message
+ * (`<slug>.donation`, `<slug>.fact.updated`), not the Destination's.
  */
 export async function emitTiltifyMessage(
   tx: WebhookTx,
-  message: { messageType: string; routingKey: string; payload: object },
-): Promise<string[]> {
-  const destinations = await tx.webhookDestination.findMany({
-    where: { is_active: true, payload_format: 'TILTIFY' },
-    select: { id: true },
-  });
+  destinationIds: string[],
+  message: TiltifyMessage,
+): Promise<void> {
   const messageId = crypto.randomUUID();
   const body = JSON.stringify(message.payload);
-  for (const { id } of destinations) {
-    const { seq } = await tx.webhookDestinationSeq.upsert({
-      where: { destination_id: id },
-      create: { destination_id: id, seq: 1 },
-      update: { seq: { increment: 1 } },
-    });
-    await tx.webhookDelivery.create({
-      data: {
-        destination_id: id,
-        seq,
-        message_id: messageId,
-        message_type: message.messageType,
-        routing_key: message.routingKey,
-        payload: body,
-        status: 'PENDING',
-        next_attempt_at: new Date(),
-      },
+  for (const id of destinationIds) {
+    await enqueueDelivery(tx, id, {
+      message_id: messageId,
+      message_type: message.messageType,
+      routing_key: message.routingKey,
+      payload: body,
+      status: 'PENDING',
     });
   }
-  return destinations.map((d) => d.id);
 }
 
 /** The Donation fields the native donation messages need. */

@@ -3,8 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
-import { buildDonationCreatedPayload } from './webhooks/delivery.js';
-import { withWebhooks } from './webhooks/outbox.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
 import { resolveDonationRoute } from './routing.js';
 import { withSpan } from '../lib/tracing.js';
 
@@ -171,9 +170,7 @@ async function processDonationInner({
       if (route.channelId || route.eventId) {
         // Re-read: pledge fulfilment may have set the comment and display name.
         const final = await tx.donation.findUniqueOrThrow({ where: { id: donation.id } });
-        await emit('donation.created', () => buildDonationCreatedPayload(final));
-        await tiltify.donation(final.id);
-        await tiltify.totals(final.channel_id);
+        await publishRoutedDonation(emit, tiltify, final);
       }
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>

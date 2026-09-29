@@ -7,8 +7,7 @@ import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } fro
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
-import { buildDonationCreatedPayload } from './webhooks/delivery.js';
-import { withWebhooks } from './webhooks/outbox.js';
+import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
 import { resolveDonationRoute } from './routing.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
@@ -325,9 +324,16 @@ async function fulfillPledgeInner(
         const data = item.data ? JSON.parse(item.data) : {};
         result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity, donationId);
       } else if (item.kind === 'POLL_VOTE') {
-        result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
+        result = await votePollTx(
+          tx,
+          donorId,
+          item.poll_id!,
+          item.target_id,
+          item.amount_cents,
+          donationId,
+        );
       } else if (item.kind === 'GOAL') {
-        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents);
+        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents, donationId);
       } else if (item.kind === 'POLL_CUSTOM') {
         const data = item.data ? JSON.parse(item.data) : {};
         result = await proposeCustomEntryTx(
@@ -336,6 +342,7 @@ async function fulfillPledgeInner(
           item.poll_id!,
           data.label,
           item.amount_cents,
+          donationId,
         );
       }
       totalSpent += result!.cost;
@@ -521,11 +528,7 @@ export async function createCheckoutForPledge(
               fulfilled_by_donation_id: created.id,
             },
           });
-          if (route.channelId || route.eventId) {
-            await emit('donation.created', () => buildDonationCreatedPayload(created));
-            await tiltify.donation(created.id);
-            await tiltify.totals(created.channel_id);
-          }
+          await publishRoutedDonation(emit, tiltify, created);
         });
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>

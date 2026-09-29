@@ -62,6 +62,8 @@ model Donation {
   refund      BalanceAdjustment? @relation("DonationRefund", fields: [refund_id], references: [id])
   pledge      PendingPledge?
   reward_claims RewardClaim[]
+  poll_votes    PollVote[]
+  contributions FundContribution[]
 }
 
 /// A charity event: a marathon, or a one-day stream event. Parent of Channels
@@ -175,12 +177,15 @@ model PollVote {
   poll_option_id String
   donor_id       String
   amount_cents   Int
+  /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
+  donation_id    String?
   reversed_at    DateTime?
   reversed_by    String?
   created_at     DateTime   @default(now())
   poll           Poll       @relation(fields: [poll_id], references: [id])
   poll_option    PollOption @relation(fields: [poll_option_id], references: [id])
   donor          Donor      @relation(fields: [donor_id], references: [id])
+  donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
 }
 
 model PollCustomEntry {
@@ -220,11 +225,14 @@ model FundContribution {
   goal_id      String
   donor_id     String
   amount_cents Int
+  /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
+  donation_id    String?
   reversed_at  DateTime?
   reversed_by  String?
   created_at   DateTime @default(now())
   goal         FundGoal @relation(fields: [goal_id], references: [id])
   donor        Donor    @relation(fields: [donor_id], references: [id])
+  donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
 }
 
 model BalanceAdjustment {
