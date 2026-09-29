@@ -61,7 +61,7 @@ export async function resolveDonationRoute(
  */
 export async function assignDonationChannel(donationId: string, channelId: unknown) {
   if (typeof channelId !== 'string' || !channelId) throw httpError(400, 'channel_id is required');
-  return withWebhooks(async (tx, emit) => {
+  return withWebhooks(async (tx, emit, tiltify) => {
     const donation = await tx.donation.findUnique({ where: { id: donationId } });
     if (!donation) throw httpError(404, 'Donation not found');
     if (donation.channel_id || donation.event_id) {
@@ -72,15 +72,9 @@ export async function assignDonationChannel(donationId: string, channelId: unkno
       where: { id: donationId },
       data: { channel_id: route.channelId, event_id: route.eventId },
     });
-    await emit('donation.created', () =>
-      buildDonationCreatedPayload({
-        donationId: updated.id,
-        externalId: updated.external_id,
-        amountCents: updated.amount_cents,
-        channelId: route.channelId,
-        donorRef: updated.donor_id,
-      }),
-    );
+    await emit('donation.created', () => buildDonationCreatedPayload(updated));
+    await tiltify.donation(updated.id);
+    await tiltify.totals(updated.channel_id);
     return updated;
   });
 }

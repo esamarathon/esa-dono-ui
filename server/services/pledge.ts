@@ -300,9 +300,11 @@ export async function fulfillPledge(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,
+  /** The donation paying for the pledge: its reward claims are linked to it (PRD-0002 §T4). */
+  donationId: string | null = null,
 ) {
   return withSpan('pledge.fulfill', async () => {
-    return fulfillPledgeInner(tx, pledge, donorId);
+    return fulfillPledgeInner(tx, pledge, donorId, donationId);
   });
 }
 
@@ -310,6 +312,7 @@ async function fulfillPledgeInner(
   tx: Prisma.TransactionClient,
   pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
   donorId: string,
+  donationId: string | null,
 ) {
   const results: Array<Record<string, unknown>> = [];
   let totalSpent = 0;
@@ -320,7 +323,7 @@ async function fulfillPledgeInner(
       let result: { cost: number } | undefined;
       if (item.kind === 'REWARD') {
         const data = item.data ? JSON.parse(item.data) : {};
-        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity);
+        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity, donationId);
       } else if (item.kind === 'POLL_VOTE') {
         result = await votePollTx(tx, donorId, item.poll_id!, item.target_id, item.amount_cents);
       } else if (item.kind === 'GOAL') {
@@ -495,7 +498,7 @@ export async function createCheckoutForPledge(
         // donor's history like any other donation (#43). amount_cents is the
         // wallet spend that fulfilled the pledge (the full total).
         const walletExternalId = `wallet-${crypto.randomUUID()}`;
-        await withWebhooks(async (tx, emit) => {
+        await withWebhooks(async (tx, emit, tiltify) => {
           // Same routing as every other donation: the pledge's Channel and its Event.
           const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
           const created = await tx.donation.create({
@@ -509,7 +512,7 @@ export async function createCheckoutForPledge(
               event_id: route.eventId,
             },
           });
-          await fulfillPledge(tx, fullPledge, donor.id);
+          await fulfillPledge(tx, fullPledge, donor.id, created.id);
           await tx.pendingPledge.update({
             where: { pledge_token: pledgeToken },
             data: {
@@ -518,15 +521,11 @@ export async function createCheckoutForPledge(
               fulfilled_by_donation_id: created.id,
             },
           });
-          await emit('donation.created', () =>
-            buildDonationCreatedPayload({
-              donationId: created.id,
-              externalId: walletExternalId,
-              amountCents: pledge.total_cents,
-              channelId: route.channelId,
-              donorRef: donor.id,
-            }),
-          );
+          if (route.channelId || route.eventId) {
+            await emit('donation.created', () => buildDonationCreatedPayload(created));
+            await tiltify.donation(created.id);
+            await tiltify.totals(created.channel_id);
+          }
         });
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>

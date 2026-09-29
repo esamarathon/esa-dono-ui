@@ -9,6 +9,8 @@ export async function claimRewardTx(
   rewardId: string,
   claimData?: ClaimData | null,
   quantity = 1,
+  /** The donation whose pledge this claim fulfils (PRD-0002 §T4); null for a wallet claim. */
+  donationId: string | null = null,
 ) {
   if (!Number.isInteger(quantity) || quantity < 1) {
     throw Object.assign(new Error('quantity must be a positive integer'), { status: 400 });
@@ -45,6 +47,7 @@ export async function claimRewardTx(
       donor_id: donorId,
       claim_data: JSON.stringify(data),
       status: 'PENDING',
+      donation_id: donationId,
     })),
   });
   await tx.reward.update({

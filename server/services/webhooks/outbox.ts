@@ -1,17 +1,32 @@
 import prisma from '../../lib/prisma.js';
 import {
+  emitTiltifyMessage,
   emitWebhookMessage,
   type WebhookMessageType,
   type WebhookPayload,
   type WebhookTx,
 } from './delivery.js';
 import { wakeDispatcher } from './dispatcher.js';
+import { buildTiltifyDonation, buildTiltifyTotals, type TiltifyMessage } from './tiltifyPayload.js';
 
 /** Queues a webhook message in the surrounding transaction. */
 export type EmitWebhook = (
   messageType: WebhookMessageType,
   build: () => WebhookPayload,
 ) => Promise<void>;
+
+/**
+ * Queues Tiltify-shaped messages (PRD-0002 §T) for TILTIFY Destinations in the
+ * surrounding transaction. Each builder reads the current state inside the
+ * transaction, so call it AFTER the change it describes. Both do nothing when no
+ * TILTIFY Destination is active.
+ */
+export interface EmitTiltify {
+  /** The donation as it is now (hidden or not): `<channel-slug>.donation`. No-op when unassigned. */
+  donation(donationId: string): Promise<void>;
+  /** The totals of a Channel and of its Event: two `<slug>.fact.updated` messages. */
+  totals(channelId: string | null): Promise<void>;
+}
 
 /**
  * Transactional outbox (PRD-0002 §Q4, §Q7). Runs `fn` in one database transaction
@@ -30,14 +45,35 @@ export type EmitWebhook = (
  * timeout.
  */
 export async function withWebhooks<T>(
-  fn: (tx: WebhookTx, emit: EmitWebhook) => Promise<T>,
+  fn: (tx: WebhookTx, emit: EmitWebhook, tiltify: EmitTiltify) => Promise<T>,
 ): Promise<T> {
   const woken = new Set<string>();
   const result = await prisma.$transaction(async (tx) => {
     const emit: EmitWebhook = async (messageType, build) => {
       for (const id of await emitWebhookMessage(tx, messageType, build)) woken.add(id);
     };
-    return fn(tx, emit);
+    // Skip the (several-query) builders when nothing would receive the result.
+    const tiltifyActive = async () =>
+      (await tx.webhookDestination.count({
+        where: { is_active: true, payload_format: 'TILTIFY' },
+      })) > 0;
+    const queue = async (messages: TiltifyMessage[]) => {
+      for (const message of messages) {
+        for (const id of await emitTiltifyMessage(tx, message)) woken.add(id);
+      }
+    };
+    const tiltify: EmitTiltify = {
+      async donation(donationId) {
+        if (!(await tiltifyActive())) return;
+        const message = await buildTiltifyDonation(tx, donationId);
+        if (message) await queue([message]);
+      },
+      async totals(channelId) {
+        if (!channelId || !(await tiltifyActive())) return;
+        await queue(await buildTiltifyTotals(tx, channelId));
+      },
+    };
+    return fn(tx, emit, tiltify);
   });
   for (const id of woken) wakeDispatcher(id);
   return result;

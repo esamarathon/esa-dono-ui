@@ -105,7 +105,7 @@ async function processDonationInner({
     pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
   } | null = null;
   try {
-    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit) => {
+    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit, tiltify) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
@@ -153,7 +153,7 @@ async function processDonationInner({
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
       if (pledge) {
         try {
-          pledgeResult = await fulfillPledge(tx, pledge, donor.id);
+          pledgeResult = await fulfillPledge(tx, pledge, donor.id, donation.id);
           await tx.donation.update({
             where: { id: donation.id },
             data: {
@@ -169,15 +169,11 @@ async function processDonationInner({
 
       // An unassigned donation is published when an admin assigns it (§E6).
       if (route.channelId || route.eventId) {
-        await emit('donation.created', () =>
-          buildDonationCreatedPayload({
-            donationId: donation.id,
-            externalId,
-            amountCents,
-            channelId: route.channelId,
-            donorRef: donor.id,
-          }),
-        );
+        // Re-read: pledge fulfilment may have set the comment and display name.
+        const final = await tx.donation.findUniqueOrThrow({ where: { id: donation.id } });
+        await emit('donation.created', () => buildDonationCreatedPayload(final));
+        await tiltify.donation(final.id);
+        await tiltify.totals(final.channel_id);
       }
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>

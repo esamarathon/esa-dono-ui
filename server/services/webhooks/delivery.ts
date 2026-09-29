@@ -4,6 +4,8 @@ import type { Prisma } from '@prisma/client';
 export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
   'donation.moderated',
+  'donation.hidden',
+  'donation.unhidden',
   'incentive.created',
   'incentive.enabled',
   'incentive.disabled',
@@ -25,7 +27,29 @@ export type WebhookPayloadDonationCreated = {
     external_id: string;
     amount_cents: number;
     channel_id: string | null;
+    event_id: string | null;
     donor_ref: string;
+    /** Public display name, or null. Null while the donation is hidden from the overlay. */
+    donor_name: string | null;
+    /** Public comment, or null. Null while the donation is hidden from the overlay. */
+    donor_comment: string | null;
+    hidden_from_overlay: boolean;
+  };
+};
+/** A moderator hid a donation from the overlay, or showed it again (PRD-0002 §N2, §T5–T6). */
+export type WebhookPayloadDonationVisibility = {
+  id: string;
+  type: 'donation.hidden' | 'donation.unhidden';
+  created_at: string;
+  data: {
+    donation_id: string;
+    external_id: string;
+    channel_id: string | null;
+    event_id: string | null;
+    donor_ref: string;
+    /** On `donation.unhidden` the public name and comment are sent again; null on `donation.hidden`. */
+    donor_name: string | null;
+    donor_comment: string | null;
   };
 };
 
@@ -114,6 +138,7 @@ export type WebhookPayloadIncentiveValueChanged = {
 export type WebhookPayload =
   | WebhookPayloadDonationCreated
   | WebhookPayloadDonationModerated
+  | WebhookPayloadDonationVisibility
   | WebhookPayloadIncentiveCreated
   | WebhookPayloadIncentiveEnabled
   | WebhookPayloadIncentiveDisabled
@@ -146,8 +171,10 @@ export async function emitWebhookMessage(
   messageType: WebhookMessageType,
   build: () => WebhookPayload,
 ): Promise<string[]> {
+  // NATIVE Destinations only: TILTIFY ones receive Tiltify-shaped messages
+  // (emitTiltifyMessage) and ignore event_types (PRD-0002 §T3).
   const destinations = await tx.webhookDestination.findMany({
-    where: { is_active: true },
+    where: { is_active: true, payload_format: 'NATIVE' },
     select: { id: true, event_types: true },
   });
   const subscribed = destinations.filter((d) => {
@@ -193,23 +220,101 @@ export async function emitWebhookMessage(
   return subscribed.map((d) => d.id);
 }
 
-export function buildDonationCreatedPayload(opts: {
-  donationId: string;
-  externalId: string;
-  amountCents: number;
-  channelId: string | null;
-  donorRef: string;
-}): WebhookPayloadDonationCreated {
+/**
+ * Queue one Tiltify-shaped message (PRD-0002 §T) for every active TILTIFY
+ * Destination, inside the caller's transaction. The routing key is per message
+ * (`<slug>.donation`, `<slug>.fact.updated`), not the Destination's. Returns the
+ * Destinations that received a row.
+ */
+export async function emitTiltifyMessage(
+  tx: WebhookTx,
+  message: { messageType: string; routingKey: string; payload: object },
+): Promise<string[]> {
+  const destinations = await tx.webhookDestination.findMany({
+    where: { is_active: true, payload_format: 'TILTIFY' },
+    select: { id: true },
+  });
+  const messageId = crypto.randomUUID();
+  const body = JSON.stringify(message.payload);
+  for (const { id } of destinations) {
+    const { seq } = await tx.webhookDestinationSeq.upsert({
+      where: { destination_id: id },
+      create: { destination_id: id, seq: 1 },
+      update: { seq: { increment: 1 } },
+    });
+    await tx.webhookDelivery.create({
+      data: {
+        destination_id: id,
+        seq,
+        message_id: messageId,
+        message_type: message.messageType,
+        routing_key: message.routingKey,
+        payload: body,
+        status: 'PENDING',
+        next_attempt_at: new Date(),
+      },
+    });
+  }
+  return destinations.map((d) => d.id);
+}
+
+/** The Donation fields the native donation messages need. */
+export interface DonationForPayload {
+  id: string;
+  external_id: string;
+  amount_cents: number;
+  channel_id: string | null;
+  event_id: string | null;
+  donor_id: string;
+  donor_name: string | null;
+  comment: string | null;
+  hidden_from_overlay: boolean;
+}
+
+/**
+ * `donation.created` (PRD-0002 §N2). Carries the public display name and comment,
+ * never the donor's email. A donation already hidden from the overlay sends them as
+ * null, so a moderator's decision holds downstream.
+ */
+export function buildDonationCreatedPayload(
+  donation: DonationForPayload,
+): WebhookPayloadDonationCreated {
+  const hidden = donation.hidden_from_overlay;
   return {
     id: crypto.randomUUID(),
     type: 'donation.created',
     created_at: new Date().toISOString(),
     data: {
-      donation_id: opts.donationId,
-      external_id: opts.externalId,
-      amount_cents: opts.amountCents,
-      channel_id: opts.channelId,
-      donor_ref: opts.donorRef,
+      donation_id: donation.id,
+      external_id: donation.external_id,
+      amount_cents: donation.amount_cents,
+      channel_id: donation.channel_id,
+      event_id: donation.event_id,
+      donor_ref: donation.donor_id,
+      donor_name: hidden ? null : donation.donor_name,
+      donor_comment: hidden ? null : donation.comment,
+      hidden_from_overlay: hidden,
+    },
+  };
+}
+
+/** `donation.hidden` / `donation.unhidden`, from the donation AFTER the change. */
+export function buildDonationVisibilityPayload(
+  donation: DonationForPayload,
+): WebhookPayloadDonationVisibility {
+  const hidden = donation.hidden_from_overlay;
+  return {
+    id: crypto.randomUUID(),
+    type: hidden ? 'donation.hidden' : 'donation.unhidden',
+    created_at: new Date().toISOString(),
+    data: {
+      donation_id: donation.id,
+      external_id: donation.external_id,
+      channel_id: donation.channel_id,
+      event_id: donation.event_id,
+      donor_ref: donation.donor_id,
+      donor_name: hidden ? null : donation.donor_name,
+      donor_comment: hidden ? null : donation.comment,
     },
   };
 }

@@ -61,6 +61,7 @@ model Donation {
   event       Event?   @relation(fields: [event_id], references: [id])
   refund      BalanceAdjustment? @relation("DonationRefund", fields: [refund_id], references: [id])
   pledge      PendingPledge?
+  reward_claims RewardClaim[]
 }
 
 /// A charity event: a marathon, or a one-day stream event. Parent of Channels
@@ -125,11 +126,15 @@ model RewardClaim {
   donor_id   String
   status     String   @default("PENDING") // PENDING | FULFILLED | REVERSED
   claim_data String?  // JSON string
+  /// The donation whose pledge created this claim (null for a direct wallet claim).
+  /// Lets the Tiltify donation message list the claims it paid for (PRD-0002 §T4).
+  donation_id String?
   reversed_at DateTime?
   reversed_by String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   reward     Reward   @relation(fields: [reward_id], references: [id])
+  donation   Donation? @relation(fields: [donation_id], references: [id], onDelete: SetNull)
   donor      Donor    @relation(fields: [donor_id], references: [id])
 }
 

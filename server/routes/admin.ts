@@ -153,49 +153,47 @@ router.patch('/donations/:id/status', async (req, res) => {
     return res.status(400).json({ error: 'Donation already has this status' });
   }
 
-  if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-    // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
-    // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
-    // Donation.status value.
-    const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
-    const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
-    const balanceAfter = donation.donor.balance_remaining - clawback;
+  const include = {
+    donor: { select: { email: true } },
+    channel: { select: { id: true, name: true, slug: true, event_id: true } },
+  } as const;
 
-    const [, adjustment] = await prisma.$transaction([
-      prisma.donor.update({
+  // One transaction for the balance clawback, the status and the totals messages.
+  const updated = await withWebhooks(async (tx, _emit, tiltify) => {
+    let refundId: string | undefined;
+    if (status === 'REFUNDED' || status === 'CHARGEBACK') {
+      // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
+      // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
+      // Donation.status value.
+      const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
+      const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
+      await tx.donor.update({
         where: { id: donation.donor_id },
         data: { balance_remaining: { decrement: clawback } },
-      }),
-      prisma.balanceAdjustment.create({
+      });
+      const adjustment = await tx.balanceAdjustment.create({
         data: {
           donor_id: donation.donor_id,
           amount_cents: -clawback,
-          balance_after_cents: balanceAfter,
+          balance_after_cents: donation.donor.balance_remaining - clawback,
           type: adjustmentType,
           reason: reason || `Donation ${status.toLowerCase()}`,
           reference_id: donation.id,
           created_by: 'admin',
         },
-      }),
-    ]);
-    const updated = await prisma.donation.update({
+      });
+      refundId = adjustment.id;
+    }
+    const row = await tx.donation.update({
       where: { id: donation.id },
-      data: { status, refund_id: adjustment.id },
-      include: {
-        donor: { select: { email: true } },
-        channel: { select: { id: true, name: true, slug: true, event_id: true } },
-      },
+      data: { status, ...(refundId ? { refund_id: refundId } : {}) },
+      include,
     });
-    return res.json(updated);
-  }
-
-  const updated = await prisma.donation.update({
-    where: { id: donation.id },
-    data: { status },
-    include: {
-      donor: { select: { email: true } },
-      channel: { select: { id: true, name: true, slug: true, event_id: true } },
-    },
+    // A status change can move the money totals (a chargeback lowers them; a
+    // refund does not, lib/donationTotals.ts). Totals are recomputed, so publishing
+    // an unchanged total is harmless (PRD-0002 §T7).
+    await tiltify.totals(row.channel_id);
+    return row;
   });
   res.json(updated);
 });
@@ -1391,6 +1389,22 @@ router.get('/destinations', async (req, res) => {
   );
 });
 
+const PAYLOAD_FORMATS = ['NATIVE', 'TILTIFY'];
+
+/**
+ * PRD-0002 §T1: the Tiltify format is RabbitMQ-only (no consumer reads a bare
+ * Tiltify body over HTTP). Returns an error message, or null when valid.
+ */
+function payloadFormatError(destType: string, format: unknown): string | null {
+  if (!PAYLOAD_FORMATS.includes(format as string)) {
+    return 'payload_format must be NATIVE or TILTIFY';
+  }
+  if (format === 'TILTIFY' && destType !== 'RABBITMQ') {
+    return 'payload_format TILTIFY requires destination_type RABBITMQ';
+  }
+  return null;
+}
+
 router.post('/destinations', async (req, res) => {
   const {
     url,
@@ -1402,9 +1416,13 @@ router.post('/destinations', async (req, res) => {
     amqp_url,
     amqp_exchange,
     amqp_routing_key,
+    payload_format,
   } = req.body;
 
   const destType = destination_type ?? 'HTTP';
+  const format = payload_format ?? 'NATIVE';
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
 
   if (destType === 'HTTP') {
     if (!url || typeof url !== 'string') {
@@ -1425,7 +1443,8 @@ router.post('/destinations', async (req, res) => {
     if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
       return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
     }
-    if (!amqp_routing_key || typeof amqp_routing_key !== 'string') {
+    // A TILTIFY Destination computes the routing key per message (§T3).
+    if (format === 'NATIVE' && (!amqp_routing_key || typeof amqp_routing_key !== 'string')) {
       return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
     }
   } else {
@@ -1449,8 +1468,9 @@ router.post('/destinations', async (req, res) => {
       description: description ?? null,
       destination_type: destType,
       amqp_url: amqp_url ?? null,
-      amqp_exchange: amqp_exchange ?? '',
+      amqp_exchange: amqp_exchange ?? (format === 'TILTIFY' ? 'tiltify' : ''),
       amqp_routing_key: amqp_routing_key ?? null,
+      payload_format: format,
     },
   });
   res.status(201).json({
@@ -1470,9 +1490,24 @@ router.put('/destinations/:id', async (req, res) => {
     amqp_url,
     amqp_exchange,
     amqp_routing_key,
+    payload_format,
   } = req.body;
 
-  const destType = destination_type ?? 'HTTP';
+  const current = await prisma.webhookDestination.findUnique({
+    where: { id: req.params.id },
+    select: { destination_type: true, payload_format: true, amqp_routing_key: true },
+  });
+  if (!current) return res.status(404).json({ error: 'Destination not found' });
+  // Validate the Destination as it will be after the update, not the request alone.
+  const destType = destination_type ?? current.destination_type;
+  const format = payload_format ?? current.payload_format;
+  const formatError = payloadFormatError(destType, format);
+  if (formatError) return res.status(400).json({ error: formatError });
+  const routingKey = amqp_routing_key !== undefined ? amqp_routing_key : current.amqp_routing_key;
+  if (destType === 'RABBITMQ' && format === 'NATIVE' && !routingKey) {
+    // Without one, every NATIVE message would stall the queue as an endpoint failure.
+    return res.status(400).json({ error: 'amqp_routing_key is required for RabbitMQ endpoints' });
+  }
 
   if (destType === 'HTTP') {
     if (url !== undefined) {
@@ -1519,6 +1554,7 @@ router.put('/destinations/:id', async (req, res) => {
       ...(amqp_url !== undefined ? { amqp_url } : {}),
       ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
       ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
+      ...(payload_format !== undefined ? { payload_format } : {}),
     },
   });
   // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.
