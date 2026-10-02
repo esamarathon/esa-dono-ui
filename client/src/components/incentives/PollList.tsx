@@ -208,7 +208,7 @@ export default function PollList() {
             )}
             {pollUnavailable && (
               <span
-                className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mb-3"
+                className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mb-3"
                 style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
               >
                 no longer available
@@ -311,7 +311,7 @@ export default function PollList() {
           <p className="font-body text-sm text-off-white/55 mb-3">
             Poll: <strong className="text-off-white">{writingIn.title}</strong>
           </p>
-          <p className="font-body text-xs text-off-white/55 mb-3">
+          <p className="font-body text-sm text-off-white/55 mb-3">
             This option will be added to your cart and submitted with your donation.{' '}
             {writingIn.auto_approve === false
               ? 'A moderator reviews new options before they go live; if rejected, the amount is refunded to your wallet.'

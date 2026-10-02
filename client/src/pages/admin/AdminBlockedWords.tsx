@@ -77,7 +77,7 @@ export default function AdminBlockedWords() {
                 </span>
                 <button
                   onClick={() => deleteWord(w.id)}
-                  className="font-mono text-[10px] hover:underline"
+                  className="font-mono text-sm hover:underline"
                   style={{ color: 'var(--red)' }}
                 >
                   remove

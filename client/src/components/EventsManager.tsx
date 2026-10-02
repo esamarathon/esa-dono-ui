@@ -138,14 +138,14 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => toggleActive(s)}
-                  className="font-mono text-[10px] tracking-wider uppercase"
+                  className="font-mono text-sm tracking-wider uppercase"
                   style={{ color: s.is_active ? 'var(--red)' : 'var(--green)' }}
                 >
                   {s.is_active ? 'deactivate' : 'activate'}
                 </button>
                 <button
                   onClick={() => openEdit(s)}
-                  className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                 >
                   edit
                 </button>
@@ -180,7 +180,7 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
               value={form.slug}
               onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
             />
-            <p className="font-body text-xs text-off-white/55 mt-1">{SLUG_HELP}</p>
+            <p className="font-body text-sm text-off-white/55 mt-1">{SLUG_HELP}</p>
           </div>
           {modal !== 'create' && (
             <div className="mb-3">
@@ -199,7 +199,7 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
                   </option>
                 ))}
               </select>
-              <p className="font-body text-xs text-off-white/55 mt-1">
+              <p className="font-body text-sm text-off-white/55 mt-1">
                 Donations that name no channel are routed here. It must be an active channel of this
                 event before the event can be activated.
               </p>

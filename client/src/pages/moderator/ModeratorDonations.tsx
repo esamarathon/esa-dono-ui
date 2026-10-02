@@ -111,14 +111,14 @@ export default function ModeratorDonations() {
               <div className="flex items-center gap-2 sm:shrink-0">
                 {d.hidden_from_overlay && (
                   <span
-                    className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
+                    className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
                     style={{ background: 'rgba(208,152,70,.16)', color: 'var(--d-yellow)' }}
                   >
                     HIDDEN FROM OVERLAY
                   </span>
                 )}
                 <span
-                  className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
+                  className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
                   style={{
                     background: d.moderated ? 'rgba(92,189,125,.16)' : 'rgba(208,152,70,.16)',
                     color: d.moderated ? 'var(--green)' : 'var(--d-yellow)',

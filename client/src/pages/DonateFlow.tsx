@@ -247,7 +247,7 @@ export default function DonateFlow() {
           <p className="font-data" style={{ color: 'var(--red)' }}>
             {prefillWarning}
           </p>
-          <p className="font-body text-xs text-off-white/55 mt-1">
+          <p className="font-body text-sm text-off-white/55 mt-1">
             This link couldn't be fully applied.
           </p>
         </div>
@@ -258,9 +258,7 @@ export default function DonateFlow() {
           channel cannot be mixed with another channel's in the same cart, so
           the picker filters what's shown below. */}
       <div className="btrl-panel p-4 mb-6">
-        <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-2">
-          channel
-        </p>
+        <p className="font-mono text-sm tracking-widest uppercase text-d-yellow mb-2">channel</p>
         {channels.length === 0 ? (
           <p className="font-body text-sm text-off-white/55">No channels are open right now.</p>
         ) : (
@@ -290,7 +288,7 @@ export default function DonateFlow() {
           </div>
         )}
         {!selectedChannelId && channels.length > 0 && (
-          <p className="font-body text-xs text-off-white/55 mt-2">
+          <p className="font-body text-sm text-off-white/55 mt-2">
             Select a channel to see its rewards, polls, and fund goals.
           </p>
         )}
@@ -365,7 +363,7 @@ export default function DonateFlow() {
               <p className="font-data text-d-yellow mb-1">
                 You haven't reviewed {unvisited.map((t) => TAB_LABELS[t]).join(' or ')} yet.
               </p>
-              <p className="font-body text-xs text-off-white/55">
+              <p className="font-body text-sm text-off-white/55">
                 Click "review &amp; checkout" again to skip ahead anyway — your cart is always
                 reachable from the cart button too.
               </p>

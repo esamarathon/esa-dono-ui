@@ -189,7 +189,7 @@ export default function CartDrawer() {
         <div className="flex-1 overflow-y-auto p-4 pt-3">
           {donor && (
             <div className="btrl-panel p-3 mb-4">
-              <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow mb-1">
+              <p className="font-mono text-sm tracking-widest uppercase text-d-yellow mb-1">
                 wallet balance{' '}
                 <InfoTip text="Your remaining spendable balance from previous donations. Applied automatically to the cost of your incentives at checkout — never to your additional contribution." />
               </p>
@@ -198,7 +198,7 @@ export default function CartDrawer() {
           )}
 
           <div className="mb-4 text-sm">
-            <span className="font-mono text-[10px] tracking-widest uppercase text-off-white/40">
+            <span className="font-mono text-sm tracking-widest uppercase text-off-white/40">
               channel:{' '}
             </span>
             <span className="font-data font-bold text-off-white">
@@ -221,7 +221,7 @@ export default function CartDrawer() {
                         ? `${item.quantity}× ${item.label || item.kind.toLowerCase()}`
                         : item.label || item.kind.toLowerCase()}
                     </p>
-                    <p className="font-mono text-[10px] text-off-white/55 uppercase">
+                    <p className="font-mono text-sm text-off-white/55 uppercase">
                       {KIND_LABELS[item.kind] ?? item.kind.toLowerCase()}
                     </p>
                   </div>
@@ -287,7 +287,7 @@ export default function CartDrawer() {
                 </span>
                 <span className="text-d-yellow">{fmt(Math.max(0, estimatedOwed))}</span>
               </div>
-              <p className="font-body text-[10px] text-off-white/55 mt-1">
+              <p className="font-body text-sm text-off-white/55 mt-1">
                 Estimate only — exact figure is confirmed at checkout.
               </p>
             </div>

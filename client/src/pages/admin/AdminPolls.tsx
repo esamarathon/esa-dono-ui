@@ -172,13 +172,13 @@ export default function AdminPolls() {
               <div className="flex gap-2">
                 <button
                   onClick={() => openEdit(poll)}
-                  className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                 >
                   edit
                 </button>
                 <button
                   onClick={() => handleDelete(poll.id)}
-                  className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                   style={{ color: 'var(--red)' }}
                 >
                   delete
@@ -206,14 +206,14 @@ export default function AdminPolls() {
                       />
                       <button
                         onClick={() => saveOption(opt.id)}
-                        className="ml-2 font-mono text-[10px] hover:underline"
+                        className="ml-2 font-mono text-sm hover:underline"
                         style={{ color: 'var(--green)' }}
                       >
                         save
                       </button>
                       <button
                         onClick={() => setEditingOptionId(null)}
-                        className="ml-2 font-mono text-[10px] hover:underline text-off-white/55"
+                        className="ml-2 font-mono text-sm hover:underline text-off-white/55"
                       >
                         cancel
                       </button>
@@ -226,21 +226,21 @@ export default function AdminPolls() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => startEditOption(opt)}
-                          className="font-mono text-[10px] hover:underline"
+                          className="font-mono text-sm hover:underline"
                           style={{ color: 'var(--d-yellow)' }}
                         >
                           edit
                         </button>
                         <button
                           onClick={() => handleRefundOption(opt.id, opt.label)}
-                          className="font-mono text-[10px] hover:underline"
+                          className="font-mono text-sm hover:underline"
                           style={{ color: 'var(--d-yellow)' }}
                         >
                           refund votes
                         </button>
                         <button
                           onClick={() => deleteOption(opt.id, opt.label, opt.votes_cents)}
-                          className="font-mono text-[10px] hover:underline"
+                          className="font-mono text-sm hover:underline"
                           style={{ color: 'var(--red)' }}
                         >
                           remove

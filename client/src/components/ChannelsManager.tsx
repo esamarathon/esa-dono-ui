@@ -118,14 +118,14 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
                 <ShareLinkButton path={`/donate?channel=${s.id}`} />
                 <button
                   onClick={() => openEdit(s)}
-                  className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                  className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                 >
                   edit
                 </button>
                 {s.is_active && (
                   <button
                     onClick={() => handleDeactivate(s.id)}
-                    className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                    className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                     style={{ color: 'var(--red)' }}
                   >
                     deactivate
@@ -162,7 +162,7 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
               value={form.slug}
               onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
             />
-            <p className="font-body text-xs text-off-white/55 mt-1">{SLUG_HELP}</p>
+            <p className="font-body text-sm text-off-white/55 mt-1">{SLUG_HELP}</p>
           </div>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>

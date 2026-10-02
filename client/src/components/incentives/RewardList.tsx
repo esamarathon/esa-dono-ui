@@ -112,20 +112,20 @@ export default function RewardList() {
                   )}
                   {unavailable && (
                     <span
-                      className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
+                      className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                       style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
                     >
                       no longer available
                     </span>
                   )}
                   <span
-                    className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
+                    className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                     style={{ background: 'rgba(115,78,158,.3)', color: 'var(--off-white)' }}
                   >
                     {r.type}
                   </span>
                   {r.quantity_total !== null && (
-                    <span className="font-mono text-[10px] text-off-white/55 ml-2">
+                    <span className="font-mono text-sm text-off-white/55 ml-2">
                       {r.quantity_total - r.quantity_claimed} left
                     </span>
                   )}
