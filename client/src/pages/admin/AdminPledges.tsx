@@ -45,7 +45,7 @@ export default function AdminPledges() {
                 (h) => (
                   <th
                     key={h}
-                    className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                    className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                   >
                     {h}
                   </th>
@@ -63,7 +63,7 @@ export default function AdminPledges() {
                 >
                   <td className="px-4 py-2">
                     <span
-                      className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
+                      className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
                       style={{
                         background:
                           p.status === 'FULFILLED'
@@ -87,7 +87,7 @@ export default function AdminPledges() {
                     {fmt(p.total_cents)}
                   </td>
                   <td className="px-4 py-2 font-data text-off-white/55">{p.items.length}</td>
-                  <td className="px-4 py-2 font-mono text-[10px] text-off-white/55 max-w-[120px] truncate">
+                  <td className="px-4 py-2 font-mono text-sm text-off-white/55 max-w-[120px] truncate">
                     {p.relay_client_key ? `${p.relay_client_key.slice(0, 16)}...` : '-'}
                   </td>
                   <td className="px-4 py-2 font-data text-off-white/55">
@@ -104,7 +104,7 @@ export default function AdminPledges() {
                   <tr key={`${p.id}-items`}>
                     <td colSpan={8} className="px-8 py-4" style={{ background: 'rgba(0,0,0,.2)' }}>
                       <div className="space-y-2">
-                        <div className="grid grid-cols-5 gap-2 font-mono text-[10px] uppercase tracking-wider text-off-white/55 mb-1">
+                        <div className="grid grid-cols-5 gap-2 font-mono text-sm uppercase tracking-wider text-off-white/55 mb-1">
                           <span>kind</span>
                           <span>target</span>
                           <span>amount</span>
@@ -117,12 +117,12 @@ export default function AdminPledges() {
                             className="grid grid-cols-5 gap-2 font-data text-sm text-off-white"
                           >
                             <span>{item.kind}</span>
-                            <span className="font-mono text-[10px] truncate">{item.target_id}</span>
+                            <span className="font-mono text-sm truncate">{item.target_id}</span>
                             <span className="text-d-yellow">{fmt(item.amount_cents)}</span>
-                            <span className="font-mono text-[10px] text-off-white/55 truncate">
+                            <span className="font-mono text-sm text-off-white/55 truncate">
                               {item.poll_id || '-'}
                             </span>
-                            <span className="font-mono text-[10px] text-off-white/55 truncate">
+                            <span className="font-mono text-sm text-off-white/55 truncate">
                               {item.data || '-'}
                             </span>
                           </div>
@@ -132,13 +132,13 @@ export default function AdminPledges() {
                             className="mt-3 pt-3"
                             style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
                           >
-                            <p className="font-mono text-[10px] text-off-white/55">
+                            <p className="font-mono text-sm text-off-white/55">
                               relay_key_id: {p.relay_key_id}
                             </p>
-                            <p className="font-mono text-[10px] text-off-white/55">
+                            <p className="font-mono text-sm text-off-white/55">
                               relay_client_key: {p.relay_client_key}
                             </p>
-                            <p className="font-mono text-[10px] text-off-white/55">
+                            <p className="font-mono text-sm text-off-white/55">
                               expires: {new Date(p.expires_at).toLocaleString()}
                             </p>
                           </div>

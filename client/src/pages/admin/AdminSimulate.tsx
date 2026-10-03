@@ -212,7 +212,7 @@ export default function AdminSimulate() {
 
       <Card className="mt-4">
         <h3 className="font-data font-bold text-sm mb-2 text-off-white">curl alternative</h3>
-        <p className="font-body text-xs text-off-white/55 mb-2">
+        <p className="font-body text-sm text-off-white/55 mb-2">
           When STRIPE_WEBHOOK_SECRET is unset, you can POST directly to the webhook:
         </p>
         <pre

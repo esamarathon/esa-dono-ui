@@ -74,7 +74,7 @@ export default function SidebarLayout({
         <button
           onClick={toggle}
           title={collapsed ? 'expand' : 'collapse'}
-          className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-2 ${collapsed ? 'justify-center' : ''}`}
+          className={`flex items-center gap-2 px-3 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55 hover:text-off-white mt-2 ${collapsed ? 'justify-center' : ''}`}
         >
           {collapsed ? (
             <ChevronsRightIcon className="w-4 h-4" />

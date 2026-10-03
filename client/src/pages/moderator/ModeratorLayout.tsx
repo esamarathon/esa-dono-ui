@@ -147,7 +147,7 @@ function ModeratorLayoutInner({ keyValue, onLogout }: { keyValue: string; onLogo
           <Link
             to="/"
             title="back to home"
-            className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white mt-2 ${collapsed ? 'justify-center' : 'text-left'}`}
+            className={`flex items-center gap-2 px-3 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55 hover:text-off-white mt-2 ${collapsed ? 'justify-center' : 'text-left'}`}
           >
             <HomeIcon className="w-4 h-4 shrink-0" />
             {!collapsed && <span>back to home</span>}
@@ -156,7 +156,7 @@ function ModeratorLayoutInner({ keyValue, onLogout }: { keyValue: string; onLogo
             <button
               onClick={onLogout}
               title="logout (moderator key)"
-              className={`flex items-center gap-2 px-3 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55 hover:text-off-white ${collapsed ? 'justify-center' : 'text-left'}`}
+              className={`flex items-center gap-2 px-3 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55 hover:text-off-white ${collapsed ? 'justify-center' : 'text-left'}`}
             >
               <LogoutIcon className="w-4 h-4 shrink-0" />
               {!collapsed && <span>logout (moderator key)</span>}

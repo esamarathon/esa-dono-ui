@@ -274,7 +274,7 @@ export default function AdminWebhooks() {
               {['type', 'message types', 'ssl', 'active', 'actions'].map((h) => (
                 <th
                   key={h}
-                  className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                  className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                 >
                   {h}
                 </th>
@@ -287,14 +287,14 @@ export default function AdminWebhooks() {
                 <tr key={ep.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                   <td className="px-4 py-2">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[10px] uppercase text-off-white/70">
+                      <span className="font-mono text-sm uppercase text-off-white/70">
                         {ep.destination_type === 'RABBITMQ'
                           ? `MQ ${ep.amqp_routing_key ?? ''}`
                           : 'HTTP'}
                       </span>
                       {ep.payload_format === 'TILTIFY' && (
                         <span
-                          className="font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm"
+                          className="font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm"
                           style={{
                             background: 'rgba(208,152,70,.16)',
                             color: 'var(--d-yellow)',
@@ -310,7 +310,7 @@ export default function AdminWebhooks() {
                       {ep.event_types.map((t) => (
                         <span
                           key={t}
-                          className="font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm"
+                          className="font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm"
                           style={{ background: 'rgba(115,78,158,.3)', color: 'var(--off-white)' }}
                         >
                           {t}
@@ -318,7 +318,7 @@ export default function AdminWebhooks() {
                       ))}
                     </div>
                   </td>
-                  <td className="px-4 py-2 font-mono text-[10px] text-off-white/55">
+                  <td className="px-4 py-2 font-mono text-sm text-off-white/55">
                     {ep.verify_ssl ? 'yes' : 'no'}
                   </td>
                   <td className="px-4 py-2">
@@ -327,37 +327,37 @@ export default function AdminWebhooks() {
                   <td className="px-4 py-2 flex gap-2 flex-wrap">
                     <button
                       onClick={() => openEdit(ep)}
-                      className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                     >
                       edit
                     </button>
                     <button
                       onClick={() => handleRotate(ep.id)}
-                      className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                     >
                       rotate
                     </button>
                     <button
                       onClick={() => handleToggleActive(ep)}
-                      className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                     >
                       {ep.is_active ? 'pause' : 'resume'}
                     </button>
                     <button
                       onClick={() => handleTest(ep.id)}
-                      className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                     >
                       test
                     </button>
                     <button
                       onClick={() => handleExpand(ep.id)}
-                      className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                     >
                       {expandedId === ep.id ? 'hide log' : 'log'}
                     </button>
                     <button
                       onClick={() => handleDelete(ep.id)}
-                      className="font-mono text-[10px] tracking-wider uppercase hover:text-off-white"
+                      className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                       style={{ color: 'var(--red)' }}
                     >
                       delete
@@ -377,7 +377,7 @@ export default function AdminWebhooks() {
                             <div className="flex items-center gap-3 mb-2">
                               <button
                                 onClick={handleRequeueFailed}
-                                className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                                className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                               >
                                 requeue all failed
                               </button>
@@ -420,7 +420,7 @@ export default function AdminWebhooks() {
                                   </td>
                                   <td className="px-2 py-1">
                                     <span
-                                      className="font-mono text-[10px] uppercase"
+                                      className="font-mono text-sm uppercase"
                                       style={{
                                         color:
                                           d.status === 'SUCCESS'
@@ -452,7 +452,7 @@ export default function AdminWebhooks() {
                                       <button
                                         onClick={() => handleRequeue(d.id)}
                                         title="Re-send at its original queue position"
-                                        className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                                        className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                                       >
                                         requeue
                                       </button>

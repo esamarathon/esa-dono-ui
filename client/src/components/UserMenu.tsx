@@ -44,7 +44,7 @@ export default function UserMenu({
       >
         <UsersIcon className="w-5 h-5 lg:hidden" />
         <span className="hidden lg:flex flex-col text-right leading-tight">
-          <span className="font-mono text-[10px] tracking-widest uppercase text-d-yellow">
+          <span className="font-mono text-sm tracking-widest uppercase text-d-yellow">
             logged in as
           </span>
           <span className="font-data font-bold text-sm text-off-white">
@@ -65,7 +65,7 @@ export default function UserMenu({
             className="lg:hidden px-3 py-2 mb-1"
             style={{ borderBottom: '1px solid rgba(239,238,236,.08)' }}
           >
-            <p className="font-mono text-[10px] tracking-widest uppercase text-d-yellow">
+            <p className="font-mono text-sm tracking-widest uppercase text-d-yellow">
               logged in as
             </p>
             <p className="font-data font-bold text-sm text-off-white truncate">{donor.email}</p>

@@ -371,7 +371,7 @@ export default function AdminDonors() {
                                   {c.reward?.title || 'Unknown'}
                                 </span>
                                 <span
-                                  className={`ml-2 font-mono text-[10px] px-1.5 py-0.5 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : c.status === 'REVERSED' ? 'text-red' : 'text-d-yellow'}`}
+                                  className={`ml-2 font-mono text-sm px-1.5 py-0.5 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : c.status === 'REVERSED' ? 'text-red' : 'text-d-yellow'}`}
                                   style={{
                                     background:
                                       c.status === 'FULFILLED'
@@ -391,7 +391,7 @@ export default function AdminDonors() {
                                 {c.status !== 'REVERSED' && (
                                   <button
                                     onClick={() => handleReverse('claim', c.id)}
-                                    className="font-mono text-[10px] hover:underline"
+                                    className="font-mono text-sm hover:underline"
                                     style={{ color: 'var(--red)' }}
                                   >
                                     reverse
@@ -421,7 +421,7 @@ export default function AdminDonors() {
                                 </span>
                                 {v.reversed_at && (
                                   <span
-                                    className="ml-2 font-mono text-[10px]"
+                                    className="ml-2 font-mono text-sm"
                                     style={{ color: 'var(--red)' }}
                                   >
                                     (reversed)
@@ -431,7 +431,7 @@ export default function AdminDonors() {
                               {!v.reversed_at && (
                                 <button
                                   onClick={() => handleReverse('vote', v.id)}
-                                  className="font-mono text-[10px] hover:underline"
+                                  className="font-mono text-sm hover:underline"
                                   style={{ color: 'var(--red)' }}
                                 >
                                   reverse
@@ -460,7 +460,7 @@ export default function AdminDonors() {
                                 </span>
                                 {c.reversed_at && (
                                   <span
-                                    className="ml-2 font-mono text-[10px]"
+                                    className="ml-2 font-mono text-sm"
                                     style={{ color: 'var(--red)' }}
                                   >
                                     (reversed)
@@ -470,7 +470,7 @@ export default function AdminDonors() {
                               {!c.reversed_at && (
                                 <button
                                   onClick={() => handleReverse('contribution', c.id)}
-                                  className="font-mono text-[10px] hover:underline"
+                                  className="font-mono text-sm hover:underline"
                                   style={{ color: 'var(--red)' }}
                                 >
                                   reverse
@@ -639,13 +639,13 @@ export default function AdminDonors() {
                       </div>
                     ))}
                     {sweepPreview.donor_count > sweepPreview.sample.length && (
-                      <p className="font-body text-xs text-off-white/40">
+                      <p className="font-body text-sm text-off-white/40">
                         + {sweepPreview.donor_count - sweepPreview.sample.length} more
                       </p>
                     )}
                   </div>
                 )}
-                <p className="font-body text-xs" style={{ color: 'var(--d-yellow)' }}>
+                <p className="font-body text-sm" style={{ color: 'var(--d-yellow)' }}>
                   This cannot be undone. Confirm to proceed.
                 </p>
               </div>

@@ -21,7 +21,7 @@ export default function Home() {
   return (
     <div className="max-w-3xl mx-auto p-8">
       <div className="text-center mb-8">
-        <p className="font-mono text-[10px] font-bold tracking-[0.35em] uppercase text-d-yellow mb-2">
+        <p className="font-mono text-sm font-bold tracking-[0.35em] uppercase text-d-yellow mb-2">
           European Speedrunner Assembly
         </p>
         <h1 className="font-display text-5xl uppercase text-off-white mb-2">
