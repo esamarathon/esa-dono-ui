@@ -7,8 +7,8 @@ on:
     # below once opened as a PR against main or dev, tagged pr-<number>.)
     branches: [main, dev]
     # Release tags (semver, no "v" prefix, e.g. 0.1.0). These do NOT rebuild:
-    # the promote-release job re-tags the image CI already built, scanned and
-    # smoke-tested for the tagged commit.
+    # the promote-release job re-tags the image CI already built and
+    # smoke-tested for the tagged commit. Trivy runs separately on PRs.
     tags: ['[0-9]+.[0-9]+.[0-9]+']
   pull_request:
     branches: [main, dev]
@@ -24,6 +24,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      backend_digest: ${{ steps.backend.outputs.digest }}
+      frontend_digest: ${{ steps.frontend.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -60,13 +63,11 @@ jobs:
             TAG="pr-${PR_NUMBER}"
             echo "backend_tags=${IMAGE_PREFIX}/backend:${TAG}" >> "$GITHUB_OUTPUT"
             echo "frontend_tags=${IMAGE_PREFIX}/frontend:${TAG}" >> "$GITHUB_OUTPUT"
-            echo "scan_backend_ref=${IMAGE_PREFIX}/backend:${TAG}" >> "$GITHUB_OUTPUT"
-            echo "scan_frontend_ref=${IMAGE_PREFIX}/frontend:${TAG}" >> "$GITHUB_OUTPUT"
             echo "run_smoke_test=false" >> "$GITHUB_OUTPUT"
           else
             BRANCH_TAG="$(sanitize "$REF_NAME")"
-            # The sha tag is what CI actually verifies (Trivy scan + smoke
-            # test) below, so every push always gets one regardless of branch.
+            # The smoke test verifies this exact sha tag, not a mutable branch
+            # tag, so every push gets one regardless of branch.
             BACKEND_TAGS="${IMAGE_PREFIX}/backend:${BRANCH_TAG},${IMAGE_PREFIX}/backend:${SHA}"
             FRONTEND_TAGS="${IMAGE_PREFIX}/frontend:${BRANCH_TAG},${IMAGE_PREFIX}/frontend:${SHA}"
             if [ "$REF_NAME" = "main" ]; then
@@ -75,12 +76,11 @@ jobs:
             fi
             echo "backend_tags=${BACKEND_TAGS}" >> "$GITHUB_OUTPUT"
             echo "frontend_tags=${FRONTEND_TAGS}" >> "$GITHUB_OUTPUT"
-            echo "scan_backend_ref=${IMAGE_PREFIX}/backend:${SHA}" >> "$GITHUB_OUTPUT"
-            echo "scan_frontend_ref=${IMAGE_PREFIX}/frontend:${SHA}" >> "$GITHUB_OUTPUT"
             echo "run_smoke_test=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push backend
+        id: backend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -92,17 +92,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy scan backend image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.tags.outputs.scan_backend_ref }}
-          format: table
-          exit-code: 1
-          severity: HIGH,CRITICAL
-          ignore-unfixed: 'true'
-          trivyignores: .trivyignore
-
       - name: Build and push frontend
+        id: frontend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -112,16 +103,6 @@ jobs:
           tags: ${{ steps.tags.outputs.frontend_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Trivy scan frontend image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.tags.outputs.scan_frontend_ref }}
-          format: table
-          exit-code: 1
-          severity: HIGH,CRITICAL
-          ignore-unfixed: 'true'
-          trivyignores: .trivyignore
 
       - name: Smoke-test published images
         if: steps.tags.outputs.run_smoke_test == 'true'
@@ -138,8 +119,61 @@ jobs:
           docker pull "${IMAGE_PREFIX}/frontend:${FRONTEND_IMAGE_TAG}"
           ./scripts/smoke-test.sh
 
+  # Both images must finish building before PR-only security checks start.
+  trivy-images:
+    name: Trivy image (${{ matrix.image }})
+    needs: build-and-push
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            digest: ${{ needs.build-and-push.outputs.backend_digest }}
+          - image: frontend
+            digest: ${{ needs.build-and-push.outputs.frontend_digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan built image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          # Scan this run's image, even if another PR build moves its tag.
+          image-ref: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@${{ matrix.digest }}
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+          ignore-unfixed: 'true'
+          trivyignores: .trivyignore
+
+  trivy-fs:
+    # Preserve the existing check name when moving it between workflows.
+    needs: build-and-push
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+
   # Release images are immutable: :X.Y.Z is created once, from the exact
-  # :<sha> image that passed Trivy and the smoke test, and never overwritten.
+  # :<sha> image that passed the smoke test, and never overwritten.
   # The git tag itself is immutable through the release-tags-immutable ruleset.
   promote-release:
     if: github.ref_type == 'tag'
