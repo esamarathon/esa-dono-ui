@@ -132,7 +132,7 @@ export default function AdminDonations() {
                 <button
                   key={s}
                   onClick={() => toggleStatusFilter(s)}
-                  className="font-mono text-[10px] px-2 py-1 rounded-sm font-bold tracking-wider uppercase"
+                  className="font-mono text-sm px-2 py-1 rounded-sm font-bold tracking-wider uppercase"
                   style={{
                     background: active ? `${STATUS_COLORS[s]}29` : 'transparent',
                     border: `1px solid ${active ? STATUS_COLORS[s] : 'rgba(239,238,236,.15)'}`,
@@ -146,7 +146,7 @@ export default function AdminDonations() {
             })}
             <button
               onClick={() => setUnassignedOnly((v) => !v)}
-              className="font-mono text-[10px] px-2 py-1 rounded-sm font-bold tracking-wider uppercase"
+              className="font-mono text-sm px-2 py-1 rounded-sm font-bold tracking-wider uppercase"
               style={{
                 background: unassignedOnly ? 'rgba(208,152,70,.16)' : 'transparent',
                 border: `1px solid ${unassignedOnly ? 'var(--d-yellow)' : 'rgba(239,238,236,.15)'}`,
@@ -173,7 +173,7 @@ export default function AdminDonations() {
                   ].map((h) => (
                     <th
                       key={h}
-                      className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                      className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                     >
                       {h}
                     </th>
@@ -196,7 +196,7 @@ export default function AdminDonations() {
                         value={d.status}
                         disabled={!!d.refund_id}
                         onChange={(e) => setDonationStatus(d, e.target.value as DonationStatus)}
-                        className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold tracking-wider uppercase"
+                        className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold tracking-wider uppercase"
                         style={{
                           background: `${STATUS_COLORS[d.status]}29`,
                           color: STATUS_COLORS[d.status],
@@ -221,7 +221,7 @@ export default function AdminDonations() {
                         <div className="flex items-center gap-1">
                           <select
                             aria-label={`assign channel for ${d.id}`}
-                            className="font-mono text-[10px] px-1 py-0.5 rounded-sm"
+                            className="font-mono text-sm px-1 py-0.5 rounded-sm"
                             value={assignChoice[d.id] ?? ''}
                             onChange={(e) =>
                               setAssignChoice((prev) => ({ ...prev, [d.id]: e.target.value }))
@@ -237,7 +237,7 @@ export default function AdminDonations() {
                           <button
                             onClick={() => handleAssign(d)}
                             disabled={!assignChoice[d.id]}
-                            className="font-mono text-[10px] tracking-wider uppercase text-d-yellow hover:text-off-white"
+                            className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
                           >
                             assign…
                           </button>
@@ -260,7 +260,7 @@ export default function AdminDonations() {
                 {['donor', 'reward', 'status', 'data', 'date', 'action'].map((h) => (
                   <th
                     key={h}
-                    className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                    className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                   >
                     {h}
                   </th>
@@ -274,7 +274,7 @@ export default function AdminDonations() {
                   <td className="px-4 py-2 font-data text-off-white">{c.reward?.title ?? '-'}</td>
                   <td className="px-4 py-2">
                     <span
-                      className="font-mono text-[10px] px-2 py-0.5 rounded-sm font-bold"
+                      className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
                       style={{
                         background:
                           c.status === 'FULFILLED'
@@ -295,7 +295,7 @@ export default function AdminDonations() {
                   <td className="px-4 py-2">
                     <button
                       onClick={() => toggleFulfilled(c)}
-                      className="font-mono text-[10px] tracking-wider uppercase"
+                      className="font-mono text-sm tracking-wider uppercase"
                       style={{
                         color: c.status === 'FULFILLED' ? 'var(--d-yellow)' : 'var(--green)',
                       }}

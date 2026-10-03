@@ -20,7 +20,7 @@ export default function InfoTip({ text }: InfoTipProps) {
       <InfoIcon className="h-3.5 w-3.5 text-off-white/40 transition-colors group-hover:text-off-white/80" />
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 w-56 -translate-x-1/2 rounded-sm border p-2.5 text-left font-body text-xs leading-snug opacity-0 shadow-lg transition-opacity duration-100 group-hover:opacity-100 group-focus:opacity-100"
+        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 w-56 -translate-x-1/2 rounded-sm border p-2.5 text-left font-body text-sm leading-snug opacity-0 shadow-lg transition-opacity duration-100 group-hover:opacity-100 group-focus:opacity-100"
         style={{
           background: 'var(--dark-gray)',
           borderColor: 'rgba(239,238,236,.12)',

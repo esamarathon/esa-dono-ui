@@ -190,7 +190,7 @@ export default function FeedbackButton() {
             onChange={(e) => setText(e.target.value)}
             disabled={sending || success}
           />
-          <p className="font-mono text-[10px] text-off-white/40 mb-3">
+          <p className="font-mono text-sm text-off-white/40 mb-3">
             {text.length}/{MAX_TEXT_LENGTH}
           </p>
 

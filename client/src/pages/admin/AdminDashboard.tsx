@@ -53,7 +53,7 @@ export default function AdminDashboard() {
                   {['channel', 'raised', 'donations'].map((h) => (
                     <th
                       key={h}
-                      className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                      className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                     >
                       {h}
                     </th>

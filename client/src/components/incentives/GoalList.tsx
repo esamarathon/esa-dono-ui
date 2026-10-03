@@ -124,7 +124,7 @@ export default function GoalList() {
                 )}
                 {unavailable && (
                   <span
-                    className="inline-block font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
+                    className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                     style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
                   >
                     no longer available

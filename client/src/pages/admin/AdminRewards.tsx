@@ -140,7 +140,7 @@ export default function AdminRewards() {
               {['', 'title', 'type', 'cost', 'qty', 'channel', 'active', 'actions'].map((h) => (
                 <th
                   key={h}
-                  className="text-left px-4 py-2 font-mono text-[10px] tracking-wider uppercase text-off-white/55"
+                  className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
                 >
                   {h}
                 </th>
@@ -162,7 +162,7 @@ export default function AdminRewards() {
                 <td className="px-4 py-2 font-data font-bold text-off-white">{r.title}</td>
                 <td className="px-4 py-2">
                   <span
-                    className="font-mono text-[10px] tracking-wider uppercase px-2 py-0.5 rounded-sm"
+                    className="font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm"
                     style={{ background: 'rgba(115,78,158,.3)', color: 'var(--off-white)' }}
                   >
                     {r.type}

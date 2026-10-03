@@ -115,7 +115,7 @@ export default function AdminBroadcast() {
       <Card>
         <div className="space-y-4">
           <div>
-            <label className="block font-body text-xs uppercase tracking-wider text-off-white/55 mb-2">
+            <label className="block font-body text-sm uppercase tracking-wider text-off-white/55 mb-2">
               Banner Message
             </label>
             <textarea
@@ -132,7 +132,7 @@ export default function AdminBroadcast() {
           <div>
             <label
               htmlFor="broadcast-severity"
-              className="block font-body text-xs uppercase tracking-wider text-off-white/55 mb-2"
+              className="block font-body text-sm uppercase tracking-wider text-off-white/55 mb-2"
             >
               Severity
             </label>
