@@ -18,6 +18,18 @@ guess which concept is meant.
 | **Endpoint failure** | A send that the receiving side (URL or broker) rejected or did not answer, including every HTTP 4xx. Retried forever, in order (ADR-0007). "Endpoint" here means the receiver, never the Destination record. | error, transient failure          |
 | **Message failure**  | A message that cannot be sent at all (empty or unparseable payload). Marked `FAILED`; the queue moves on.                                                                                                    | poison message, permanent failure |
 
+## Money and incentives
+
+| Term                  | Means                                                                                                                                                                                       | Avoid                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **Pledge amount**     | The amount a donor commits to at the start of a donation. It sets the size of each Pool. Part of it can be paid with Wallet credit, so it can be more than the money charged.               | declared amount, intended amount, top-up      |
+| **Pool**              | The budget of one incentive category (rewards, polls or goals) in one pledge. Each Pool equals the Pledge amount, so one dollar can back a reward, a poll vote and a goal at the same time. | allowance, budget split                       |
+| **Wallet credit**     | Money a donor gave that no incentive has used yet. The donor can spend it later.                                                                                                            | balance (alone), unallocated donation, credit |
+| **Auto-allocation**   | Moving Pool money the donor did not direct to incentives: first to the donor's own selections in that category, then (goals only) to the Default goal list. The donor cannot turn it off.   | auto-spend, top-up, fallback                  |
+| **Re-vote credit**    | Money from a rejected write-in that the donor can spend only in the same poll, while it is open. When the poll closes, it becomes unused Pool money.                                        | refund, wallet credit                         |
+| **Default goal list** | A Channel's ordered list of goals that receive goal-Pool money the donor did not direct. The first goal on the list that can still take money receives it. Polls have no default.           | default goal, fallback goal, catch-all        |
+| **Money total**       | The money raised by a Channel or an Event. Incentive progress is not money: the sum of incentive totals can be more than the money total.                                                   | amount raised (for incentives)                |
+
 ## "Event" versus "webhook message"
 
 **Event** always means the charity event. A notification sent to a Destination is a
