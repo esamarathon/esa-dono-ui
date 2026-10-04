@@ -2,10 +2,9 @@
 
 Issues and PRDs for this repo live as GitHub issues in **`esamarathon/esa-dono-ui`**, managed via the `gh` CLI.
 
-> **Where issues live.** `origin` is the upstream repo `esamarathon/esa-dono-ui`,
-> where issues are enabled and triaged. The fork `Codescales/esa-dono-ui` is registered
-> as a second remote (`codescales`) and has issues **disabled**, so it is not used for
-> issue tracking. `gh` resolves the repo from `origin` automatically.
+> **Where issues live.** `origin` is `esamarathon/esa-dono-ui`, where issues are
+> enabled and triaged. Push branches to `origin`. `gh` resolves the repo from `origin`
+> automatically.
 
 ## Conventions
 
