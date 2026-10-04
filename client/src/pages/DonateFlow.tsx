@@ -11,6 +11,8 @@ import { CheckBadgeIcon } from '../components/icons';
 import RewardList from '../components/incentives/RewardList';
 import PollList from '../components/incentives/PollList';
 import GoalList from '../components/incentives/GoalList';
+import AmountFirstPrototype from './prototype-amount-first';
+import { PrototypeSwitcher } from './prototype-amount-first/shared';
 const TABS = ['rewards', 'polls', 'goals'] as const;
 type Tab = (typeof TABS)[number];
 
@@ -29,7 +31,19 @@ function tabFromPathname(pathname: string): Tab {
   return 'rewards';
 }
 
+// PROTOTYPE (#157): ?variant=A|B|C renders the amount-first prototypes.
 export default function DonateFlow() {
+  const variant = new URLSearchParams(useLocation().search).get('variant');
+  if (variant && variant !== 'current') return <AmountFirstPrototype />;
+  return (
+    <>
+      <DonateFlowCurrent />
+      {variant === 'current' && <PrototypeSwitcher />}
+    </>
+  );
+}
+
+function DonateFlowCurrent() {
   const {
     loading,
     openDrawer,
