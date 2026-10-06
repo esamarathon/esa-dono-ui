@@ -12,6 +12,7 @@ import Home from './pages/Home';
 import DonateFlow from './pages/DonateFlow';
 import PledgeReturn from './pages/PledgeReturn';
 import MyWallet from './pages/MyWallet';
+import WalletCreditPrototype from './pages/prototype-wallet-credit';
 import Help from './pages/Help';
 import Auctions from './pages/Auctions';
 import AdminLayout from './pages/admin/AdminLayout';
@@ -52,6 +53,21 @@ function PageViewTracker() {
 }
 
 export default function App() {
+  const prototypePath = window.location.pathname.startsWith(import.meta.env.BASE_URL)
+    ? `/${window.location.pathname.slice(import.meta.env.BASE_URL.length)}`
+    : window.location.pathname;
+  if (
+    import.meta.env.DEV &&
+    new URLSearchParams(window.location.search).get('prototype') === 'pool-credit' &&
+    ['/wallet', '/donate'].includes(prototypePath)
+  ) {
+    return (
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
+        <WalletCreditPrototype />
+      </BrowserRouter>
+    );
+  }
+
   return (
     <BrowserRouter>
       <Routes>
