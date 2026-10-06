@@ -387,7 +387,7 @@ function VariantC({ pledges, spend }: WalletProps) {
   );
 }
 
-function PrototypeSwitcher({ variant }: { variant: Variant }) {
+function PrototypeSwitcher({ variant, enabled }: { variant: Variant; enabled: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const change = (offset: number) => {
@@ -411,11 +411,11 @@ function PrototypeSwitcher({ variant }: { variant: Variant }) {
         change(event.key === 'ArrowLeft' ? -1 : 1);
       }
     };
-    if (!import.meta.env.DEV) return;
+    if (!enabled) return;
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [location.pathname, location.search, navigate, variant]);
-  if (!import.meta.env.DEV) return null;
+  }, [location.pathname, location.search, navigate, variant, enabled]);
+  if (!enabled) return null;
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 btrl-panel-dark shadow-lg p-2 flex items-center gap-3 max-w-[95vw]">
       <button
@@ -436,7 +436,8 @@ function PrototypeSwitcher({ variant }: { variant: Variant }) {
   );
 }
 
-export default function WalletCreditPrototype() {
+export default function WalletCreditPrototype({ standalone = false }: { standalone?: boolean }) {
+  const preview = import.meta.env.DEV || standalone;
   const location = useLocation();
   const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
@@ -671,7 +672,7 @@ export default function WalletCreditPrototype() {
 
   return (
     <div className="min-h-screen pb-28">
-      {import.meta.env.DEV && (
+      {preview && (
         <style>{`
         @font-face { font-family: 'Bebas Neue Pro'; src: url('${import.meta.env.BASE_URL}fonts/BebasNeuePro.otf') format('opentype'); font-weight: 800; font-style: normal; font-display: swap; }
         @font-face { font-family: 'Cabin BTRL'; src: url('${import.meta.env.BASE_URL}fonts/Cabin-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
@@ -907,7 +908,7 @@ export default function WalletCreditPrototype() {
                       {staleSimulated ? 'apply credit · reconfirm' : 'apply credit'}
                     </button>
                   </div>
-                  {import.meta.env.DEV && (
+                  {preview && (
                     <button
                       className="font-mono text-xs text-off-white/55 underline mt-6"
                       disabled={staleSimulated || available < 100}
@@ -1135,7 +1136,7 @@ export default function WalletCreditPrototype() {
           </pre>
         </details>
       </div>
-      <PrototypeSwitcher variant={variant} />
+      <PrototypeSwitcher variant={variant} enabled={preview} />
     </div>
   );
 }
