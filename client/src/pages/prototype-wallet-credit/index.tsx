@@ -13,7 +13,9 @@ const VARIANT_NAMES = { A: 'Stacked pledges', B: 'Wallet sidebar', C: 'Donation 
 const LABELS = { rewards: 'Rewards', polls: 'Polls', goals: 'Fund goals' };
 const fmt = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const WALLET_CREDIT = 2500;
-const MIN_CREDIT_CENTS = 100;
+// Existing poll/goal credit can be redeemed to the cent (#166). New donations keep their own minimum.
+const MIN_CREDIT_CENTS = 1;
+const STALE_DEMO_CENTS = 100;
 // Separate from the pool picker. Nothing in this prototype writes to this draft.
 const REGULAR_DRAFT = {
   id: 'existing-normal-draft',
@@ -292,11 +294,6 @@ function PledgeCard({
                   <dd className="font-display text-3xl text-d-yellow">
                     {fmt(pledge.credit[category])}
                   </dd>
-                  {category !== 'rewards' && pledge.credit[category] < MIN_CREDIT_CENTS && (
-                    <p className="font-data text-sm text-off-white/55">
-                      Below the current {fmt(MIN_CREDIT_CENTS)} minimum allocation
-                    </p>
-                  )}
                 </div>
               ))}
             </dl>
@@ -313,8 +310,8 @@ function PledgeCard({
             </button>
             {!hasUsableCredit(pledge, stock) && (
               <p className="font-data text-sm text-off-white/55 mt-2">
-                These balances cannot currently cover an eligible reward or the{' '}
-                {fmt(MIN_CREDIT_CENTS)} poll/goal minimum. They remain here.
+                This reward credit cannot currently cover an eligible non-physical reward. It
+                remains here.
               </p>
             )}
           </div>
@@ -556,7 +553,7 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
     setError('');
   };
   const chooseAmount = (id: string, label: string, selectedCategory: Category) => {
-    const input = amountInputs[`${selectedCategory}:${id}`] ?? String(MIN_CREDIT_CENTS / 100);
+    const input = amountInputs[`${selectedCategory}:${id}`] ?? '';
     const cents = Math.round(Number(input) * 100);
     if (
       !/^\d+(\.\d{0,2})?$/.test(input) ||
@@ -564,7 +561,7 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
       cents < MIN_CREDIT_CENTS
     ) {
       setError(
-        `Minimum allocation ${fmt(MIN_CREDIT_CENTS)}; enter a dollar amount with at most two decimal places. Remove a selection to allocate $0.`,
+        'Enter a positive dollar amount with at most two decimal places. Remove a selection to allocate $0.',
       );
       return;
     }
@@ -657,7 +654,7 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
     );
     goWallet();
   };
-  const staleCategory = CATEGORIES.find((c) => available[c] >= MIN_CREDIT_CENTS);
+  const staleCategory = CATEGORIES.find((c) => available[c] >= STALE_DEMO_CENTS);
   const simulateStale = () => {
     if (!source || !staleCategory || staleSimulated) return;
     setPledges((previous) =>
@@ -667,16 +664,16 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
               ...p,
               credit: {
                 ...p.credit,
-                [staleCategory]: p.credit[staleCategory] - MIN_CREDIT_CENTS,
+                [staleCategory]: p.credit[staleCategory] - STALE_DEMO_CENTS,
               },
               allocated: {
                 ...p.allocated,
-                [staleCategory]: p.allocated[staleCategory] + MIN_CREDIT_CENTS,
+                [staleCategory]: p.allocated[staleCategory] + STALE_DEMO_CENTS,
               },
               history: [
                 ...p.history,
                 {
-                  text: `Demo only: ${fmt(MIN_CREDIT_CENTS)} ${LABELS[staleCategory].toLowerCase()} credit used elsewhere while this review was open.`,
+                  text: `Demo only: ${fmt(STALE_DEMO_CENTS)} ${LABELS[staleCategory].toLowerCase()} credit used elsewhere while this review was open.`,
                   category: staleCategory,
                 },
               ],
@@ -703,7 +700,8 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
             min={MIN_CREDIT_CENTS / 100}
             step="0.01"
             className="w-20 px-2 py-1"
-            value={amountInputs[inputKey] ?? String(MIN_CREDIT_CENTS / 100)}
+            placeholder="0.00"
+            value={amountInputs[inputKey] ?? ''}
             onChange={(e) =>
               setAmountInputs((previous) => ({ ...previous, [inputKey]: e.target.value }))
             }
@@ -832,9 +830,8 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
           <section className="btrl-panel p-6">
             <h1 className="font-display text-3xl mb-3">credit unavailable</h1>
             <p className="font-body text-sm text-off-white/60 mb-4">
-              Choose an original live pledge with usable credit from Available credits. Poll and
-              goal allocations need at least {fmt(MIN_CREDIT_CENTS)}; rewards need their whole-unit
-              price and stock. Ended pledges cannot be spent.
+              Choose an original live pledge with usable credit from Available credits. Rewards need
+              their whole-unit price and stock. Ended pledges cannot be spent.
             </p>
             <button className="btrl-button" onClick={goWallet}>
               back to wallet
@@ -1004,7 +1001,7 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
                       disabled={staleSimulated || !staleCategory}
                       onClick={simulateStale}
                     >
-                      demo: simulate {fmt(MIN_CREDIT_CENTS)} stale credit in one category
+                      demo: simulate {fmt(STALE_DEMO_CENTS)} stale credit in one category
                     </button>
                   )}
                 </section>
@@ -1030,13 +1027,6 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
                       </button>
                     ))}
                   </div>
-                  {category !== 'rewards' && available[category] < MIN_CREDIT_CENTS && (
-                    <p className="font-body text-sm text-off-white/60 mb-4">
-                      {fmt(available[category])} {LABELS[category].toLowerCase()} credit remains
-                      visible, but is below the current {fmt(MIN_CREDIT_CENTS)} minimum allocation.
-                      You can still use other category credits in this review.
-                    </p>
-                  )}
                   {category === 'rewards' && (
                     <>
                       <p className="font-body text-sm text-off-white/60 mb-4">
@@ -1155,8 +1145,8 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
                           <article key={poll.id} className="btrl-panel p-5">
                             <h3 className="font-data font-bold text-lg">{poll.title}</h3>
                             <p className="font-mono text-xs text-off-white/55 mt-1 mb-4">
-                              {poll.channelId ? source.channel : 'Shared'} · {fmt(MIN_CREDIT_CENTS)}{' '}
-                              minimum per option
+                              {poll.channelId ? source.channel : 'Shared'} · any amount up to your
+                              poll credit
                             </p>
                             <div className="space-y-5">
                               {poll.options.map((option) => {
@@ -1204,8 +1194,8 @@ export default function WalletCreditPrototype({ standalone = false }: { standalo
                           <article key={goal.id} className="btrl-panel p-5">
                             <h3 className="font-data font-bold text-lg">{goal.title}</h3>
                             <p className="font-mono text-xs text-off-white/55 mt-1 mb-4">
-                              {goal.channelId ? source.channel : 'Shared'} · {fmt(MIN_CREDIT_CENTS)}{' '}
-                              minimum
+                              {goal.channelId ? source.channel : 'Shared'} · any amount up to your
+                              goal credit
                             </p>
                             <ProgressBar
                               value={current}
