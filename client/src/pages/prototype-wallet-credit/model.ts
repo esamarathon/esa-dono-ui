@@ -21,19 +21,23 @@ export const ACCENT: Record<Category, { text: string; border: string; bg: string
   polls: { text: 'text-d-yellow', border: 'border-d-yellow', bg: 'bg-d-yellow' },
   goals: { text: 'text-green', border: 'border-green', bg: 'bg-green' },
 };
-export const VARIANTS = ['A', 'B', 'C', 'D'] as const;
+export const VARIANTS = ['B', 'B2', 'B3', 'A2'] as const;
 export type Variant = (typeof VARIANTS)[number];
 export const VARIANT_NAMES: Record<Variant, string> = {
-  A: 'Summary + tabs',
-  B: 'Split view with credit panel',
-  C: 'Guided, one category at a time',
-  D: 'Compact table',
+  B: 'Current',
+  B2: 'Quiet list',
+  B3: 'Quick amounts',
+  A2: 'Quiet tabs',
 };
 export const EVENT = 'ESA Summer 2026';
 const CHANNELS = { main: 'ESA Summer · Main', side: 'ESA Summer · Side stream' };
 type ChannelId = keyof typeof CHANNELS;
 export const channelLabel = (channelId: ChannelId | null) =>
   channelId ? CHANNELS[channelId] : 'Shared';
+const CHANNEL_TAGS = { main: 'Main', side: 'Side stream' };
+// Short form for a subtle tag; the Event name is already in the page header.
+export const channelTag = (channelId: ChannelId | null) =>
+  channelId ? CHANNEL_TAGS[channelId] : 'Shared';
 export const fmt = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const zero = (): Totals => ({ rewards: 0, polls: 0, goals: 0 });
 export const WALLET_CREDIT = 2500;
@@ -237,7 +241,7 @@ export function useCreditModel() {
   const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [extraPanel, setExtraPanel] = useState<'help' | 'draft' | null>(null);
+  const [extraPanel, setExtraPanel] = useState<'draft' | null>(null);
   const [reviewed, setReviewed] = useState<Totals | null>(null);
   const [staleSimulated, setStaleSimulated] = useState(false);
   // Bumps on apply and reset so a variant remounts and drops its own tab/step state.
@@ -328,13 +332,14 @@ export function useCreditModel() {
     applyLock.current = false;
     toTop();
   };
+  // Returns false when the amount does not fit, so an inline editor can stay open.
   const replaceSelection = (item: Selection) => {
     const previous = selectionOf(item.id, item.category)?.cents ?? 0;
     if (used[item.category] - previous + item.cents > totals[item.category]) {
       setError(
         `Only ${fmt(remaining[item.category] + previous)} ${SINGULAR[item.category]} credit is left for this. Other categories cannot cover it. Reduce or remove another ${SINGULAR[item.category]} selection first.`,
       );
-      return;
+      return false;
     }
     setSelections((list) =>
       list.some((s) => s.id === item.id && s.category === item.category)
@@ -342,6 +347,7 @@ export function useCreditModel() {
         : [...list, item],
     );
     setError('');
+    return true;
   };
   const remove = (id: string, category: Category) => {
     setSelections((list) => list.filter((s) => s.id !== id || s.category !== category));
@@ -353,42 +359,28 @@ export function useCreditModel() {
     setAmountInputs((inputs) => ({ ...inputs, [inputKey(t.category, t.id)]: value }));
   const chooseAmount = (t: Target) => {
     const input = amountInput(t).trim();
-    if (!input) return;
+    if (!input) return false;
     const cents = Math.round(Number(input) * 100);
     if (!AMOUNT_PATTERN.test(input) || !Number.isSafeInteger(cents) || cents < 1) {
       setError(
         'Enter a positive dollar amount with at most two decimal places. Use remove to take a selection out.',
       );
-      return;
+      return false;
     }
-    replaceSelection({ ...t, cents });
+    return replaceSelection({ ...t, cents });
+  };
+  // Preset amount (quick chips): same checks as a typed amount.
+  const chooseCents = (t: Target, cents: number) => {
+    if (!Number.isSafeInteger(cents) || cents < 1) return false;
+    if (!replaceSelection({ ...t, cents })) return false;
+    setAmountInput(t, (cents / 100).toFixed(2));
+    return true;
   };
   const fillRemaining = (t: Target) => {
     const max = maxFor(t);
     if (max <= 0) return;
     setAmountInput(t, (max / 100).toFixed(2));
     replaceSelection({ ...t, cents: max });
-  };
-  // Replaces every selection of one category at once (guided quick-split shortcuts).
-  const setCategorySelections = (category: Category, items: (Target & { cents: number })[]) => {
-    const kept = items.filter((i) => i.cents > 0);
-    if (kept.reduce((n, i) => n + i.cents, 0) > totals[category]) {
-      setError(`That is more than your ${fmt(totals[category])} ${SINGULAR[category]} credit.`);
-      return;
-    }
-    setSelections((list) => [
-      ...list.filter((s) => s.category !== category),
-      ...kept.map(({ id, label, detail, cents }) => ({ id, category, label, detail, cents })),
-    ]);
-    setAmountInputs((inputs) => ({
-      ...Object.fromEntries(
-        Object.entries(inputs).filter(([key]) => !key.startsWith(`${category}:`)),
-      ),
-      ...Object.fromEntries(
-        kept.map((i) => [inputKey(category, i.id), (i.cents / 100).toFixed(2)]),
-      ),
-    }));
-    setError('');
   };
   const setRewardQuantity = (reward: Reward, quantity: number) => {
     if (quantity <= 0) {
@@ -571,6 +563,7 @@ export function useCreditModel() {
     // The lock is a ref so a double click is blocked before React re-renders.
     canApply: selections.length > 0 && !overBudget && !creditChanged && !applyLock.current,
     error,
+    clearError: () => setError(''),
     notice,
     extraPanel,
     setExtraPanel,
@@ -584,8 +577,8 @@ export function useCreditModel() {
     amountInput,
     setAmountInput,
     chooseAmount,
+    chooseCents,
     fillRemaining,
-    setCategorySelections,
     setRewardQuantity,
     setRewardMessage,
     remove,

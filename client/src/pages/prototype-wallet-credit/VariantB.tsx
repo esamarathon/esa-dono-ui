@@ -23,7 +23,6 @@ import {
   NoPaymentNote,
   RewardControl,
   SelectedList,
-  StaleDemoButton,
   WalletLine,
 } from './shared';
 
@@ -232,7 +231,6 @@ export default function VariantB({ m, preview }: { m: CreditModel; preview: bool
                     apply credits
                   </button>
                 </div>
-                <StaleDemoButton m={m} preview={preview} />
               </div>
             ) : (
               <div className="mt-6 border-t pt-4">

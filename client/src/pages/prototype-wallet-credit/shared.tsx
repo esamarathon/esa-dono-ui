@@ -1,5 +1,5 @@
 // THROWAWAY (#166): small atoms shared by the layout variants. No page layout lives here.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   CATEGORIES,
@@ -221,23 +221,7 @@ export function CreditChanged({ m }: M) {
   );
 }
 
-export function StaleDemoButton({ m, preview }: M & { preview: boolean }) {
-  if (!preview) return null;
-  return (
-    <button
-      className="block font-mono text-xs text-off-white/55 underline mt-6 text-left"
-      disabled={m.staleSimulated || !m.staleCategory}
-      onClick={m.simulateStale}
-    >
-      demo: reduce {m.staleCategory ? SINGULAR[m.staleCategory] : 'one category’s'} credit by{' '}
-      {fmt(STALE_DEMO_CENTS)} while reviewing
-    </button>
-  );
-}
-
 export function Navbar({ m }: M) {
-  const toggle = (panel: 'help' | 'draft') =>
-    m.setExtraPanel(m.extraPanel === panel ? null : panel);
   return (
     <nav
       className="flex flex-wrap items-center gap-4 md:gap-6 px-4 md:px-6 py-4 border-b"
@@ -248,24 +232,12 @@ export function Navbar({ m }: M) {
       </button>
       <button
         onClick={m.toTop}
-        className="font-data font-bold text-sm tracking-wider uppercase text-off-white/55"
-      >
-        home
-      </button>
-      <button
-        onClick={() => toggle('help')}
-        className="font-data font-bold text-sm tracking-wider uppercase text-off-white/55"
-      >
-        help
-      </button>
-      <button
-        onClick={m.toTop}
         className="font-data font-bold text-sm tracking-wider uppercase text-d-yellow"
       >
         wallet
       </button>
       <button
-        onClick={() => toggle('draft')}
+        onClick={() => m.setExtraPanel(m.extraPanel === 'draft' ? null : 'draft')}
         className="btrl-button btrl-button-outline ml-auto text-sm"
       >
         resume $25 donation
@@ -277,122 +249,93 @@ export function Navbar({ m }: M) {
 export function ExtraPanel({ m }: M) {
   if (!m.extraPanel) return null;
   return (
-    <aside className="btrl-panel-dark p-5 mb-6">
-      <div className="flex justify-between gap-4">
-        <h2 className="font-display text-2xl">
-          {m.extraPanel === 'help' ? 'credit guide' : 'existing donation draft · $25.00'}
-        </h2>
-        <button className="text-d-yellow font-data" onClick={() => m.setExtraPanel(null)}>
-          close
-        </button>
-      </div>
-      {m.extraPanel === 'help' ? (
-        <p className="font-body text-sm text-off-white/60 mt-2">
-          When an incentive you paid for is reversed or rejected, the amount comes back as credit
-          for the same category. Your credit for each category is combined across your donations to
-          this Event. Use it on any open incentive of that category below, then apply everything in
-          one review. No payment is made. Wallet credit is separate and is only used when you make a
-          new donation.
-        </p>
-      ) : (
-        <p className="font-body text-sm text-off-white/60 mt-2">
-          Normal donation flow preview only · {REGULAR_DRAFT.channel} · $25.00 donation · 1 digital
-          download selected. This separate mock draft stays untouched. Your {fmt(WALLET_CREDIT)}{' '}
-          wallet credit is used there, not on this page.
-        </p>
-      )}
+    <aside className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-l-2 border-d-yellow pl-3 mb-6 font-body text-sm text-off-white/70">
+      <p className="min-w-0">
+        Your $25.00 donation draft · {REGULAR_DRAFT.channel} · 1 digital download. Credit on this
+        page never changes it.
+      </p>
+      <button className="text-d-yellow font-data" onClick={() => m.setExtraPanel(null)}>
+        close
+      </button>
     </aside>
   );
 }
 
 export function History({ m }: M) {
   return (
-    <details className="btrl-panel p-5 mt-8">
-      <summary className="font-data font-bold text-sm cursor-pointer uppercase tracking-wide">
-        where your credit came from
+    <details className="mt-12 font-body text-sm text-off-white/60">
+      <summary className="cursor-pointer w-max max-w-full text-off-white/45 underline">
+        Where your credit came from
       </summary>
-      <p className="font-body text-sm text-off-white/60 mt-3">
-        Credit is used oldest donation first. You do not need to choose.
-      </p>
+      <p className="mt-3">Credit is used oldest donation first. You do not need to choose.</p>
       {[
         { title: EVENT, list: m.active },
         { title: 'Past Events', list: m.ended },
       ].map(({ title, list }) => (
         <div key={title} className="mt-5">
-          <h3 className="font-display text-2xl">{title}</h3>
-          <div className="space-y-4 mt-2">
-            {list.map((d) => (
-              <article key={d.id} className="border-t pt-3">
-                <div className="flex flex-wrap justify-between gap-2 font-data text-sm">
-                  <p>
-                    <strong>{d.name}</strong> · {d.date} · {d.channel}
-                  </p>
-                  <p className="text-off-white/60">Original pledge {fmt(d.original)}</p>
-                </div>
-                <ul className="mt-2 space-y-1 list-disc pl-5 font-body text-sm text-off-white/60 break-words">
-                  {d.history.map((line, index) => (
-                    <li key={index}>{line.text}</li>
-                  ))}
-                </ul>
-                <p className="font-data text-sm mt-2">
-                  {d.ended
-                    ? 'Event ended · history only'
-                    : CATEGORIES.some((c) => d.credit[c] > 0)
-                      ? `Remaining: ${CATEGORIES.filter((c) => d.credit[c] > 0)
-                          .map((c) => `${LABELS[c]} ${fmt(d.credit[c])}`)
-                          .join(' · ')}`
-                      : 'Remaining: no credit left'}
-                </p>
-              </article>
-            ))}
-          </div>
+          <h3 className="font-data font-bold text-off-white/80">{title}</h3>
+          {list.map((d) => (
+            <article key={d.id} className="mt-3">
+              <p className="font-data text-off-white/80">
+                {d.name} · {d.date} · {d.channel} · original pledge {fmt(d.original)}
+              </p>
+              <ul className="mt-1 space-y-1 list-disc pl-5 break-words">
+                {d.history.map((line, index) => (
+                  <li key={index}>{line.text}</li>
+                ))}
+              </ul>
+              <p className="font-data mt-1">
+                {d.ended
+                  ? 'Event ended · history only'
+                  : CATEGORIES.some((c) => d.credit[c] > 0)
+                    ? `Remaining: ${CATEGORIES.filter((c) => d.credit[c] > 0)
+                        .map((c) => `${LABELS[c]} ${fmt(d.credit[c])}`)
+                        .join(' · ')}`
+                    : 'Remaining: no credit left'}
+              </p>
+            </article>
+          ))}
         </div>
       ))}
     </details>
   );
 }
 
-export function DemoState({ m, variant }: M & { variant: Variant }) {
-  return (
-    <details className="btrl-panel-dark p-4 mt-8">
-      <summary className="font-mono text-xs text-off-white/55 cursor-pointer">
-        DEMO STATE · credit / selections / untouched draft
-      </summary>
-      <pre className="text-xs font-mono overflow-auto p-3 mt-3 max-h-96">
-        {JSON.stringify(
-          {
-            variant,
-            reviewing: m.reviewing,
-            category_totals_cents: m.totals,
-            selected_cents_by_category: m.used,
-            remaining_cents_by_category: m.remaining,
-            reviewed_category_totals_cents: m.reviewed,
-            per_source_credit_cents: m.donations.map((d) => ({
-              id: d.id,
-              date: d.date,
-              channel: d.channel,
-              ended: d.ended,
-              credit: d.credit,
-            })),
-            selections: m.selections,
-            wallet_credit_cents: WALLET_CREDIT,
-            regular_draft: REGULAR_DRAFT,
-            stock: m.stock,
-          },
-          null,
-          2,
-        )}
-      </pre>
-    </details>
+function demoState(m: CreditModel, variant: Variant) {
+  return JSON.stringify(
+    {
+      variant,
+      reviewing: m.reviewing,
+      category_totals_cents: m.totals,
+      selected_cents_by_category: m.used,
+      remaining_cents_by_category: m.remaining,
+      reviewed_category_totals_cents: m.reviewed,
+      per_source_credit_cents: m.donations.map((d) => ({
+        id: d.id,
+        date: d.date,
+        channel: d.channel,
+        ended: d.ended,
+        credit: d.credit,
+      })),
+      selections: m.selections,
+      wallet_credit_cents: WALLET_CREDIT,
+      regular_draft: REGULAR_DRAFT,
+      stock: m.stock,
+    },
+    null,
+    2,
   );
 }
 
-export function Switcher({ variant }: { variant: Variant }) {
+// Prototype-only chrome: layout switcher plus a tools tray (reset, stale-credit demo, state).
+export function Switcher({ m, variant }: M & { variant: Variant }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const [tools, setTools] = useState(false);
+  const [showState, setShowState] = useState(false);
   const go = (offset: number) => {
     const next =
-      VARIANTS[(VARIANTS.indexOf(variant) + offset + VARIANTS.length) % VARIANTS.length] ?? 'A';
+      VARIANTS[(VARIANTS.indexOf(variant) + offset + VARIANTS.length) % VARIANTS.length] ?? 'B2';
     const params = new URLSearchParams(location.search);
     params.set('variant', next);
     navigate(`${location.pathname}?${params}`, { replace: true });
@@ -416,26 +359,83 @@ export function Switcher({ variant }: { variant: Variant }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  const tool = 'btrl-button btrl-button-outline text-xs px-3 py-1';
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 btrl-panel-dark shadow-lg p-2 flex items-center gap-2 w-max max-w-[95vw]">
-      <button
-        className="btrl-button btrl-button-outline shrink-0 px-3 py-1"
-        aria-label="Previous credits layout"
-        onClick={() => go(-1)}
-      >
-        ←
-      </button>
-      <p className="font-mono text-xs text-d-yellow min-w-0 text-center leading-tight">
-        PROTOTYPE · {variant} / {VARIANTS.length} ·{' '}
-        <span className="font-data font-bold text-sm text-off-white">{VARIANT_NAMES[variant]}</span>
-      </p>
-      <button
-        className="btrl-button shrink-0 px-3 py-1"
-        aria-label="Next credits layout"
-        onClick={() => go(1)}
-      >
-        →
-      </button>
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-max max-w-[95vw]">
+      {tools && (
+        <div
+          id="prototype-tools"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(26rem,95vw)] btrl-panel-dark shadow-lg p-3 space-y-2 font-mono text-xs text-off-white/60"
+        >
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={tool}
+              onClick={() => {
+                m.reset();
+                setTools(false);
+              }}
+            >
+              reset demo
+            </button>
+            <button
+              className={tool}
+              disabled={!m.reviewing || m.staleSimulated || !m.staleCategory}
+              onClick={m.simulateStale}
+            >
+              demo: stale credit
+            </button>
+            <button
+              className={tool}
+              aria-pressed={showState}
+              onClick={() => setShowState((s) => !s)}
+            >
+              {showState ? 'hide' : 'show'} demo state
+            </button>
+          </div>
+          <p>
+            Stale credit: during review, takes {fmt(STALE_DEMO_CENTS)} of{' '}
+            {m.staleCategory ? SINGULAR[m.staleCategory] : 'one category’s'} credit as if spent
+            elsewhere.
+          </p>
+          <p>
+            Mock draft: a separate {fmt(REGULAR_DRAFT.pledge_cents)} donation draft (
+            {REGULAR_DRAFT.channel}). Nothing here writes to it.
+          </p>
+          {showState && (
+            <pre className="max-h-[45vh] overflow-auto p-2">{demoState(m, variant)}</pre>
+          )}
+        </div>
+      )}
+      <div className="btrl-panel-dark shadow-lg p-2 flex items-center gap-2">
+        <button
+          className="btrl-button btrl-button-outline shrink-0 px-3 py-1"
+          aria-label="Previous credits layout"
+          onClick={() => go(-1)}
+        >
+          ←
+        </button>
+        <p className="font-mono text-xs text-d-yellow min-w-0 text-center leading-tight">
+          PROTOTYPE · fixtures only · {variant} / {VARIANTS.length} ·{' '}
+          <span className="font-data font-bold text-sm text-off-white">
+            {VARIANT_NAMES[variant]}
+          </span>
+        </p>
+        <button
+          className="shrink-0 font-mono text-xs text-off-white/60 underline px-1"
+          aria-expanded={tools}
+          aria-controls="prototype-tools"
+          onClick={() => setTools((t) => !t)}
+        >
+          tools
+        </button>
+        <button
+          className="btrl-button shrink-0 px-3 py-1"
+          aria-label="Next credits layout"
+          onClick={() => go(1)}
+        >
+          →
+        </button>
+      </div>
     </div>
   );
 }
