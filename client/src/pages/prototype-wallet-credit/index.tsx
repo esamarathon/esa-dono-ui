@@ -1,35 +1,38 @@
 // THROWAWAY UI (#166): one credits page (/wallet or /donate with ?prototype=pool-credit).
 // Category credit is combined across all the donor's active donations in the current Event
-// and spent on that Event's incentives in one review. Four layouts via ?variant=B|B2|B3|A2
+// and spent on that Event's incentives in one review. Five layouts via ?variant=B|B2|B4|B5|B6
 // share one state hook (./model), so the rules are identical and picks survive a layout
 // switch. Fixtures only; no auth, API, checkout or storage. Reload resets everything.
 import { type ComponentType } from 'react';
 import { useLocation } from 'react-router-dom';
-import { VARIANTS, useCreditModel, type CreditModel, type Variant } from './model';
+import { DEFAULT_VARIANT, VARIANTS, useCreditModel, type CreditModel, type Variant } from './model';
 import { ExtraPanel, History, Navbar, Switcher } from './shared';
-import VariantA2 from './VariantA2';
 import VariantB from './VariantB';
 import VariantB2 from './VariantB2';
-import VariantB3 from './VariantB3';
+import VariantB4 from './VariantB4';
+import VariantB5 from './VariantB5';
+import VariantB6 from './VariantB6';
 
 const LAYOUTS: Record<Variant, ComponentType<{ m: CreditModel; preview: boolean }>> = {
   B: VariantB,
   B2: VariantB2,
-  B3: VariantB3,
-  A2: VariantA2,
+  B4: VariantB4,
+  B5: VariantB5,
+  B6: VariantB6,
 };
 const WIDTH: Record<Variant, string> = {
   B: 'max-w-6xl',
   B2: 'max-w-5xl',
-  B3: 'max-w-5xl',
-  A2: 'max-w-3xl',
+  B4: 'max-w-5xl',
+  B5: 'max-w-5xl',
+  B6: 'max-w-5xl',
 };
 
 export default function WalletCreditPrototype({ standalone = false }: { standalone?: boolean }) {
   const preview = import.meta.env.DEV || standalone;
   const m = useCreditModel();
   const raw = new URLSearchParams(useLocation().search).get('variant');
-  const variant: Variant = VARIANTS.find((v) => v === raw) ?? 'B2';
+  const variant: Variant = VARIANTS.find((v) => v === raw) ?? DEFAULT_VARIANT;
   const Layout = LAYOUTS[variant];
 
   return (

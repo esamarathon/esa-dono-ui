@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   CATEGORIES,
+  DEFAULT_VARIANT,
   EVENT,
   LABELS,
   REGULAR_DRAFT,
@@ -335,7 +336,8 @@ export function Switcher({ m, variant }: M & { variant: Variant }) {
   const [showState, setShowState] = useState(false);
   const go = (offset: number) => {
     const next =
-      VARIANTS[(VARIANTS.indexOf(variant) + offset + VARIANTS.length) % VARIANTS.length] ?? 'B2';
+      VARIANTS[(VARIANTS.indexOf(variant) + offset + VARIANTS.length) % VARIANTS.length] ??
+      DEFAULT_VARIANT;
     const params = new URLSearchParams(location.search);
     params.set('variant', next);
     navigate(`${location.pathname}?${params}`, { replace: true });

@@ -1,22 +1,29 @@
 // B2 · Quiet list: B's split view (incentive list + sticky "Your credit" panel) with the
 // controls hidden until the donor taps an incentive. Totals appear only in the panel.
-// B3 reuses this layout with preset amount chips instead of a typed amount.
-import { useState } from 'react';
-import { ACCENT, LABELS, fmt, type Category, type CreditModel } from './model';
+// B4, B5 and B6 reuse this shell with one always-visible control per row.
+import { useState, type ReactNode } from 'react';
+import { ACCENT, LABELS, fmt, type Category, type CreditModel, type Selection } from './model';
 import { NoCredit } from './shared';
-import {
-  CategoryRows,
-  QuietConfirm,
-  QuietHeader,
-  ThinBar,
-  WalletFooter,
-  type EditorKind,
-} from './quiet';
+import { CategoryRows, QuietConfirm, QuietHeader, ThinBar, WalletFooter } from './quiet';
 
 const ORDER: Category[] = ['polls', 'goals', 'rewards'];
 
-export function QuietSplit({ m, kind }: { m: CreditModel; kind: EditorKind }) {
-  const [open, setOpen] = useState<string | null>(null);
+export function QuietSplit({
+  m,
+  rows,
+  hint,
+  blocked = 0,
+  onRemove,
+  onReview,
+}: {
+  m: CreditModel;
+  rows: (category: Category) => ReactNode;
+  hint: string;
+  // Rows with an amount that is not valid yet; review waits until they are fixed.
+  blocked?: number;
+  onRemove?: (selection: Selection) => void;
+  onReview?: () => void;
+}) {
   const { totals, remaining } = m;
   const shown = ORDER.filter((c) => m.shown.includes(c));
 
@@ -43,13 +50,7 @@ export function QuietSplit({ m, kind }: { m: CreditModel; kind: EditorKind }) {
           {shown.map((c) => (
             <section key={c} className="mb-8" aria-label={`${LABELS[c]} incentives`}>
               <h2 className={`font-display text-2xl mb-2 ${ACCENT[c].text}`}>{LABELS[c]}</h2>
-              <CategoryRows
-                m={m}
-                category={c}
-                open={m.reviewing ? null : open}
-                setOpen={setOpen}
-                kind={kind}
-              />
+              {rows(c)}
             </section>
           ))}
         </fieldset>
@@ -105,7 +106,7 @@ export function QuietSplit({ m, kind }: { m: CreditModel; kind: EditorKind }) {
                               className="text-off-white/40 hover:text-red px-1"
                               aria-label={`Remove ${s.label}`}
                               onClick={() => {
-                                setOpen(null);
+                                onRemove?.(s);
                                 m.remove(s.id, s.category);
                               }}
                             >
@@ -116,15 +117,18 @@ export function QuietSplit({ m, kind }: { m: CreditModel; kind: EditorKind }) {
                     )}
                   </ul>
                 ) : (
-                  <p className="font-body text-sm text-off-white/50 mb-4">
-                    Tap an incentive to add credit.
+                  <p className="font-body text-sm text-off-white/50 mb-4">{hint}</p>
+                )}
+                {blocked > 0 && (
+                  <p className="font-body text-xs text-off-white/50 mb-2">
+                    Finish or fix the amount being edited to review.
                   </p>
                 )}
                 <button
                   className="btrl-button w-full"
-                  disabled={!m.selections.length || m.overBudget}
+                  disabled={!m.selections.length || m.overBudget || blocked > 0}
                   onClick={() => {
-                    setOpen(null);
+                    onReview?.();
                     m.review();
                   }}
                 >
@@ -143,5 +147,16 @@ export function QuietSplit({ m, kind }: { m: CreditModel; kind: EditorKind }) {
 }
 
 export default function VariantB2({ m }: { m: CreditModel }) {
-  return <QuietSplit m={m} kind="input" />;
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <QuietSplit
+      m={m}
+      hint="Tap an incentive to add credit."
+      rows={(c) => (
+        <CategoryRows m={m} category={c} open={m.reviewing ? null : open} setOpen={setOpen} />
+      )}
+      onRemove={() => setOpen(null)}
+      onReview={() => setOpen(null)}
+    />
+  );
 }

@@ -21,13 +21,15 @@ export const ACCENT: Record<Category, { text: string; border: string; bg: string
   polls: { text: 'text-d-yellow', border: 'border-d-yellow', bg: 'bg-d-yellow' },
   goals: { text: 'text-green', border: 'border-green', bg: 'bg-green' },
 };
-export const VARIANTS = ['B', 'B2', 'B3', 'A2'] as const;
+export const VARIANTS = ['B', 'B2', 'B4', 'B5', 'B6'] as const;
 export type Variant = (typeof VARIANTS)[number];
+export const DEFAULT_VARIANT: Variant = 'B4';
 export const VARIANT_NAMES: Record<Variant, string> = {
   B: 'Current',
   B2: 'Quiet list',
-  B3: 'Quick amounts',
-  A2: 'Quiet tabs',
+  B4: 'Inline amount',
+  B5: 'Stepper',
+  B6: 'Slider',
 };
 export const EVENT = 'ESA Summer 2026';
 const CHANNELS = { main: 'ESA Summer · Main', side: 'ESA Summer · Side stream' };
@@ -226,7 +228,13 @@ export const GOALS: Goal[] = [
 const initialStock = (): Record<string, number> =>
   Object.fromEntries(REWARDS.map((r) => [r.id, r.stock]));
 const AMOUNT_PATTERN = /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/;
-const inputKey = (category: Category, id: string) => `${category}:${id}`;
+export const inputKey = (category: Category, id: string) => `${category}:${id}`;
+// Cents for a typed dollar amount, or null when it is not a dollar amount with at most 2 decimals.
+export function parseCents(text: string) {
+  const input = text.trim();
+  const cents = Math.round(Number(input) * 100);
+  return AMOUNT_PATTERN.test(input) && Number.isSafeInteger(cents) ? cents : null;
+}
 
 function joinWithAnd(parts: string[]) {
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts.join('');
@@ -332,21 +340,34 @@ export function useCreditModel() {
     applyLock.current = false;
     toTop();
   };
-  // Returns false when the amount does not fit, so an inline editor can stay open.
-  const replaceSelection = (item: Selection) => {
-    const previous = selectionOf(item.id, item.category)?.cents ?? 0;
-    if (used[item.category] - previous + item.cents > totals[item.category]) {
-      setError(
-        `Only ${fmt(remaining[item.category] + previous)} ${SINGULAR[item.category]} credit is left for this. Other categories cannot cover it. Reduce or remove another ${SINGULAR[item.category]} selection first.`,
-      );
-      return false;
-    }
+  const fits = (item: Selection) =>
+    used[item.category] - (selectionOf(item.id, item.category)?.cents ?? 0) + item.cents <=
+    totals[item.category];
+  const upsert = (item: Selection) => {
     setSelections((list) =>
       list.some((s) => s.id === item.id && s.category === item.category)
         ? list.map((s) => (s.id === item.id && s.category === item.category ? item : s))
         : [...list, item],
     );
     setError('');
+  };
+  // Returns false when the amount does not fit, so an inline editor can stay open.
+  const replaceSelection = (item: Selection) => {
+    if (!fits(item)) {
+      setError(
+        `Only ${fmt(maxFor(item))} ${SINGULAR[item.category]} credit is left for this. Other categories cannot cover it. Reduce or remove another ${SINGULAR[item.category]} selection first.`,
+      );
+      return false;
+    }
+    upsert(item);
+    return true;
+  };
+  // For always-visible row controls: commits a positive amount that fits, or returns false
+  // without a page-level error (the row shows its own message).
+  const setCents = (t: Target, cents: number) => {
+    const item = { ...t, cents };
+    if (!Number.isSafeInteger(cents) || cents < 1 || !fits(item)) return false;
+    upsert(item);
     return true;
   };
   const remove = (id: string, category: Category) => {
@@ -360,21 +381,14 @@ export function useCreditModel() {
   const chooseAmount = (t: Target) => {
     const input = amountInput(t).trim();
     if (!input) return false;
-    const cents = Math.round(Number(input) * 100);
-    if (!AMOUNT_PATTERN.test(input) || !Number.isSafeInteger(cents) || cents < 1) {
+    const cents = parseCents(input);
+    if (cents === null || cents < 1) {
       setError(
         'Enter a positive dollar amount with at most two decimal places. Use remove to take a selection out.',
       );
       return false;
     }
     return replaceSelection({ ...t, cents });
-  };
-  // Preset amount (quick chips): same checks as a typed amount.
-  const chooseCents = (t: Target, cents: number) => {
-    if (!Number.isSafeInteger(cents) || cents < 1) return false;
-    if (!replaceSelection({ ...t, cents })) return false;
-    setAmountInput(t, (cents / 100).toFixed(2));
-    return true;
   };
   const fillRemaining = (t: Target) => {
     const max = maxFor(t);
@@ -577,7 +591,7 @@ export function useCreditModel() {
     amountInput,
     setAmountInput,
     chooseAmount,
-    chooseCents,
+    setCents,
     fillRemaining,
     setRewardQuantity,
     setRewardMessage,

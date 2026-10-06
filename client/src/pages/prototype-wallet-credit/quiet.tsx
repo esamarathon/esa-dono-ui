@@ -1,6 +1,6 @@
-// THROWAWAY (#166): calm building blocks for B2, B3 and A2. Rows show a name and a thin bar;
-// amount controls appear only in the one editor the donor opens.
-import { useState, type ReactNode } from 'react';
+// THROWAWAY (#166): calm building blocks for the split-view variants. In B2, rows show a name
+// and a thin bar; amount controls appear only in the one editor the donor opens.
+import { type ReactNode } from 'react';
 import {
   ACCENT,
   CREDIT_REWARDS,
@@ -19,11 +19,9 @@ import {
 import { CreditChanged } from './shared';
 
 type M = { m: CreditModel };
-export type EditorKind = 'input' | 'chips';
 // Key of the one open editor (`category:id`), or null.
 export type OpenEditor = { open: string | null; setOpen: (key: string | null) => void };
 const keyOf = (category: Category, id: string) => `${category}:${id}`;
-const PRESETS = [100, 200, 500];
 
 export function QuietHeader() {
   return (
@@ -44,7 +42,7 @@ export function WalletFooter() {
   );
 }
 
-function Tag({ children }: { children: ReactNode }) {
+export function Tag({ children }: { children: ReactNode }) {
   return (
     <span className="ml-2 font-mono text-[11px] font-normal uppercase tracking-wide text-off-white/40">
       {children}
@@ -195,79 +193,6 @@ function AmountEditor({ m, t, close }: M & { t: Target; close: () => void }) {
   );
 }
 
-function QuickAmounts({ m, t, close }: M & { t: Target; close: () => void }) {
-  const selected = m.selectionOf(t.id, t.category);
-  const max = m.maxFor(t);
-  const presets = PRESETS.filter((c) => c < max);
-  const [other, setOther] = useState(
-    Boolean(selected && selected.cents !== max && !presets.includes(selected.cents)),
-  );
-  const pick = (cents: number) => m.chooseCents(t, cents) && close();
-  const chip = (cents: number, text: string) => (
-    <button
-      key={text}
-      className={`rounded-full border px-3 py-1 ${
-        selected?.cents === cents
-          ? `${ACCENT[t.category].border} ${ACCENT[t.category].text}`
-          : 'border-off-white/25'
-      }`}
-      aria-pressed={selected?.cents === cents}
-      onClick={() => pick(cents)}
-    >
-      {text}
-    </button>
-  );
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-2 font-data text-sm">
-        {presets.map((c) => chip(c, `$${c / 100}`))}
-        {max > 0 && chip(max, `all ${fmt(max)}`)}
-        {!other && (
-          <button className="text-off-white/55 underline ml-1" onClick={() => setOther(true)}>
-            other amount
-          </button>
-        )}
-        {selected && (
-          <button
-            className="text-off-white/55 underline ml-1"
-            onClick={() => {
-              m.remove(t.id, t.category);
-              close();
-            }}
-          >
-            remove
-          </button>
-        )}
-      </div>
-      {other && (
-        <div className="flex flex-wrap items-center gap-3 mt-3 font-data text-sm">
-          <label>
-            ${' '}
-            <input
-              aria-label={`${t.label} credit in dollars`}
-              type="text"
-              inputMode="decimal"
-              autoFocus
-              className="w-24 px-2 py-1"
-              value={m.amountInput(t)}
-              onChange={(e) => m.setAmountInput(t, e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && m.chooseAmount(t) && close()}
-            />
-          </label>
-          <button
-            className="btrl-button text-sm px-4 py-1"
-            disabled={!m.amountInput(t).trim()}
-            onClick={() => m.chooseAmount(t) && close()}
-          >
-            done
-          </button>
-        </div>
-      )}
-      <InlineError m={m} />
-    </>
-  );
-}
-
 function RewardEditor({ m, reward, close }: M & { reward: Reward; close: () => void }) {
   const selection = m.selectionOf(reward.id, 'rewards');
   const quantity = selection?.quantity ?? 0;
@@ -317,8 +242,7 @@ export function CategoryRows({
   category,
   open,
   setOpen,
-  kind,
-}: M & OpenEditor & { category: Category; kind: EditorKind }) {
+}: M & OpenEditor & { category: Category }) {
   const accent = ACCENT[category].bg;
   const toggle = (t: Target) => {
     m.clearError();
@@ -343,11 +267,7 @@ export function CategoryRows({
         onToggle={() => toggle(t)}
         bar={bar}
       >
-        {kind === 'chips' ? (
-          <QuickAmounts m={m} t={t} close={close} />
-        ) : (
-          <AmountEditor m={m} t={t} close={close} />
-        )}
+        <AmountEditor m={m} t={t} close={close} />
       </Row>
     );
   };
