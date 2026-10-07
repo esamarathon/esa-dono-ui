@@ -21,15 +21,12 @@ export const ACCENT: Record<Category, { text: string; border: string; bg: string
   polls: { text: 'text-d-yellow', border: 'border-d-yellow', bg: 'bg-d-yellow' },
   goals: { text: 'text-green', border: 'border-green', bg: 'bg-green' },
 };
-export const VARIANTS = ['B', 'B2', 'B4', 'B5', 'B6'] as const;
+export const VARIANTS = ['B7', 'B'] as const;
 export type Variant = (typeof VARIANTS)[number];
-export const DEFAULT_VARIANT: Variant = 'B4';
+export const DEFAULT_VARIANT: Variant = 'B7';
 export const VARIANT_NAMES: Record<Variant, string> = {
-  B: 'Current',
-  B2: 'Quiet list',
-  B4: 'Inline amount',
-  B5: 'Stepper',
-  B6: 'Slider',
+  B7: 'Refined B',
+  B: 'Original B',
 };
 export const EVENT = 'ESA Summer 2026';
 const CHANNELS = { main: 'ESA Summer · Main', side: 'ESA Summer · Side stream' };
@@ -362,14 +359,6 @@ export function useCreditModel() {
     upsert(item);
     return true;
   };
-  // For always-visible row controls: commits a positive amount that fits, or returns false
-  // without a page-level error (the row shows its own message).
-  const setCents = (t: Target, cents: number) => {
-    const item = { ...t, cents };
-    if (!Number.isSafeInteger(cents) || cents < 1 || !fits(item)) return false;
-    upsert(item);
-    return true;
-  };
   const remove = (id: string, category: Category) => {
     setSelections((list) => list.filter((s) => s.id !== id || s.category !== category));
     setAmountInputs((inputs) => ({ ...inputs, [inputKey(category, id)]: '' }));
@@ -577,7 +566,6 @@ export function useCreditModel() {
     // The lock is a ref so a double click is blocked before React re-renders.
     canApply: selections.length > 0 && !overBudget && !creditChanged && !applyLock.current,
     error,
-    clearError: () => setError(''),
     notice,
     extraPanel,
     setExtraPanel,
@@ -591,7 +579,6 @@ export function useCreditModel() {
     amountInput,
     setAmountInput,
     chooseAmount,
-    setCents,
     fillRemaining,
     setRewardQuantity,
     setRewardMessage,
