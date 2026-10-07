@@ -63,16 +63,8 @@ jobs:
         run: npx prisma generate
         working-directory: server
 
-      - name: Push database schema
-        run: npx prisma db push --accept-data-loss
-        working-directory: server
-        env:
-          DATABASE_URL: 'file:./dev.db'
-
       - name: Run tests
         run: npm run test:ci
-        env:
-          DATABASE_URL: 'file:./dev.db'
 
   build:
     name: Build
