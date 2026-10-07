@@ -434,10 +434,10 @@ curl -s -H "Authorization: Bearer key_metrics_$METRICS_API_KEY" http://localhost
    See § Client IP and `TRUST_PROXY`.
 10. **`DATABASE_URL` path resolution.** The Prisma CLI resolves a relative SQLite
     URL against the schema directory; the generated PrismaClient resolves it
-    against `process.cwd()`. The Docker `test` target pins an absolute
-    `file:/app/server/prisma/dev.db` to sidestep the mismatch (see the comment in
-    `Dockerfile.backend`). Server tests do not use that file: each vitest run
-    migrates its own temp DB (`server/test/global-setup.ts`).
+    against `process.cwd()`. Use an absolute `file:` URL when both must open the
+    same file. Server tests are not affected: each vitest run migrates its own
+    temp DB at an absolute path (`server/test/global-setup.ts`), so neither CI
+    nor the Docker `test` target prepares a database.
 
 ### Agent pre-flight / verification checklist
 
