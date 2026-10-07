@@ -88,7 +88,7 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 
   it('REJECTED: refunds balance, reverses the vote, marks option REJECTED, writes a BalanceAdjustment', async () => {
     const { token: modToken } = await makeModerator();
@@ -145,7 +145,7 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 
   it('rejects moderating an already-decided entry', async () => {
     const { token: modToken } = await makeModerator();
@@ -171,7 +171,7 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 });
 
 describe('Moderator access control', () => {
