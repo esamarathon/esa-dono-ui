@@ -61,7 +61,7 @@ describe('Pledge Service', () => {
       expect(result.pledge_token).toBeTruthy();
       expect(result.total_cents).toBe(1000);
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
-    }, 10000);
+    });
 
     it('persists a trimmed display_name on the pledge (#54)', async () => {
       const result = await createPledge({
@@ -76,7 +76,7 @@ describe('Pledge Service', () => {
       });
       expect(pledge.display_name).toBe('Jane Donor');
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
-    }, 10000);
+    });
 
     it('rejects a display_name exceeding the max length', async () => {
       await expect(
@@ -127,7 +127,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('rejects invalid item kind', async () => {
       await expect(
@@ -152,7 +152,7 @@ describe('Pledge Service', () => {
       expect(result.expires_at).toBeTruthy();
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('creates a reward pledge with a quantity > 1, totaling cost_cents * quantity (#50)', async () => {
       const reward = await prisma.reward.create({
@@ -171,7 +171,7 @@ describe('Pledge Service', () => {
       expect(pledge!.items[0]!.quantity).toBe(3);
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('rejects a REWARD quantity that would exceed remaining stock (#50)', async () => {
       const reward = await prisma.reward.create({
@@ -185,7 +185,7 @@ describe('Pledge Service', () => {
         }),
       ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('sold out') });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('creates a multi-item pledge', async () => {
       const reward = await prisma.reward.create({
@@ -223,7 +223,7 @@ describe('Pledge Service', () => {
       await prisma.reward.delete({ where: { id: reward.id } });
       await prisma.poll.delete({ where: { id: poll.id } });
       await prisma.fundGoal.delete({ where: { id: goal.id } });
-    }, 10000);
+    });
   });
 
   describe('createPledge — channel scoping', () => {
@@ -246,7 +246,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('rejects an incentive tied to a different event', async () => {
       const reward = await prisma.reward.create({
@@ -268,7 +268,7 @@ describe('Pledge Service', () => {
       ).rejects.toThrow('belongs to a different channel');
 
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('allows an incentive tied to the matching event', async () => {
       const reward = await prisma.reward.create({
@@ -289,7 +289,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
   });
 
   describe('createPledge — POLL_CUSTOM', () => {
@@ -315,7 +315,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token: result.pledge_token } });
       await prisma.poll.delete({ where: { id: poll.id } });
-    }, 10000);
+    });
 
     it('rejects when poll does not allow custom entries', async () => {
       const poll = await prisma.poll.create({
@@ -338,7 +338,7 @@ describe('Pledge Service', () => {
       ).rejects.toThrow('does not allow custom entries');
 
       await prisma.poll.delete({ where: { id: poll.id } });
-    }, 10000);
+    });
 
     it('rejects a missing label', async () => {
       const poll = await prisma.poll.create({
@@ -353,7 +353,7 @@ describe('Pledge Service', () => {
       ).rejects.toThrow('requires a label');
 
       await prisma.poll.delete({ where: { id: poll.id } });
-    }, 10000);
+    });
   });
 
   describe('resolvePledge', () => {
@@ -373,7 +373,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('returns null for insufficient amount', async () => {
       const reward = await prisma.reward.create({
@@ -390,7 +390,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('falls back to email lookup', async () => {
       const reward = await prisma.reward.create({
@@ -411,7 +411,7 @@ describe('Pledge Service', () => {
 
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
   });
 
   describe('createCheckoutForPledge — wallet discount', () => {
@@ -458,7 +458,7 @@ describe('Pledge Service', () => {
       await prisma.donor.delete({ where: { id: donor.id } });
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('creates a Donation row when the wallet fully covers the pledge (#43)', async () => {
       // Unique per run: a failed earlier run cannot collide with this one.
@@ -521,7 +521,7 @@ describe('Pledge Service', () => {
       await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
       await prisma.donor.delete({ where: { id: donor.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('carries display_name through to Donation.donor_name on the wallet-covered path (#54)', async () => {
       const reward = await prisma.reward.create({
@@ -567,7 +567,7 @@ describe('Pledge Service', () => {
       await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
       await prisma.donor.delete({ where: { id: donor.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
   });
 
   describe('fulfillPledge via processDonation', () => {
@@ -601,7 +601,7 @@ describe('Pledge Service', () => {
       await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it("queues donation.created in the same transaction, with the pledge's channel", async () => {
       // The emit used to run after commit with the caller's channelId (null for a
@@ -645,7 +645,7 @@ describe('Pledge Service', () => {
       await prisma.webhookDestination.delete({ where: { id: dest.id } });
       await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
-    }, 10000);
+    });
 
     it('fulfills a reward pledge with quantity > 1, creating one RewardClaim per unit and charging cost_cents * quantity (#50)', async () => {
       const reward = await prisma.reward.create({
@@ -678,7 +678,7 @@ describe('Pledge Service', () => {
       await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it("prefers the pledge's display_name over the Stripe-derived donorName (#54)", async () => {
       const reward = await prisma.reward.create({
@@ -707,7 +707,7 @@ describe('Pledge Service', () => {
       await prisma.rewardClaim.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.reward.delete({ where: { id: reward.id } });
-    }, 10000);
+    });
 
     it('fulfills a POLL_CUSTOM write-in pledge (auto_approve) and updates the tally', async () => {
       const poll = await prisma.poll.create({
@@ -755,7 +755,7 @@ describe('Pledge Service', () => {
       await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.poll.delete({ where: { id: poll.id } });
-    }, 10000);
+    });
 
     it('fulfills a POLL_CUSTOM write-in pledge but excludes it from the tally when auto_approve is false', async () => {
       const poll = await prisma.poll.create({
@@ -808,7 +808,7 @@ describe('Pledge Service', () => {
       await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
       await prisma.poll.delete({ where: { id: poll.id } });
-    }, 10000);
+    });
 
     it('gracefully degrades when no pledge matches', async () => {
       const result = await processDonation({
@@ -824,7 +824,7 @@ describe('Pledge Service', () => {
       const donor = await prisma.donor.findUnique({ where: { email: 'nopledge@example.com' } });
       await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
-    }, 10000);
+    });
 
     it('handles duplicate donation idempotently', async () => {
       const externalId = `test-dup-${crypto.randomUUID()}`;
@@ -847,6 +847,6 @@ describe('Pledge Service', () => {
       const donor = await prisma.donor.findUnique({ where: { email: 'dup@example.com' } });
       await prisma.donation.deleteMany({ where: { donor_id: donor!.id } });
       await prisma.donor.delete({ where: { id: donor!.id } });
-    }, 10000);
+    });
   });
 });
