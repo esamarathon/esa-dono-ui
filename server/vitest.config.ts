@@ -1,5 +1,4 @@
 import { defineConfig } from 'vitest/config';
-import path from 'path';
 
 export default defineConfig({
   // vite-node (the vitest runner) does not honor `resolve.extensionAlias`, so
@@ -17,11 +16,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    env: {
-      DATABASE_URL: `file:${path.resolve(__dirname, 'prisma/dev.db')}`,
-    },
+    // Creates a fresh, migrated SQLite DB in a temp dir (tmpfs where possible)
+    // for this run, sets DATABASE_URL for the workers, and deletes it after.
+    // Do not set DATABASE_URL in `test.env`: it would override that value.
+    globalSetup: ['./test/global-setup.ts'],
     setupFiles: ['./test/setup.ts'],
-    // Several test files hit the real SQLite dev.db directly (each opening
+    // Several test files hit the real SQLite test DB directly (each opening
     // its own PrismaClient) for integration-style coverage of tx-based money
     // movement. SQLite serializes writers at the file level, so running
     // those files' tests concurrently across worker threads causes

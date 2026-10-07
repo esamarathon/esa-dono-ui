@@ -436,7 +436,8 @@ curl -s -H "Authorization: Bearer key_metrics_$METRICS_API_KEY" http://localhost
     URL against the schema directory; the generated PrismaClient resolves it
     against `process.cwd()`. The Docker `test` target pins an absolute
     `file:/app/server/prisma/dev.db` to sidestep the mismatch (see the comment in
-    `Dockerfile.backend`). Keep these in sync with `server/vitest.config.ts`.
+    `Dockerfile.backend`). Server tests do not use that file: each vitest run
+    migrates its own temp DB (`server/test/global-setup.ts`).
 
 ### Agent pre-flight / verification checklist
 
