@@ -32,7 +32,7 @@ const ORDER: Category[] = ['polls', 'goals', 'rewards'];
 
 function Tag({ children }: { children: string }) {
   return (
-    <span className="ml-2 font-mono text-[11px] uppercase tracking-wider text-off-white/45">
+    <span className="ml-2 font-mono text-xs uppercase tracking-wider text-off-white/55">
       {children}
     </span>
   );
@@ -48,7 +48,7 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
   return (
     <>
       <h1 className="font-display text-4xl uppercase">use your credits</h1>
-      <p className="font-body text-sm text-off-white/60 mb-6">
+      <p className="font-body text-base text-off-white/70 mb-6">
         {EVENT} · combined from all your donations. Each credit works only on its own category.
       </p>
 
@@ -58,7 +58,7 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] items-start">
           <div className="min-w-0">
             {/* Mobile only: the panel sits below the list, so keep balances in view. */}
-            <div className="lg:hidden sticky top-0 z-30 btrl-panel-dark shadow-lg p-3 mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-data text-sm">
+            <div className="lg:hidden sticky top-0 z-30 btrl-panel-dark shadow-lg p-3 mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-data text-base">
               {shown.map((c) => (
                 <span key={c} className={remaining[c] < 0 ? 'text-red' : ACCENT[c].text}>
                   {LABELS[c]} {fmt(remaining[c])} left
@@ -83,16 +83,16 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
                         const view = m.pollView(poll);
                         return (
                           <article key={poll.id} className="btrl-panel p-4">
-                            <p className="font-data font-bold">
+                            <p className="font-data font-bold text-lg">
                               {poll.title}
                               <Tag>{channelTag(poll.channelId)}</Tag>
                             </p>
                             <div className="grid gap-4 sm:grid-cols-2 mt-3">
                               {view.options.map((option) => (
                                 <div key={option.id} className="min-w-0">
-                                  <div className="flex justify-between font-data text-sm mb-1">
+                                  <div className="flex justify-between font-data text-base mb-1">
                                     <span>{option.label}</span>
-                                    <span className="text-off-white/55">{fmt(option.current)}</span>
+                                    <span className="text-off-white/65">{fmt(option.current)}</span>
                                   </div>
                                   <ProgressBar
                                     value={option.current}
@@ -118,11 +118,11 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
                         return (
                           <article key={goal.id} className="btrl-panel p-4">
                             <div className="flex flex-wrap justify-between gap-2 font-data mb-2">
-                              <p className="font-bold">
+                              <p className="font-bold text-lg">
                                 {goal.title}
                                 <Tag>{channelTag(goal.channelId)}</Tag>
                               </p>
-                              <p className="text-sm text-off-white/55">
+                              <p className="text-base text-off-white/65">
                                 {fmt(view.current)} / {fmt(goal.target)}
                               </p>
                             </div>
@@ -190,13 +190,13 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
                   .filter((c) => used[c] > 0)
                   .map((c) => (
                     <div key={c} className="mb-3">
-                      <p className={`font-data font-bold text-sm ${ACCENT[c].text}`}>
+                      <p className={`font-data font-bold text-base ${ACCENT[c].text}`}>
                         {LABELS[c]} · {fmt(used[c])}
                       </p>
                       <SelectedList m={m} category={c} />
                     </div>
                   ))}
-                <p className="font-body text-xs text-off-white/55 py-3 border-t">
+                <p className="font-body text-sm text-off-white/65 py-3 border-t">
                   No payment. Incentive totals change; money totals don’t.
                 </p>
                 <CreditChanged m={m} />
@@ -223,7 +223,7 @@ export default function VariantB7({ m, preview }: { m: CreditModel; preview: boo
               </div>
             )}
 
-            <div className="mt-5 pt-3 border-t font-data text-xs text-off-white/55 flex flex-wrap gap-x-2">
+            <div className="mt-5 pt-3 border-t font-data text-sm text-off-white/65 flex flex-wrap gap-x-2">
               <span>Wallet credit {fmt(WALLET_CREDIT)} · for new donations</span>
               <button
                 className="text-d-yellow underline"
