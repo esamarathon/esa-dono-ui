@@ -29,7 +29,6 @@ const prisma = new PrismaClient();
 describe('auction service', () => {
   beforeAll(() => {
     process.env.APP_BASE_URL = 'http://localhost:5173';
-    vi.setConfig({ testTimeout: 15000 });
   });
 
   afterEach(() => {
