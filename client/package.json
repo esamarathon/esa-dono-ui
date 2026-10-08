@@ -10,7 +10,8 @@
     "test:ci": "vitest run --reporter=junit --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "prototype:staff-views": "vite --config src/pages/admin/prototype-staff-pool-views/vite.config.ts"
   },
   "dependencies": {
     "@dono/shared": "*",
