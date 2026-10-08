@@ -35,7 +35,7 @@ import {
 
 export type Variant = 'A' | 'B' | 'C';
 export const VARIANTS: Variant[] = ['A', 'B', 'C'];
-export const DEFAULT_VARIANT: Variant = 'A';
+export const DEFAULT_VARIANT: Variant = 'C';
 export const VARIANT_NAMES: Record<Variant, string> = {
   A: 'Stacked sections',
   B: 'Ledger + side rail',

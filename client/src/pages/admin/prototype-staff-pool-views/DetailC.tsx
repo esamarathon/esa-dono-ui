@@ -1,8 +1,10 @@
 // THROWAWAY (#172) variant C: a compact header that carries the key numbers and the actions,
 // an attention banner, then tabs. Pools are a per-category summary table with expandable rows.
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import ChannelPill from '../../../components/ChannelPill';
+import { InfoIcon } from '../../../components/icons';
 import {
   ATTENTION_FLAGS,
   flags,
@@ -37,6 +39,89 @@ import {
 } from './shared';
 
 type Tab = 'pools' | 'payment refunds' | 'flags & ended targets' | 'details';
+
+const COLUMN_HELP: Record<string, string> = {
+  'Pool credit':
+    'The donor can choose again in this category after an allocation was reversed or a write-in rejected. It can be spent on open incentives in the same Event, except physical rewards. It is not Wallet credit.',
+  'Unused pool money':
+    'Poll or goal Pool amount that is not allocated and is not Pool credit. A moderator can assign it to an eligible poll option or goal; the donor cannot spend it. Rewards do not have Unused pool money.',
+};
+
+// Same info affordance as InfoTip, but portalled so the table's horizontal scroller
+// does not clip the explanation. Tap opens it; outside tap, Escape or scroll closes it.
+function ColumnInfo({ label, text }: { label: string; text: string }) {
+  const id = useId();
+  const button = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const width = Math.min(288, window.innerWidth - 32);
+  const show = () => {
+    const rect = button.current!.getBoundingClientRect();
+    setPosition({
+      left: Math.max(
+        16,
+        Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 16),
+      ),
+      top: rect.bottom + 8,
+    });
+  };
+  useEffect(() => {
+    if (!position) return;
+    const close = () => setPosition(null);
+    const outside = (event: PointerEvent) => {
+      if (!button.current?.contains(event.target as Node)) close();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [position]);
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        aria-label={`${label} explained`}
+        aria-describedby={position ? id : undefined}
+        aria-expanded={!!position}
+        className="inline-flex align-middle ml-1 p-1 rounded-sm text-off-white/40 hover:text-off-white/80 focus-visible:outline focus-visible:outline-1"
+        onPointerEnter={(event) => event.pointerType === 'mouse' && show()}
+        onPointerLeave={(event) => event.pointerType === 'mouse' && setPosition(null)}
+        onFocus={() => button.current?.matches(':focus-visible') && show()}
+        onBlur={() => setPosition(null)}
+        onClick={show}
+      >
+        <InfoIcon className="h-3.5 w-3.5" />
+      </button>
+      {position &&
+        createPortal(
+          <div
+            id={id}
+            role="tooltip"
+            className="fixed z-[60] pointer-events-none rounded-sm border p-2.5 text-left font-body text-sm leading-snug shadow-lg"
+            style={{
+              ...position,
+              width,
+              background: 'var(--dark-gray)',
+              borderColor: 'rgba(239,238,236,.12)',
+              color: 'var(--off-white)',
+            }}
+          >
+            {text}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
 
 export default function DetailC({ m, d }: { m: StaffModel; d: Donation }) {
   const search = useLocation().search;
@@ -135,7 +220,6 @@ export default function DetailC({ m, d }: { m: StaffModel; d: Donation }) {
       {tab === 'pools' &&
         (d.pledge ? (
           <div className="space-y-2">
-            <NotMoneyNote />
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -149,7 +233,10 @@ export default function DetailC({ m, d }: { m: StaffModel; d: Donation }) {
                       'Unused pool money',
                       '',
                     ].map((h) => (
-                      <TH key={h}>{h}</TH>
+                      <TH key={h}>
+                        {h}
+                        {COLUMN_HELP[h] && <ColumnInfo label={h} text={COLUMN_HELP[h]} />}
+                      </TH>
                     ))}
                   </tr>
                 </thead>
