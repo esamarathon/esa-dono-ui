@@ -463,7 +463,10 @@ export function preview(d: Donation, action: Action): Preview {
       ...CATEGORIES.map((c) => sumRows(shippedKept.filter((r) => r.category === c))),
     );
     walletCreditChange = pledge - mostUsed;
-    walletExplain = `Pledge amount ${fmt(pledge)} − most-used category still live ${fmt(mostUsed)}.`;
+    walletExplain =
+      shippedKept.length > 0
+        ? `${fmt(pledge)} pledge amount − ${fmt(mostUsed)} still allocated to fulfilled rewards = ${fmt(walletCreditChange)} returned as Wallet credit.`
+        : `The full ${fmt(pledge)} pledge amount returns as Wallet credit because no live allocations remain.`;
   } else {
     walletCreditChange = d.pledge?.walletAppliedCents ?? 0;
     walletExplain = `The Wallet-credit-funded part of the pledge goes back to the wallet; the paid part does not.`;

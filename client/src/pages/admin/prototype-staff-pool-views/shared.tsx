@@ -296,6 +296,7 @@ function PreviewDialog({
         <p className="text-off-white/60 text-xs font-mono">
           Server-computed preview · simulated with fixture data for {d.id}. Nothing has changed yet.
         </p>
+        <p>This action covers the whole donation: rewards, poll votes and goal contributions.</p>
         <div>
           <p className="font-data font-bold uppercase tracking-wider text-off-white/70 mb-1">
             Rows reversed ({p.reversed.length})
@@ -335,6 +336,12 @@ function PreviewDialog({
           <p className="font-data font-bold uppercase tracking-wider text-off-white/70 mb-1">
             Shipped claims that stay ({p.shippedKept.length})
           </p>
+          {action === 'wallet_refund' && p.shippedKept.length > 0 && (
+            <p className="text-off-white/70 mb-2">
+              These rewards have already shipped, so they are not reversed. Their recorded amounts
+              stay allocated and reduce the Wallet credit returned.
+            </p>
+          )}
           {p.shippedKept.length === 0 ? (
             <p className="text-off-white/55">None.</p>
           ) : (
@@ -353,9 +360,11 @@ function PreviewDialog({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="btrl-panel p-3">
-            <p className="font-data text-off-white/60">Wallet credit change</p>
+            <p className="font-data text-off-white/60">
+              {action === 'wallet_refund' ? 'Wallet credit returned' : 'Wallet credit change'}
+            </p>
             <Num cents={p.walletCreditChange} kind="Wallet credit" big signedValue />
-            <p className="text-xs text-off-white/55 mt-1">{p.walletExplain}</p>
+            <p className="text-sm text-off-white/75 mt-2">{p.walletExplain}</p>
           </div>
           <div className="btrl-panel p-3">
             <p className="font-data text-off-white/60">Money total change</p>
@@ -370,6 +379,13 @@ function PreviewDialog({
               is offered here has not been asked.
             </p>
           </Placeholder>
+        )}
+        {action === 'wallet_refund' && (
+          <p className="text-off-white/70">
+            The pledge is <Num cents={d.pledge?.pledgeCents ?? 0} kind="pledge amount" />, not three
+            separate balances. Poll and goal allocations are overlapping uses of the same pledge, so
+            reversing them does not return their summed amounts.
+          </p>
         )}
         <NotMoneyNote />
         <div className="flex flex-wrap gap-2 justify-end pt-2">
