@@ -263,7 +263,7 @@ export function StatusActions({
             onClick={() => setOpen(a)}
             className={
               compact
-                ? `font-body text-sm px-3 py-2 rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${a === 'chargeback' ? 'border-red/25 text-red/90 hover:bg-red/10' : 'border-off-white/20 text-off-white/80 hover:bg-off-white/[.06]'}`
+                ? `font-body text-sm px-3 py-2 rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${a === 'chargeback' ? 'border-red/25 text-red/90 hover:bg-red/10' : 'border-purple bg-d-purple text-off-white hover:bg-purple disabled:hover:bg-d-purple'}`
                 : `btrl-button ${a === 'chargeback' ? 'btrl-button-outline' : ''} text-sm px-4 py-2`
             }
           >
