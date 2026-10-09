@@ -254,14 +254,18 @@ export function StatusActions({
   const reason = disabledReason(d);
   return (
     <div className="space-y-2">
-      <div className={`flex flex-wrap gap-2 ${compact ? '' : ''}`}>
+      <div className="flex flex-wrap gap-2">
         {(['wallet_refund', 'chargeback'] as Action[]).map((a) => (
           <button
             key={a}
             disabled={!!reason}
             title={reason ?? undefined}
             onClick={() => setOpen(a)}
-            className={`btrl-button ${a === 'chargeback' ? 'btrl-button-outline' : ''} text-sm px-4 py-2`}
+            className={
+              compact
+                ? `font-body text-sm px-3 py-2 rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${a === 'chargeback' ? 'border-red/25 text-red/90 hover:bg-red/10' : 'border-off-white/20 text-off-white/80 hover:bg-off-white/[.06]'}`
+                : `btrl-button ${a === 'chargeback' ? 'btrl-button-outline' : ''} text-sm px-4 py-2`
+            }
           >
             {ACTION_LABEL[a]}
           </button>
