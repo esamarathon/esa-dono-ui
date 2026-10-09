@@ -241,15 +241,7 @@ export const POOL_TITLE = POOL_LABEL;
 
 // ---- Q4: action buttons + preview dialog -----------------------------------
 
-export function StatusActions({
-  m,
-  d,
-  compact = false,
-}: {
-  m: StaffModel;
-  d: Donation;
-  compact?: boolean;
-}) {
+export function StatusActions({ m, d }: { m: StaffModel; d: Donation }) {
   const [open, setOpen] = useState<Action | null>(null);
   const reason = disabledReason(d);
   return (
@@ -261,11 +253,7 @@ export function StatusActions({
             disabled={!!reason}
             title={reason ?? undefined}
             onClick={() => setOpen(a)}
-            className={
-              compact
-                ? `font-body text-sm px-3 py-2 rounded-sm border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${a === 'chargeback' ? 'border-red/25 text-red/90 hover:bg-red/10' : 'border-purple bg-d-purple text-off-white hover:bg-purple disabled:hover:bg-d-purple'}`
-                : `btrl-button ${a === 'chargeback' ? 'btrl-button-outline' : ''} text-sm px-4 py-2`
-            }
+            className={`btrl-button ${a === 'chargeback' ? 'btrl-button-outline' : ''} text-sm px-4 py-2`}
           >
             {ACTION_LABEL[a]}
           </button>

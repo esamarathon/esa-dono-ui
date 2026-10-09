@@ -152,7 +152,7 @@ export default function DetailC({ m, d }: { m: StaffModel; d: Donation }) {
             </div>
           </div>
           <div className="max-w-sm">
-            <StatusActions m={m} d={d} compact />
+            <StatusActions m={m} d={d} />
           </div>
         </div>
         <dl className="grid grid-cols-3 gap-3 pt-4 border-t border-off-white/10">
