@@ -102,8 +102,8 @@ paths:
               schema:
                 type: object
                 properties:
-                  ok: { const: false }
-                  db: { const: false }
+                  ok: { enum: [false] }
+                  db: { enum: [false] }
                   error: { type: string }
 
   # ─── Campaign ───
@@ -191,7 +191,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
         '400':
           description: Invalid email address
         '429':
@@ -222,7 +222,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   email: { type: string, format: email }
         '400':
           description: Missing token
@@ -244,7 +244,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
 
   /auth/magic:
     get:
@@ -409,7 +409,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   entry: { type: object }
                   pending_approval: { type: boolean }
         '400':
@@ -1031,7 +1031,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  received: { const: true }
+                  received: { enum: [true] }
         '400':
           description: Invalid signature
 
@@ -1544,7 +1544,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   token: { type: string, description: 'Donor magic token' }
                   donor:
                     type: object
@@ -1653,7 +1653,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   email: { type: string }
                   role: { type: string, enum: [USER, MODERATOR, ADMIN] }
         '400':
@@ -1691,7 +1691,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   email: { type: string }
                   magic_token: { type: string }
 
@@ -1751,7 +1751,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  success: { const: true }
+                  success: { enum: [true] }
                   email: { type: string }
                   balance_before: { type: integer }
                   balance_after: { type: integer }
