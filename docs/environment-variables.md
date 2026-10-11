@@ -1,5 +1,7 @@
 # Environment Variables
 
+Compose does not forward arbitrary host variables into the containers: a variable the backend reads must also be listed in `docker-compose.yml`'s `environment:` passthrough (for example `STRIPE_SHIPPING_RATE_ID`, `WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS`), not only in `.env`.
+
 | Variable                                      | Required   | Default                                         | Description                                                                                                                     |
 | --------------------------------------------- | ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `STRIPE_SECRET_KEY`                           | No (prod)  | —                                               | Stripe secret API key; unset to run without Stripe (graceful)                                                                   |
@@ -33,3 +35,13 @@
 | `RATE_LIMIT_METRICS`                          | No         | `30`                                            | Max `/api/metrics` requests per minute per IP (public endpoint, gated only by the metrics token)                                |
 | `RATE_LIMIT_API`                              | No         | `600`                                           | Global per-IP limit on all of `/api/*` (req/min); webhook, health, metrics, uploads excluded                                    |
 | `TRUST_PROXY`                                 | No         | `1`                                             | Proxy hops in front of Express; `2` behind Caddy + nginx. Too low: one shared rate-limit bucket                                 |
+| `RATE_LIMIT_FEEDBACK`                         | No         | `5`                                             | Feedback-endpoint rate limit (req/min per IP)                                                                                   |
+| `DISCORD_FEEDBACK_WEBHOOK_URL`                | No         | —                                               | Discord incoming webhook URL the feedback widget posts to; unset returns 503 (graceful degradation, client shows retry)         |
+| `OTEL_TRACES_ENABLED`                         | No         | `false`                                         | Backend tracing on/off. Set `true` to enable                                                                                    |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                 | No         | `http://otelcol:4318`                           | Backend OTLP HTTP endpoint (the esa-observability gateway)                                                                      |
+| `OTEL_SERVICE_NAME`                           | No         | `esa-dono-backend`                              | Backend `service.name` resource attribute. Keep it stable — VictoriaTraces stores it as a stream field                          |
+| `OTEL_TRACES_SAMPLER_ARG`                     | No         | `1.0`                                           | Trace sampling ratio. Lower (e.g. `0.1`) if volume explodes                                                                     |
+| `VITE_OTEL_ENABLED`                           | No         | `false`                                         | Frontend tracing on/off (build-time). Set `true` to enable                                                                      |
+| `VITE_OTEL_ENDPOINT`                          | No         | `/traces`                                       | Browser OTLP endpoint (build-time, inlined by Vite), proxied by nginx to otelcol                                                |
+| `VITE_OTEL_SERVICE_NAME`                      | No         | `esa-dono-frontend`                             | Frontend `service.name`                                                                                                         |
+| `VITE_OTEL_SAMPLE_RATE`                       | No         | `1.0`                                           | Frontend trace sampling ratio                                                                                                   |

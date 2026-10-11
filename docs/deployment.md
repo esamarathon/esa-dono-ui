@@ -318,7 +318,7 @@ which isn't set up in an `exec` session):
 docker exec -w /app/server <backend-container-name> sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 ```
 
-(In local development, where npm is available, `cd server && npx prisma db seed` works directly — see CLAUDE.md.)
+(In local development, where npm is available, `cd server && npx prisma db seed` works directly — see `docs/local-development.md`.)
 
 This creates:
 
