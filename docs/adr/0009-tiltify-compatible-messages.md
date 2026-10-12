@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-29
 
-**Status:** Accepted
+**Status:** Accepted — **amended in part by [ADR-0011](0011-pooled-allocation-accounting.md)** (the "Refunds" bullet and the publishing table: a Payment refund returns money to the payment method; totals are published whenever a donation's counted amount changes; reversals and allocation changes re-publish the donation and send native `donation.updated`). The rest still applies.
 
 **Related:** PRD-0002 §T, §N, esamarathon/esa-dono-ui#116, [ADR-0006](0006-webhook-vocabulary.md) (vocabulary), [ADR-0007](0007-webhook-delivery-semantics.md) (delivery), [ADR-0008](0008-event-channel-identity.md) (identity), [ADR-0010](0010-tiltify-compatible-rest-api.md) (REST API), esamarathon/kollekt#35, esamarathon/kollekt#36, esamarathon/esa-layouts-v2#5, esamarathon/esa-layouts-v2#6
 
