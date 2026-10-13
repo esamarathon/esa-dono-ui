@@ -29,7 +29,7 @@ These rules are hard to reverse once money is recorded under them, and some of t
 2. `top_up_cents` and the "additional contribution" are removed. The pledge amount replaces them.
 3. `Donation.amount_cents` is **new money that the charity keeps**: $0 for a donation paid only with Wallet credit. It is stored next to the pledge amount, which has its own field. `lib/donationTotals.ts` keeps its rule: money totals count `COMPLETED` and `REFUNDED` donations.
 4. **Shipping** is a separate fee. It is recorded separately and is outside pledge funding, the Pools, `amount_cents`, `Donor.total_donated` and every money total (#166).
-5. **Cash floor.** Neither Wallet credit nor Pool credit can pay for a physical reward. The Wallet credit applied is W = min(available, D − physical prices). A pledge funded only by Wallet credit cannot include a physical reward (#166).
+5. **Cash floor.** Neither Wallet credit nor Pool credit can pay for a physical reward. The Wallet credit applied is W = min(available, D − physical prices). A pledge funded only by Wallet credit cannot include a physical reward (#166). _Clarified 2026-10-12:_ Stripe cannot charge less than 50¢, so when 0 < D − W < 50¢, W becomes D − 50¢ (the guard the checkout already applies).
 6. **Price lock.** A Pending pledge keeps the reward prices the donor confirmed. Each claim records the amount actually allocated. Every later reversal uses that recorded amount, never the live price (#166).
 7. The server enforces the Pools: `createPledge` rejects any category over D (400), and the spend helpers run in a **pool mode** at fulfillment. They check each row against the donation's own Pools and do not subtract from the wallet (#154).
 8. **Wallet funding is held.** The wallet-funded part is debited and held when the Pending pledge is created. It is used once at fulfillment, or released once on confirmed non-payment, never on local expiry or sign-out (#162).
@@ -90,7 +90,7 @@ A donation without a pledge amount has no Pools, no Pool credit and no Unused po
 
 ### 7. Publishing
 
-1. A reversal, a Pool credit spend, a moderator assignment and a Payment refund each re-publish the affected donation's Tiltify donation message under the same id, without reversed rows and with new rows (#159).
+1. A reversal, a Pool credit spend, a moderator assignment and a Payment refund each re-publish the affected donation's Tiltify donation message under the same id, without reversed rows and with new rows (#159). _Clarified 2026-10-12:_ only when the message content changes. An identical re-publish replays the overlay alert, so it is not sent. The transition corrections (PRD-0003 §T5) are the only forced re-publish.
 2. A new native message type, `donation.updated`, carries the donation's full current state: status, money, pledge amount, and live allocations with their source. Destinations opt in through `event_types` (#173 §6).
 3. Totals are published **whenever a donation's counted amount changes**: a chargeback, a Payment refund, and a failed Payment refund given as Wallet credit. This replaces ADR-0009's rule "publish when the status moves into or out of the counted set".
 

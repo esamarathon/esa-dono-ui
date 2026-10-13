@@ -139,7 +139,9 @@ Use them in code, UI text, issues and docs. Avoid "refund" alone, "top-up", "car
 
 - `POST /api/pledge` requires `pledge_amount_cents`. A request without it, or with `top_up_cents`, gets 400: "The donate page was updated. Reload to continue."
 - The response returns `pledge_amount_cents` in place of `total_cents` and `top_up_cents`.
-- The request carries the pledge plan result the client showed (Wallet credit applied, new money charged, top-up rows). `createPledge` runs its own plan; if the results differ, it answers 409 with the server's plan and creates no pledge, and the client shows the corrected review for confirmation (§F4).
+- The request carries the pledge plan result the client showed (Wallet credit applied, new money charged, top-up rows).
+- Requests are serialized by the draft id. If the draft already has a Pending pledge, `createPledge` resolves it first (§F5) and returns it unchanged on a retry, with no plan comparison. A retry would otherwise see its own hold as spent Wallet credit.
+- Only a new attempt runs the plan comparison. If the server's plan differs from the client's, it answers 409 with the server's plan and creates neither a pledge nor a hold, and the client shows the corrected review for confirmation (§F4). Otherwise it stores the plan and the hold in one transaction.
 
 ### §P — Pools and accounting (#154, ADR-0011)
 
@@ -164,6 +166,7 @@ The slice that owns the schema chooses the exact names and shapes.
 - `Donation.amount_cents` = new money only.
 - Shipping is recorded separately and is outside every total.
 - Cash floor: Wallet credit applied = min(available, pledge amount − physical prices). A pledge funded only by Wallet credit cannot include a physical reward.
+- Stripe minimum: when 0 < new money charged < 50¢, Wallet credit applied becomes pledge amount − 50¢ (ADR-0011 §1.5).
 - A Pending pledge keeps the server-validated reward prices the donor confirmed. Live stock and availability are still checked at fulfillment, and an incompatible reward-type change follows the fulfillment-failure path. Physical allocations never exceed the confirmed new money (shipping excluded).
 - The max rule and the reservation rule decide Wallet credit. A pooled donation creates no Wallet credit when it is fulfilled.
 
@@ -272,7 +275,7 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 - Reverse the same rows. `FULFILLED` claims are flagged.
 - The wallet-funded part goes back to the wallet, less the Wallet credit the donation already granted. A negative result is taken back, capped at the balance.
 - The money total goes down by the remaining `amount_cents`.
-- A pre-change delayed payment that fails after the deploy (`checkout.session.async_payment_failed`) is recorded as a chargeback under the legacy rule (#173 §2).
+- A pre-change delayed payment that fails after the deploy (`checkout.session.async_payment_failed`) is recorded as a chargeback under the legacy rule (#173 §2). Slice 5 owns this; slice 3 only receives the webhook type.
 
 **R3. Single-row reversals.**
 
@@ -336,7 +339,7 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 
 ### §W — Webhook messages (#153, #159, #167; ADR-0009 amended)
 
-- **Tiltify donation message.** Re-published under the same id after:
+- **Tiltify donation message.** Re-published under the same id, **when its content changes**, after the actions below. An identical re-publish replays the overlay alert, so it is not sent (ADR-0011 §7.1):
   - every reversal (Wallet refund, chargeback, reverse-spend, per-item reverse, write-in rejection);
   - every Pool credit spend;
   - every moderator assignment or undo;
@@ -344,7 +347,7 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 
   Reversed rows are left out and new rows are included. `target_contributions[].amount` holds the goal allocation. `amount` stays the donation's money. `source` is not sent.
 
-- **Tiltify totals** (Channel and Event) are published whenever a donation's counted amount changes: a chargeback, an accepted Payment refund, a failed Payment refund given as Wallet credit, and the transition corrections (§T5).
+- **Tiltify totals** (Channel and Event) are published whenever a donation's counted amount changes: a chargeback, an accepted Payment refund, a failed Payment refund given as Wallet credit, and the transition corrections (§T5). One publish sends them once per affected Channel and once per affected Event. The transition corrections are the only forced publish: they have no "before" state to compare.
 - **Native `donation.created`** exposes each allocation's `source` (#156).
 - **New native `donation.updated`.** The donation's full current state: status, money, pledge amount, and live allocations with `source`. It is sent after any status or allocation change, and consumers replace their copy by donation id. Destinations opt in through `event_types`; the migration changes no Destination.
 - Donor email and staff identity (`allocated_by`) are never sent.
@@ -549,7 +552,8 @@ A section in `docs/deployment.md` (or a linked doc) covers:
 
 - **Pools.**
   - Pledge plan table tests in `packages/shared` (it gets a vitest runner and real `test` / `test:ci` scripts), from the worked examples of #154 and #156: rounding and ties, the cash floor, the Stripe minimum.
-  - `createPledge` stores the plan's result, and answers 409 with the server's plan when the client's differs.
+  - `createPledge` stores the plan's result, and answers 409 with the server's plan when the client's differs. A retry of a draft that has a Pending pledge returns that pledge unchanged, with no 409, its hold included.
+  - The Stripe minimum: D = $10 with $9.75 of Wallet credit applies $9.50 and charges 50¢.
   - `createPledge` rejects a category over the pledge amount.
   - The cash floor and the Wallet credit applied: W = min(B, D − P).
   - A pledge funded only by Wallet credit cannot include a physical reward.
@@ -586,26 +590,26 @@ A section in `docs/deployment.md` (or a linked doc) covers:
 
 ## Work Breakdown
 
-Proposed slices. They are not filed yet. Slices that change `schema.prisma` land **one at a time, in order**, and only one migration is open at any time (the PRD-0002 conflict rule). The change has no feature flag, so every slice ships in **one release**, between Events (§T).
+Proposed slices. They are not filed yet. Slices that change `schema.prisma` land **one at a time, in order**, and only one migration is open at any time (the PRD-0002 conflict rule). The change has no feature flag, so every slice ships in **one release**, between Events (§T). The prefactor slices 0, 0b, 0c and 0d are the exception: they change no schema, so each can ship in an earlier release, with only the behaviour changes listed in its notes.
 
-| #   | Slice                                                                                                                                                                 | Sections                          | Depends on  |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ----------- |
-| 0   | Reversal module (prefactor): move every reversal into one module under the current rule, checks inside the transaction, real-database tests                           | §R (prefactor)                    | —           |
-| 0b  | Donation publishing module (prefactor): one module decides every donation webhook message and the totals from a before/after comparison; fixes #179                   | §W (prefactor)                    | —           |
-| 0c  | Donation intake module (prefactor): Stripe Checkout, wallet-only pledges and admin add go through one intake; no behaviour change                                     | §F5, §P2 (prefactor)              | 0b          |
-| 0d  | Incentive lifecycle module (prefactor): admin and moderator incentive create, update and delete through one module; moderator messages; delete policy (#175)          | §S5 (prefactor)                   | 0           |
-| 1   | Schema, backfills and the migration report                                                                                                                            | §P1, §T3–T4, §T5 (`wallet-` → $0) | —           |
-| 2   | Pooled pledge core: `POST /pledge` contract, pledge plan, Pool validation, cash floor, price lock, auto-allocation, pool-mode fulfillment, Default goal list (server) | §F6, §P2–P3, §A                   | 0c, 1       |
-| 3   | Checkout and payment reconciliation: idempotency, wallet hold, Stripe expiry, new webhook types, late payments, old-shape payments                                    | §F5, §T2                          | 0c, 2       |
-| 4   | Donate client: amount step, pool bar and review on the pledge plan, draft and resume, drawer removal, redirects                                                       | §F1–F4                            | 2, 3        |
-| 5   | Reversals and messages: Wallet refund, chargeback, reverse-spend, per-item reverse, write-in rejection, legacy rule, `donation.updated`, re-publish, totals rule      | §R1–R3, §R5–R6, §W                | 0, 0b, 2    |
-| 6   | Pool credit: credits page and atomic apply                                                                                                                            | §C                                | 5           |
-| 7   | Unused pool money and Event end: moderator list, assign, undo, End Event, Undo end                                                                                    | §U, §E                            | 0d, 5       |
-| 8   | Payment refund: Stripe refunds, records, `refund.*` webhook, failure resolution                                                                                       | §R4                               | 5, 7        |
-| 9   | Metrics and stats                                                                                                                                                     | §M                                | 5, 7, 8     |
-| 10  | Staff pages                                                                                                                                                           | §S                                | 0d, 7, 8, 9 |
-| 11  | Transition tooling: drain script, shipping script, sibling callers, runbooks                                                                                          | §T2, §T5, §T7–T8, §O              | 3, 8        |
-| 12  | Documentation consistency review                                                                                                                                      | Documentation Requirements        | all         |
+| #   | Slice                                                                                                                                                                               | Sections                          | Depends on     |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | -------------- |
+| 0   | Reversal module (prefactor): move every reversal into one module under the current rule, checks inside the transaction, real-database tests                                         | §R (prefactor)                    | —              |
+| 0b  | Donation publishing module (prefactor): one module decides every donation webhook message and the totals from a before/after comparison; fixes #179                                 | §W (prefactor)                    | —              |
+| 0c  | Donation intake module (prefactor): Stripe Checkout, wallet-only pledges and admin add go through one intake; magic link after commit, no other behaviour change                    | §F5, §P2 (prefactor)              | 0b             |
+| 0d  | Incentive lifecycle module (prefactor): admin and moderator incentive create, update and delete through one module; moderator messages; delete policy (#175)                        | §S5 (prefactor)                   | 0              |
+| 1   | Schema, backfills and the migration report                                                                                                                                          | §P1, §T3–T4, §T5 (`wallet-` → $0) | —              |
+| 2   | Pooled pledge core: `POST /pledge` contract, pledge plan, Pool validation, cash floor, price lock, auto-allocation, pool-mode fulfillment, Default goal list (server)               | §F6, §P2–P3, §A                   | 0c, 1          |
+| 3   | Checkout and payment reconciliation: idempotency, wallet hold, Stripe expiry, new webhook types, late payments, old-shape payments                                                  | §F5, §T2                          | 0c, 2          |
+| 4   | Donate client: amount step, pool bar and review on the pledge plan, draft and resume, drawer removal, redirects                                                                     | §F1–F4                            | 2, 3           |
+| 5   | Reversals and messages: Wallet refund, chargeback (incl. §R2 legacy), reverse-spend, per-item reverse, write-in rejection, legacy rule, `donation.updated`, re-publish, totals rule | §R1–R3, §R5–R6, §W                | 0, 0b, 2, 3    |
+| 6   | Pool credit: credits page and atomic apply                                                                                                                                          | §C                                | 5              |
+| 7   | Unused pool money and Event end: moderator list, assign, undo, End Event, Undo end                                                                                                  | §U, §E                            | 0d, 5          |
+| 8   | Payment refund: Stripe refunds, records, `refund.*` webhook, failure resolution                                                                                                     | §R4                               | 5, 7           |
+| 9   | Metrics and stats                                                                                                                                                                   | §M                                | 5, 7, 8        |
+| 10  | Staff pages                                                                                                                                                                         | §S                                | 0d, 3, 7, 8, 9 |
+| 11  | Transition tooling: drain script, shipping script, sibling callers, runbooks                                                                                                        | §T2, §T5, §T7–T8, §O              | 3, 8           |
+| 12  | Documentation consistency review                                                                                                                                                    | Documentation Requirements        | all            |
 
 **Slice 0 (prefactor).** Today the reversal rule is written in seven places, and the copies disagree. Slice 5 would otherwise add the ADR-0011 §5 table and the legacy rule to every copy.
 
@@ -616,8 +620,8 @@ Proposed slices. They are not filed yet. Slices that change `schema.prisma` land
   - the per-item poll option and goal refunds (`services/refund.ts`);
   - the Wallet credit ledger writes of `adjust-balance` and `sweep-credits` (`routes/admin.ts`), as an internal part of the module.
 - Route handlers only parse input, name the row or donation and the actor, and map errors.
-- The module reads and checks state inside the transaction. Reverse-spend and write-in rejection check it outside the transaction today, so a double submit can credit twice.
-- Behaviour is otherwise the current rule (one-to-one Wallet credit, which becomes the legacy rule of ADR-0011 §6). The slice has no schema change, so it can merge before slice 1 and ship in an earlier release.
+- The module reads and checks state inside the transaction. Reverse-spend and write-in rejection check it outside the transaction today, so a double submit can credit twice. Write-in rejection re-checks the entry, the option and the funding vote inside its transaction.
+- Each path otherwise keeps its current accounting, which is **not** the ADR-0011 §6 legacy rule: the status change to `REFUNDED` or `CHARGEBACK` still takes `min(amount, balance)` from the wallet and reverses no rows (#163), and a claim reversal still uses the live reward price. Slice 5 brings in both the §6 legacy rule and the pooled rule. The slice has no schema change, so it can merge before slice 1 and ship in an earlier release.
 - Tests at the module interface on the SQLite test database replace the mocked-Prisma reverse-spend and refund route tests. They also cover the vote and contribution branches, which have no test today.
 - Slice 5 then adds the pooled rule, Pool credit, Unused pool money and re-publishing (§W) inside this module.
 
@@ -628,25 +632,31 @@ Proposed slices. They are not filed yet. Slices that change `schema.prisma` land
   - nothing is published while the donation is unassigned (no Channel and no Event, §E6 of PRD-0002);
   - not routed (or new) → routed: `donation.created`, the Tiltify donation message and totals;
   - `hidden_from_overlay` changed: `donation.hidden` or `donation.unhidden`;
-  - `moderated` changed: `donation.moderated`;
+  - `moderated` changed (value differs from before): `donation.moderated`;
   - the Tiltify donation payload built after the change differs from the one built before: the Tiltify donation message;
   - counted amount changed: totals.
 - Callers no longer build `DonationForPayload`; the re-read in `processDonation` goes.
 - `withWebhooks` passes the donation publisher in place of today's `tiltify` argument. The Tiltify donation and totals builders become internal to the module. `emit` stays for `incentive.*` messages.
-- A snapshot takes one or more donation ids. One publish sends totals once per affected Channel, after every donation's messages.
+- A snapshot takes one or more donation ids. One publish sends totals once per affected Channel and once per affected Event, after every donation's messages.
+- A forced publish with no snapshot exists only for the §T5 transition corrections (slice 11).
+- Write-in approval re-checks the entry, the option and the funding vote inside its transaction. Today it reads them before the transaction, so an approval can commit after a rejection and count a reversed vote.
 - Order per donation: `donation.created`, `donation.moderated`, `donation.hidden` or `donation.unhidden`, then the Tiltify donation message (ADR-0007 delivers each Destination's queue in order).
 - With no active TILTIFY Destination, the module neither builds nor compares Tiltify payloads, decided once per transaction as today.
-- The wire does not change, except that approving a write-in now re-publishes its donation (#179).
+- Intentional wire changes, each with a contract test; nothing else changes:
+  - approving a write-in re-publishes its donation (#179);
+  - no `donation.moderated` when the value does not change, or for an unassigned donation (today the moderator route sends it whenever the request has `moderated`);
+  - no totals when the counted amount does not change (today the admin status route sends them when the status enters or leaves the counted set, even for a $0 donation).
 - It does not depend on slice 0 and can run in parallel with it. Slice 5 then adds `donation.updated` (sent when its payload changes, by the same comparison), `source`, the reversal triggers and the totals-on-counted-amount rule inside this module, and slice 0's reversals call it.
-- Tests: table tests at the module interface on the SQLite test database, one row per before → after change, asserting the queued deliveries per Destination format. The wire contract tests in `server/test/services/webhooks/tiltify.test.ts` stay as they are.
+- Tests: table tests at the module interface on the SQLite test database, one row per before → after change, asserting the queued deliveries per Destination format. Concurrent approval and rejection of one write-in, and a double approval, count its vote at most once. The wire contract tests in `server/test/services/webhooks/tiltify.test.ts` stay as they are.
 
 **Slice 0c (prefactor).** Today two copies record a donation: `processDonation` (`services/donation.ts`, called by the Stripe webhook and by admin "add donation") and the wallet-only branch of `createCheckoutForPledge` (`services/pledge.ts`). They differ in the donor update, `amount_cents`, the pledge lookup and when the magic link is sent. ADR-0011 §1.3 and §1.8 would otherwise change both.
 
 - One intake module covers three sources: Stripe Checkout, a wallet-only pledge and admin "add donation" (external donations and the simulator). Auction settlement stays out.
-- Callers pass only what their source knows: Stripe the session id, amount, shipping, email, name and pledge token; wallet-only the pledge and the signed-in donor; admin add the amount, email, Channel or Event and date. The intake decides the donor, the money split, `total_donated` and Wallet credit. No caller computes `amount_cents` or the pledge amount.
+- Callers pass only what their source knows: Stripe the session id, amount, shipping, email, name and pledge token; wallet-only the pledge and the signed-in donor; admin add the amount, email, display name, comment, Channel or Event, date, `external_id` and an optional pledge token (`staging/incentive-test.py`, listed in `docs/api-consumers.md`, sends the token and `external_id`). The intake decides the donor, the money split, `total_donated` and Wallet credit. No caller computes `amount_cents` or the pledge amount.
 - `createCheckoutForPledge` keeps choosing the path (wallet-only or Stripe). The intake receives a finished payment and does not import `stripe.ts`.
 - `resolvePledge` and `fulfillPledge` become internal to the intake. `services/pledge.ts` keeps `createPledge` and `createCheckoutForPledge`.
-- The intake opens its own transaction through `withWebhooks`, publishes through the slice 0b module, and sends the magic link only after commit.
+- The intake opens its own transaction through `withWebhooks`, publishes through the slice 0b module, and sends the magic link only after commit. This is an intentional change: `processDonation` sends it from inside the transaction today.
+- The admin add response keeps its shape: 409 on a duplicate `external_id`, and the pledge result.
 - No behaviour change otherwise: `amount_cents` still includes shipping, the wallet-only double count (#158) stays, and the email fallback on pledge lookup stays. Slices 1, 2 (§P2, §T5) and 3 (§F5) change these rules inside the intake.
 - Tests: one table per source at the intake interface on the SQLite test database (donor, `amount_cents`, `total_donated`, Wallet credit, pledge status, queued deliveries). They replace the mocked-Prisma `server/test/services/donation.test.ts` and the `resolvePledge` tests in `server/test/services/pledge.test.ts`. `server/test/routes/webhook.test.ts` keeps only signature handling and the mapping from a Stripe session to the intake input.
 - Docs: update `docs/architecture.md` where it names `processDonation`, `resolvePledge` and `fulfillPledge`.
@@ -666,11 +676,11 @@ Proposed slices. They are not filed yet. Slices that change `schema.prisma` land
 
 **Pledge plan (slices 2 and 4).** One pure module in `packages/shared` computes everything about a pledge that needs no database. Slice 2 creates it; slice 4 builds the pool bar, the overage banner and the review step on it. There is no prefactor slice: the code it replaces (`top_up_cents`, the cart wallet estimate in `CartDrawer`, the wallet discount in `createCheckoutForPledge`) is deleted by slices 2 to 4.
 
-- It computes: each Pool's usage and overage; the A1 proportional top-up (largest remainder in integer cents, ties to the selection added first, every row ≥ $1); `MIN_SPEND_CENTS` on donor selections (§P3); the cash floor and Wallet credit applied, W = min(available, D − physical prices); the new money charged, D − W, with the 50¢ Stripe minimum; and whether shipping is required.
+- It computes: each Pool's usage and overage; the A1 proportional top-up (largest remainder in integer cents, ties to the selection added first, every row ≥ $1); `MIN_SPEND_CENTS` on donor selections (§P3); the cash floor and Wallet credit applied, W = min(available, D − physical prices); the new money charged, D − W, with the 50¢ Stripe minimum (when 0 < D − W < 50¢, W becomes D − 50¢, §P2); and whether shipping is required.
 - Inputs: the pledge amount, the selections (category, target, amount, order added, physical or not), their prices, and the available Wallet credit (`null` when signed out).
 - What needs live data stays out: stock, closed polls, the Channel match, the A2 Default goal chain and the A4 money freed at fulfillment.
 - `createPledge` runs the same plan with the prices it validated and the donor's live Wallet credit, and stores its result on the Pending pledge: the top-up rows, the held W (slice 3) and the confirmed prices. The client's result is for display only.
-- When the client's result differs from the server's, `POST /pledge` answers 409 with the server's plan (§F6).
+- When the client's result differs from the server's on a new attempt, `POST /pledge` answers 409 with the server's plan. A retry of a draft that already has a Pending pledge returns that pledge without a comparison (§F6).
 - Tests: table tests next to the module. Slice 2 adds a vitest runner to `packages/shared`; the root `npm test` and `npm run test:ci` already run every workspace. Client tests assert rendering only.
 
 External follow-ups (optional, no code needed for this release):
@@ -710,7 +720,7 @@ Deferred: #161 (manual or automatic goal fallback) starts after this PRD ships.
 None block slicing. Four are left to the slice that owns them:
 
 - Incentive input validation: slice 10 (§S5). Neither role's routes check cents, title or that the Channel exists; `is_complete` can be set by hand on a goal (see the goal-completion question below); `channel_id` can change on an incentive that has allocation history.
-- The goal-completion rule after a reversal: slice 0. The current paths disagree. Reverse-spend keeps a goal complete unless its total drops to $0, the per-item goal refund recomputes it against the target, and ADR-0011 §5 keeps completed goals complete on a chargeback.
+- The goal-completion rule after a reverse-spend, a per-item goal reverse and a Wallet refund: slice 0 records the current per-path behaviour, slice 5 decides. Reverse-spend keeps a goal complete unless its total drops to $0; the per-item goal refund recomputes it against the target. Already decided: a chargeback keeps completed goals complete (ADR-0011 §5), and the Payment refund shrink includes completed goals and ended polls (#167 §2).
 - The exact schema names (§P1): slice 1.
 - Whether `docs/deployment.md` or a separate runbook file holds §T8 and §O: slice 11.
 
