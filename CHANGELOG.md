@@ -7,6 +7,15 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-13
+
+### Fixed
+
+- Rejected async route and middleware handlers no longer crash the backend (#175).
+  Failing requests return an error status, unexpected 500s use a generic message,
+  and the server continues serving requests. Deletes with allocation history return
+  500 until the incentive lifecycle rules are implemented.
+
 ## [0.2.0] — 2026-09-29
 
 Outbound webhook queue review and Tiltify compatibility (epic #112, PRD-0002). kollekt
@@ -194,6 +203,7 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.1
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0
