@@ -3,6 +3,7 @@ import { httpError } from '../lib/httpError.js';
 import { countsTowardTotals } from '../lib/donationTotals.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { readDonationAccountingTx } from './poolAccounting.js';
+import { readRewardFundingTx } from './rewardFunding.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -24,7 +25,41 @@ async function returnRowFundingTx(
   category: 'reward' | 'poll' | 'goal',
   actor: string,
   reason: string,
+  terminalDonationId?: string,
 ) {
+  // Check canonical redemption funding BEFORE the legacy-null Wallet fallback.
+  const redemptions = await tx.poolCreditRedemption.findMany({
+    where:
+      category === 'reward'
+        ? { claim_id: row.id }
+        : category === 'poll'
+          ? { vote_id: row.id }
+          : { contribution_id: row.id },
+    select: {
+      amount_cents: true,
+      credit_id: true,
+      credit: { select: { donation_id: true, donation: { select: { status: true } } } },
+    },
+  });
+  if (redemptions.length) {
+    for (const redemption of redemptions) {
+      await assertNoRequestedRefundTx(tx, redemption.credit.donation_id);
+      if (
+        redemption.credit.donation_id === terminalDonationId ||
+        redemption.credit.donation.status === 'CHARGEBACK'
+      )
+        continue;
+      await tx.poolCredit.update({
+        where: { id: redemption.credit_id },
+        data: {
+          remaining_cents: { increment: redemption.amount_cents },
+          cleared_at: null,
+          cleared_by: null,
+        },
+      });
+    }
+    return;
+  }
   await assertNoRequestedRefundTx(tx, row.donation_id);
   const donation = row.donation_id
     ? await tx.donation.findUniqueOrThrow({ where: { id: row.donation_id } })
@@ -357,6 +392,11 @@ export async function previewDonationReversalTx(
   await assertNoRequestedRefundTx(tx, donationId);
   if (status === 'CHARGEBACK' && donation.amount_cents === 0)
     throw httpError(400, 'Cannot record a chargeback for zero money');
+  for (const allocation of donation.allocations.reward) {
+    const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
+    for (const id of (await readRewardFundingTx(tx, claim)).donation_ids)
+      await assertSpendSourceTx(tx, id);
+  }
   const retained = donation.allocations.reward.filter((row) => row.status === 'FULFILLED');
   const claims = donation.allocations.reward.filter((row) => row.status !== 'FULFILLED');
   const cents = (rows: { amount_cents: number }[]) =>
@@ -412,15 +452,37 @@ export async function setDonationStatusTx(
   if (!['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'].includes(status))
     throw httpError(400, 'Invalid status');
   await assertNoRequestedRefundTx(tx, donationId);
-  const before = await publisher.snapshot(donationId);
+  const initial = await readDonationAccountingTx(tx, donationId);
+  const affectedIds = new Set([donationId]);
+  for (const allocation of initial.allocations.reward) {
+    const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
+    const funding = await readRewardFundingTx(tx, claim);
+    for (const id of funding.donation_ids) {
+      await assertSpendSourceTx(tx, id);
+      affectedIds.add(id);
+    }
+  }
+  const before = await publisher.snapshot([...affectedIds]);
   let refundId: string | undefined;
   let granted = 0;
   if (status === 'REFUNDED' || status === 'CHARGEBACK') {
     const preview = await previewDonationReversalTx(tx, donationId, status);
     const state = await readDonationAccountingTx(tx, donationId);
     for (const claim of state.allocations.reward) {
-      if (claim.status !== 'FULFILLED') await reverseClaimRowTx(tx, claim, actor);
-      else if (status === 'CHARGEBACK')
+      if (claim.status !== 'FULFILLED') {
+        const wholeClaim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: claim.id } });
+        const funding = await readRewardFundingTx(tx, wholeClaim);
+        if (funding.redemption_backed)
+          await returnRowFundingTx(
+            tx,
+            wholeClaim,
+            'reward',
+            actor,
+            'Terminal source reversal',
+            donationId,
+          );
+        await reverseClaimRowTx(tx, claim, actor);
+      } else if (status === 'CHARGEBACK')
         await tx.rewardClaim.update({
           where: { id: claim.id },
           data: { chargeback_flagged_at: new Date() },
@@ -455,7 +517,7 @@ export async function setDonationStatusTx(
     },
     include: { channel: { select: { id: true, name: true, slug: true, event_id: true } } },
   });
-  await publisher.publish(donationId, before);
+  await publisher.publish([...affectedIds], before);
   return row;
 }
 
@@ -501,10 +563,11 @@ export async function setClaimStatusTx(
   if (!['PENDING', 'FULFILLED'].includes(status)) throw httpError(400, 'Invalid status');
   const claim = await tx.rewardClaim.findUnique({ where: { id: claimId } });
   if (!claim) throw httpError(404, 'Claim not found');
-  await assertSpendSourceTx(tx, claim.donation_id);
+  const funding = await readRewardFundingTx(tx, claim);
+  for (const id of funding.donation_ids) await assertSpendSourceTx(tx, id);
   if (claim.reversed_at || !['PENDING', 'FULFILLED'].includes(claim.status))
     throw httpError(409, 'Only pending or fulfilled claims can change status');
-  const ids = claim.donation_id ? [claim.donation_id] : [];
+  const ids = funding.donation_ids;
   const before = await publisher.snapshot(ids);
   const result = await tx.rewardClaim.update({
     where: { id: claimId },
@@ -563,7 +626,12 @@ export async function reverseSpendTx(
     reason: string,
     mutate: () => Promise<void>,
   ) => {
-    const ids = row.donation_id ? [row.donation_id] : [];
+    const ids =
+      category === 'reward'
+        ? (await readRewardFundingTx(tx, row)).donation_ids
+        : row.donation_id
+          ? [row.donation_id]
+          : [];
     const before = await publisher.snapshot(ids);
     await returnRowFundingTx(tx, row, category, actor, reason);
     await mutate();
@@ -573,7 +641,8 @@ export async function reverseSpendTx(
   if (spendType === 'claim') {
     const claim = await tx.rewardClaim.findUnique({ where: { id: spendId } });
     if (!claim || claim.donor_id !== donorId) throw httpError(404, 'Claim not found');
-    await assertSpendSourceTx(tx, claim.donation_id);
+    for (const id of (await readRewardFundingTx(tx, claim)).donation_ids)
+      await assertSpendSourceTx(tx, id);
     if (claim.reversed_at || claim.status === 'REVERSED')
       throw httpError(400, 'Claim already reversed');
     if (claim.status === 'CANCELLING')

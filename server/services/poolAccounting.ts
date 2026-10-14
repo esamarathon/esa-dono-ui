@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { PoolCategory } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
+import { readCreditRewardAllocationsTx } from './rewardFunding.js';
 
 export type CategoryAmounts = Record<PoolCategory, number>;
 export interface PoolAccountingInput {
@@ -61,7 +62,11 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
       failed_payment_wallet_credit_cents: true,
       event: { select: { ended_at: true } },
       reward_claims: {
-        where: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+        where: {
+          reversed_at: null,
+          status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+          credit_redemptions: { none: {} },
+        },
         orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         select: { id: true, reward_id: true, amount_cents: true, status: true },
       },
@@ -88,7 +93,10 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
   if (!donation) throw httpError(404, 'Donation not found');
   const { event, pool_credits, reward_claims, poll_votes, contributions, ...fields } = donation;
   const allocations = {
-    reward: reward_claims.map((row) => ({ ...row, source: 'donor' as const })),
+    reward: [
+      ...reward_claims.map((row) => ({ ...row, source: 'donor' as const })),
+      ...(await readCreditRewardAllocationsTx(tx, donationId)),
+    ],
     poll: poll_votes.map(({ poll_option, ...row }) => ({ ...row, status: poll_option.status })),
     goal: contributions,
   };

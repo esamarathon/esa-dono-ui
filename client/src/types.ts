@@ -56,6 +56,7 @@ export interface RewardSummary {
 export interface RewardClaim {
   id: string;
   status: string;
+  amount_cents: number;
   claim_data?: unknown;
   created_at?: string;
   reward: RewardSummary;

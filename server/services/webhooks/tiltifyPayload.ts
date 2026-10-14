@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { channelTotalCents, eventTotalCents } from '../../lib/donationTotals.js';
+import { readRewardFundingTx } from '../rewardFunding.js';
 
 /**
  * Tiltify-shaped webhook messages (PRD-0002 §T, ADR-0009) for the consumers that
@@ -99,7 +100,25 @@ export async function buildTiltifyDonation(
     donation.pledge_amount_cents === null
       ? donation.contributions.map((c) => ({ target_id: c.goal_id, amount: money(c.amount_cents) }))
       : [...goalAmounts].map(([target_id, cents]) => ({ target_id, amount: money(cents) }));
-  const claims = donation.reward_claims.map((c) => ({
+  const creditClaims = await tx.rewardClaim.findMany({
+    where: {
+      reversed_at: null,
+      status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+      credit_redemptions: { some: { credit: { donation_id: donationId } } },
+    },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+  });
+  const carried = [];
+  for (const claim of creditClaims) {
+    if ((await readRewardFundingTx(tx, claim)).carrier_donation_id === donationId)
+      carried.push(claim);
+  }
+  const claims = [
+    ...donation.reward_claims.filter(
+      (claim) => !creditClaims.some((credit) => credit.id === claim.id),
+    ),
+    ...carried,
+  ].map((c) => ({
     id: c.id,
     reward_id: c.reward_id,
     quantity: 1,

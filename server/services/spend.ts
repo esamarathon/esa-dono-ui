@@ -15,7 +15,30 @@ export interface PoolSpend {
   confirmed_reward_type?: string;
 }
 
-function allocationRows(cents: number, pool?: PoolSpend) {
+/** Trusted credit funding is separate from initial fulfillment and available Wallet. */
+export interface CreditSpend {
+  mode: 'credit';
+  source: 'donor';
+  event_id: string;
+  batch_id: string;
+  funding: { credit_id: string; amount_cents: number }[];
+  auto_cents?: never;
+  unit_price_cents?: number;
+  confirmed_reward_type?: string;
+}
+type SpendFunding = PoolSpend | CreditSpend;
+async function linkCreditTx(
+  tx: Tx,
+  pool: SpendFunding | undefined,
+  target: { claim_id?: string; vote_id?: string; contribution_id?: string },
+) {
+  if (pool?.mode === 'credit')
+    await tx.poolCreditRedemption.createMany({
+      data: pool.funding.map((row) => ({ ...row, batch_id: pool.batch_id, ...target })),
+    });
+}
+
+function allocationRows(cents: number, pool?: SpendFunding) {
   const auto = pool?.auto_cents ?? 0;
   if (!Number.isInteger(auto) || auto < 0 || auto > cents)
     throw httpError(400, 'Invalid auto allocation');
@@ -32,8 +55,73 @@ async function fundSpend(
   category: PoolCategory,
   cents: number,
   incentiveChannel: string | null,
-  pool?: PoolSpend,
+  pool?: SpendFunding,
 ) {
+  if (pool?.mode === 'credit') {
+    const batch = await tx.poolCreditBatch.findUnique({ where: { id: pool.batch_id } });
+    const event = await tx.event.findUnique({ where: { id: pool.event_id } });
+    const channel = incentiveChannel
+      ? await tx.channel.findUnique({ where: { id: incentiveChannel } })
+      : null;
+    if (
+      !batch ||
+      batch.donor_id !== donorId ||
+      batch.event_id !== pool.event_id ||
+      !event ||
+      event.ended_at ||
+      (incentiveChannel && channel?.event_id !== pool.event_id)
+    )
+      throw httpError(409, 'Invalid credit Event or target');
+    if (
+      !pool.funding.length ||
+      new Set(pool.funding.map((row) => row.credit_id)).size !== pool.funding.length ||
+      pool.funding.reduce((sum, row) => sum + row.amount_cents, 0) !== cents
+    )
+      throw httpError(400, 'Invalid credit funding');
+    for (const component of pool.funding) {
+      const credit = await tx.poolCredit.findUnique({
+        where: { id: component.credit_id },
+        include: {
+          donation: {
+            select: {
+              donor_id: true,
+              event_id: true,
+              pledge_amount_cents: true,
+              status: true,
+              payment_refunds: { where: { status: 'REQUESTED' }, select: { id: true } },
+            },
+          },
+        },
+      });
+      if (
+        !credit ||
+        credit.category !== category ||
+        credit.donation.donor_id !== donorId ||
+        credit.donation.event_id !== pool.event_id ||
+        credit.donation.pledge_amount_cents === null ||
+        !['COMPLETED', 'REFUNDED'].includes(credit.donation.status) ||
+        credit.donation.payment_refunds.length ||
+        !Number.isSafeInteger(component.amount_cents) ||
+        component.amount_cents <= 0 ||
+        credit.remaining_cents < component.amount_cents ||
+        (donationId && donationId !== credit.donation_id)
+      )
+        throw httpError(409, 'Pool credit changed or source unavailable; refresh and review');
+      const accounting = await readDonationAccountingTx(tx, credit.donation_id);
+      if (
+        accounting.pools[category].live_cents +
+          accounting.pools[category].outstanding_credit_cents +
+          accounting.failed_payment_wallet_credit_cents >
+        accounting.pledge_amount_cents!
+      )
+        throw httpError(409, 'Source category budget is inconsistent');
+      await tx.poolCredit.update({
+        where: { id: credit.id },
+        data: { remaining_cents: { decrement: component.amount_cents } },
+      });
+    }
+    return;
+  }
   if (!pool) {
     const donor = await tx.donor.findUnique({ where: { id: donorId } });
     if (!donor || donor.balance_remaining < cents) throw httpError(400, 'Insufficient balance');
@@ -68,7 +156,7 @@ async function fundSpend(
   }
 }
 
-function validateCents(cents: number, pool?: PoolSpend) {
+function validateCents(cents: number, pool?: SpendFunding) {
   const minimum = pool ? 1 : MIN_SPEND_CENTS;
   if (!Number.isSafeInteger(cents) || cents < minimum)
     throw httpError(400, `amount_cents (min ${minimum}) required`);
@@ -82,7 +170,7 @@ export async function claimRewardTx(
   claimData?: ClaimData | null,
   quantity = 1,
   donationId: string | null = null,
-  pool?: PoolSpend,
+  pool?: SpendFunding,
 ) {
   if (!Number.isInteger(quantity) || quantity < 1)
     throw httpError(400, 'quantity must be a positive integer');
@@ -96,6 +184,14 @@ export async function claimRewardTx(
   if (pool && (pool.source !== 'donor' || pool.confirmed_reward_type !== reward.type))
     throw httpError(400, 'Reward type changed after confirmation');
   const totalCost = unitPrice! * quantity;
+  if (
+    pool?.mode === 'credit' &&
+    (reward.type === 'PHYSICAL' ||
+      reward.cost_cents !== unitPrice ||
+      donationId !== null ||
+      quantity !== 1)
+  )
+    throw httpError(409, 'Credit reward price/type changed or invalid whole entitlement');
   if (pool) validateCents(totalCost, pool);
   if (pool && pool.confirmed_reward_type === 'PHYSICAL') {
     const donation = donationId
@@ -130,21 +226,26 @@ export async function claimRewardTx(
   }
   await fundSpend(tx, donorId, donationId, 'reward', totalCost, reward.channel_id, pool);
   // One row per unit; price is the confirmed allocation, never the live price.
-  await tx.rewardClaim.createMany({
-    data: Array.from({ length: quantity }, () => ({
-      reward_id: reward.id,
-      donor_id: donorId,
-      claim_data: JSON.stringify(claimData || {}),
-      status: 'PENDING',
-      amount_cents: unitPrice!,
-      donation_id: donationId,
-    })),
-  });
+  const claimIds: string[] = [];
+  for (let index = 0; index < quantity; index++) {
+    const claim = await tx.rewardClaim.create({
+      data: {
+        reward_id: reward.id,
+        donor_id: donorId,
+        claim_data: JSON.stringify(claimData || {}),
+        status: 'PENDING',
+        amount_cents: unitPrice!,
+        donation_id: donationId,
+      },
+    });
+    claimIds.push(claim.id);
+    await linkCreditTx(tx, pool, { claim_id: claim.id });
+  }
   await tx.reward.update({
     where: { id: reward.id },
     data: { quantity_claimed: { increment: quantity } },
   });
-  return { cost: totalCost };
+  return { cost: totalCost, claim_ids: claimIds };
 }
 
 export async function votePollTx(
@@ -154,7 +255,7 @@ export async function votePollTx(
   pollOptionId: string,
   cents: number,
   donationId: string | null = null,
-  pool?: PoolSpend,
+  pool?: SpendFunding,
 ) {
   validateCents(cents, pool);
   const poll = await tx.poll.findUnique({ where: { id: pollId } });
@@ -164,17 +265,22 @@ export async function votePollTx(
   if (!option || option.poll_id !== poll.id) throw httpError(404, 'Option not found');
   if (option.status === 'REJECTED') throw httpError(400, 'Option was rejected');
   await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
-  await tx.pollVote.createMany({
-    data: allocationRows(cents, pool).map((row) => ({
-      ...row,
-      poll_id: poll.id,
-      poll_option_id: pollOptionId,
-      donor_id: donorId,
-      donation_id: donationId,
-    })),
-  });
+  const voteIds: string[] = [];
+  for (const row of allocationRows(cents, pool)) {
+    const vote = await tx.pollVote.create({
+      data: {
+        ...row,
+        poll_id: poll.id,
+        poll_option_id: pollOptionId,
+        donor_id: donorId,
+        donation_id: donationId,
+      },
+    });
+    voteIds.push(vote.id);
+    await linkCreditTx(tx, pool, { vote_id: vote.id });
+  }
   // Pending write-ins reserve their intended share but do not enter public tallies.
-  if (option.status === 'PENDING_APPROVAL') return { cost: cents };
+  if (option.status === 'PENDING_APPROVAL') return { cost: cents, vote_ids: voteIds };
   await tx.pollOption.update({
     where: { id: pollOptionId },
     data: { votes_cents: { increment: cents } },
@@ -183,7 +289,7 @@ export async function votePollTx(
     where: { id: poll.id },
     data: { total_votes_cents: { increment: cents } },
   });
-  return { cost: cents };
+  return { cost: cents, vote_ids: voteIds };
 }
 
 /** Shared live text policy for eligibility classification and funded write-ins. */
@@ -265,21 +371,23 @@ export async function contributeGoalTx(
   goalId: string,
   cents: number,
   donationId: string | null = null,
-  pool?: PoolSpend,
+  pool?: SpendFunding,
 ) {
   validateCents(cents, pool);
   const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
-  if (!goal || !goal.is_active || goal.is_complete)
+  // Credit batches validate the WHOLE selection against open goals before
+  // mutation. An earlier source component may complete this same selection.
+  if (!goal || !goal.is_active || (goal.is_complete && pool?.mode !== 'credit'))
     throw httpError(404, 'Goal not found, inactive, or complete');
   await fundSpend(tx, donorId, donationId, 'goal', cents, goal.channel_id, pool);
-  await tx.fundContribution.createMany({
-    data: allocationRows(cents, pool).map((row) => ({
-      ...row,
-      goal_id: goal.id,
-      donor_id: donorId,
-      donation_id: donationId,
-    })),
-  });
+  const contributionIds: string[] = [];
+  for (const row of allocationRows(cents, pool)) {
+    const contribution = await tx.fundContribution.create({
+      data: { ...row, goal_id: goal.id, donor_id: donorId, donation_id: donationId },
+    });
+    contributionIds.push(contribution.id);
+    await linkCreditTx(tx, pool, { contribution_id: contribution.id });
+  }
   await tx.fundGoal.update({
     where: { id: goal.id },
     data: {
@@ -287,5 +395,5 @@ export async function contributeGoalTx(
       is_complete: goal.current_cents + cents >= goal.target_cents,
     },
   });
-  return { cost: cents };
+  return { cost: cents, contribution_ids: contributionIds };
 }
