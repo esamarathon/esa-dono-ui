@@ -3,6 +3,7 @@ import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { sendError } from '../lib/httpError.js';
 import { moderateCustomEntryTx } from '../services/reversal.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
@@ -169,8 +170,8 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
   }
 
   try {
-    const updated = await prisma.$transaction((tx) =>
-      moderateCustomEntryTx(tx, req.params.id, status, req.donor?.email || 'moderator'),
+    const updated = await withWebhooks((tx, _emit, publisher) =>
+      moderateCustomEntryTx(tx, req.params.id, status, req.donor?.email || 'moderator', publisher),
     );
     res.json(updated);
   } catch (e) {
@@ -480,21 +481,15 @@ router.patch('/donations/:id', async (req, res) => {
   }
   const moderatorEmail = req.donor?.email || 'moderator';
 
-  const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
-    await import('../services/webhooks/delivery.js');
-  const { withWebhooks } = await import('../services/webhooks/outbox.js');
   const reviewFields = (value: boolean) =>
     value
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
       : { moderated: false, moderated_at: null, moderated_by: null };
 
-  const donation = await withWebhooks(async (tx, emit, tiltify) => {
-    // Read inside the transaction, so two concurrent hides publish once.
-    const existing = await tx.donation.findUnique({
-      where: { id: req.params.id },
-      select: { hidden_from_overlay: true },
-    });
-    if (!existing) return null;
+  const donation = await withWebhooks(async (tx, _emit, publisher) => {
+    // Snapshot inside the transaction, so two concurrent hides publish once.
+    const before = await publisher.snapshot(req.params.id);
+    if (!before.get(req.params.id)) return null;
     const updated = await tx.donation.update({
       where: { id: req.params.id },
       data: {
@@ -502,25 +497,7 @@ router.patch('/donations/:id', async (req, res) => {
         ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
       },
     });
-    if (moderated !== undefined) {
-      await emit('donation.moderated', () =>
-        buildDonationModeratedPayload({
-          donationId: updated.id,
-          externalId: updated.external_id,
-          donorRef: updated.donor_id,
-          moderated,
-          moderatedAt: updated.moderated_at,
-        }),
-      );
-    }
-    // An unassigned donation was never published, so there is nothing to hide (§E6).
-    const published = updated.channel_id !== null || updated.event_id !== null;
-    if (hidden !== undefined && hidden !== existing.hidden_from_overlay && published) {
-      await emit(hidden ? 'donation.hidden' : 'donation.unhidden', () =>
-        buildDonationVisibilityPayload(updated),
-      );
-      await tiltify.donation(updated.id);
-    }
+    await publisher.publish(updated.id, before);
     return updated;
   });
 

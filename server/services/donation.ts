@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { sendMagicLink } from './email.js';
 import { resolvePledge, fulfillPledge } from './pledge.js';
 import { TOKEN_TTL_MS } from '../config.js';
-import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { withWebhooks } from './webhooks/outbox.js';
 import { resolveDonationRoute } from './routing.js';
 import { withSpan } from '../lib/tracing.js';
 
@@ -104,7 +104,7 @@ async function processDonationInner({
     pledge: Awaited<ReturnType<typeof fulfillPledge>> | null;
   } | null = null;
   try {
-    result = await withWebhooks(async (tx: Prisma.TransactionClient, emit, tiltify) => {
+    result = await withWebhooks(async (tx: Prisma.TransactionClient, _emit, publisher) => {
       const token = crypto.randomBytes(32).toString('hex');
       const tokenExpiresAt = new Date(Date.now() + TOKEN_TTL_MS);
 
@@ -166,12 +166,7 @@ async function processDonationInner({
         }
       }
 
-      // An unassigned donation is published when an admin assigns it (§E6).
-      if (route.channelId || route.eventId) {
-        // Re-read: pledge fulfilment may have set the comment and display name.
-        const final = await tx.donation.findUniqueOrThrow({ where: { id: donation.id } });
-        await publishRoutedDonation(emit, tiltify, final);
-      }
+      await publisher.publish(donation.id, null);
 
       sendMagicLink(normalizedEmail, donor.magic_token!).catch((err) =>
         console.error('Email error:', err),

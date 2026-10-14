@@ -115,8 +115,8 @@ describe('Reversal accounting on SQLite', () => {
         data: { url: 'http://127.0.0.1:1/hook', secret: 's', event_types: '["donation.created"]' },
       });
       destinationIds.push(native.id);
-      await withWebhooks((tx, _emit, tiltify) =>
-        setDonationStatusTx(tx, donation.id, status, undefined, 'admin', tiltify),
+      await withWebhooks((tx, _emit, publisher) =>
+        setDonationStatusTx(tx, donation.id, status, undefined, 'admin', publisher),
       );
       const deliveries = await prisma.webhookDelivery.findMany({
         where: { destination_id: destination.id },
@@ -203,7 +203,7 @@ describe('Reversal accounting on SQLite', () => {
     await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_reversal_adjustment BEFORE INSERT ON BalanceAdjustment
       WHEN NEW.donor_id = '${owner.id}' BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
     await expect(
-      withWebhooks(async (tx, _emit, tiltify) => {
+      withWebhooks(async (tx, _emit, publisher) => {
         switch (action) {
           case 'claim':
             return reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin');
@@ -212,9 +212,16 @@ describe('Reversal accounting on SQLite', () => {
           case 'contribution':
             return reverseSpendTx(tx, owner.id, 'contribution', contribution.id, 'admin');
           case 'status':
-            return setDonationStatusTx(tx, donation.id, 'CHARGEBACK', undefined, 'admin', tiltify);
+            return setDonationStatusTx(
+              tx,
+              donation.id,
+              'CHARGEBACK',
+              undefined,
+              'admin',
+              publisher,
+            );
           case 'write-in':
-            return moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator');
+            return moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator', publisher);
           case 'manual':
             return adjustWalletCreditTx(tx, owner.id, 200, 'MANUAL', undefined, 'admin');
           case 'sweep':
@@ -376,19 +383,26 @@ describe('Reversal accounting on SQLite', () => {
       const isOpen = new Promise<void>((resolve) => {
         started = resolve;
       });
-      const first = prisma.$transaction(async (tx) => {
-        const result = await moderateCustomEntryTx(tx, entry.id, firstStatus, 'staff@example.com');
+      const first = withWebhooks(async (tx, _emit, publisher) => {
+        const result = await moderateCustomEntryTx(
+          tx,
+          entry.id,
+          firstStatus,
+          'staff@example.com',
+          publisher,
+        );
         started();
         await mayCommit;
         return result;
       });
       await Promise.race([isOpen, first]);
-      const second = prisma.$transaction((tx) =>
+      const second = withWebhooks((tx, _emit, publisher) =>
         moderateCustomEntryTx(
           tx,
           entry.id,
           firstStatus === 'APPROVED' ? 'REJECTED' : 'APPROVED',
           'other@example.com',
+          publisher,
         ),
       );
       release();
@@ -427,7 +441,9 @@ describe('Reversal accounting on SQLite', () => {
     await prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin'));
     for (const status of ['APPROVED', 'REJECTED'] as const) {
       await expect(
-        prisma.$transaction((tx) => moderateCustomEntryTx(tx, entry.id, status, 'moderator')),
+        withWebhooks((tx, _emit, publisher) =>
+          moderateCustomEntryTx(tx, entry.id, status, 'moderator', publisher),
+        ),
       ).rejects.toMatchObject({ status: 404, message: 'Associated funding vote not found' });
     }
     expect(await prisma.pollCustomEntry.findUnique({ where: { id: entry.id } })).toMatchObject({
@@ -457,7 +473,9 @@ describe('Reversal accounting on SQLite', () => {
     );
     const vote = await prisma.pollVote.findFirstOrThrow({ where: { poll_option_id: option.id } });
     const results = await Promise.allSettled([
-      prisma.$transaction((tx) => moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator')),
+      withWebhooks((tx, _emit, publisher) =>
+        moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator', publisher),
+      ),
       prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin')),
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -528,8 +546,8 @@ describe('Reversal accounting on SQLite', () => {
     );
     const results = await Promise.allSettled(
       Array.from({ length: 2 }, () =>
-        prisma.$transaction((tx) =>
-          moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'staff@example.com'),
+        withWebhooks((tx, _emit, publisher) =>
+          moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'staff@example.com', publisher),
         ),
       ),
     );
@@ -834,8 +852,8 @@ describe('Reversal accounting on SQLite', () => {
       });
       const results = await Promise.allSettled(
         Array.from({ length: 2 }, () =>
-          withWebhooks((tx, _emit, tiltify) =>
-            setDonationStatusTx(tx, donation.id, status, 'Recorded by staff', 'admin', tiltify),
+          withWebhooks((tx, _emit, publisher) =>
+            setDonationStatusTx(tx, donation.id, status, 'Recorded by staff', 'admin', publisher),
           ),
         ),
       );
