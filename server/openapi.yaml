@@ -1558,6 +1558,141 @@ paths:
         '409':
           description: The donation already has a Channel or an Event (a donation is never reassigned)
 
+  /admin/claims/{id}/payment-refund-preview:
+    get:
+      tags: [Admin]
+      summary: Physical Payment refund eligibility and current server-computed impact
+      description: Confirmed type and direct funding determine eligibility, not a changed catalog type. Source must be COMPLETED, pooled, Stripe-backed and in a non-ended Event. Shipping is separate. Ended polls and completed goals are included and stay ended/complete.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Eligibility with reason; eligible claims also include recorded item capped at remaining cash, last-physical-claim shipping, money/pledge before and after, and Pool financial reductions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentRefundPreview' }
+        '404': { description: Claim not found }
+  /admin/claims/{id}/payment-refund:
+    post:
+      tags: [Admin]
+      summary: Request one physical Payment refund
+      description: Commits REQUESTED and claim CANCELLING before external Stripe I/O. Accepted pending/requires_action/succeeded cancels the claim and lowers money once, before final settlement. Definite creation rejection is RESOLVED/REJECTED with no accounting; unknown outcomes remain REQUESTED. Never use a new request to retry an uncertain refund.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentRefundResult' }
+        '404': { description: Claim not found }
+        '409': { description: Ineligible claim or another REQUESTED refund on the source donation }
+  /admin/payment-refunds:
+    get:
+      tags: [Admin]
+      summary: List audited Payment refunds across donations
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: donation_id, in: query, schema: { type: string } }
+        - name: status
+          in: query
+          description: Comma-separated statuses; defaults to REQUESTED,PENDING,REQUIRES_ACTION,FAILED plus item-resolved records whose failed shipping remains unresolved
+          schema: { type: string }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - {
+            name: limit,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 200, default: 50 },
+          }
+      responses:
+        '200':
+          description: Stable newest-first page with total, offset and limit. No donor email or private claim data.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [records, total, offset, limit]
+                properties:
+                  records:
+                    { type: array, items: { $ref: '#/components/schemas/PaymentRefundRecord' } }
+                  total: { type: integer }
+                  offset: { type: integer }
+                  limit: { type: integer }
+        '400': { description: Invalid status or pagination; no silent caps }
+  /admin/payment-refunds/{id}:
+    get:
+      tags: [Admin]
+      summary: Read one Payment refund and its accounting audit
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentRefundResult' }
+        '404': { description: Payment refund not found }
+  /admin/payment-refunds/{id}/retry:
+    post:
+      tags: [Admin]
+      summary: Reconcile an uncertain Payment refund or refresh pending settlement
+      description: Exhaustively paginates PaymentIntent refunds and matches metadata locally before any create, even after 24-hour idempotency retention. Reuses the record id key only when no match exists. Accepted refunds are never created again. FAILED/RESOLVED/SUCCEEDED records are returned unchanged; there is no automatic repair.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentRefundResult' }
+        '404': { description: Payment refund not found }
+        '409':
+          {
+            description: Missing/ambiguous Stripe refund or identity/amount mismatch; operator review required,
+          }
+  /admin/payment-refunds/{id}/resolve-item:
+    post:
+      tags: [Admin]
+      summary: Resolve a later-failed accepted Payment refund item
+      description: RETURNED_OUTSIDE_APP changes no accounting. WALLET_CREDIT requires COMPLETED/REFUNDED, restores item cash/D/total_donated and grants one linked FAILED_PAYMENT_REFUND adjustment; allocations stay shrunk and the per-category gap stays reserved. CHARGEBACK permits only outside return or SETTLED_BY_DISPUTE. Exact retries are idempotent; conflicting choices return 409. Shipping is never Wallet credit.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution:
+                  { type: string, enum: [RETURNED_OUTSIDE_APP, WALLET_CREDIT, SETTLED_BY_DISPUTE] }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentRefundResult' }
+        '400': { description: Invalid resolution }
+        '404': { description: Payment refund not found }
+        '409':
+          {
+            description: Not later-failed,
+            already resolved differently,
+            source status disallows resolution or another REQUESTED refund exists,
+          }
+  /admin/payment-refunds/{id}/resolve-shipping:
+    post:
+      tags: [Admin]
+      summary: Resolve failed shipping independently of the item
+      description: Audits RETURNED_OUTSIDE_APP or KEPT_BY_AGREEMENT with actor/time; no money, Wallet or Pool change. Works before or after item resolution. Exact retries are idempotent.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution: { type: string, enum: [RETURNED_OUTSIDE_APP, KEPT_BY_AGREEMENT] }
+      responses:
+        '200': { $ref: '#/components/responses/PaymentRefundResult' }
+        '400': { description: Invalid resolution }
+        '404': { description: Payment refund not found }
+        '409': { description: No failed shipping to resolve or already resolved differently }
+
   /admin/claims:
     get:
       tags: [Admin]
@@ -3913,6 +4048,11 @@ paths:
 
 components:
   responses:
+    PaymentRefundResult:
+      description: Audited Payment refund record. Acceptance is not final settlement; no donor email or private claim data.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PaymentRefundRecord' }
     PledgeState:
       description: Immutable review and derived payment state. No donor email, auth token or shipping address.
       content:
@@ -3958,6 +4098,112 @@ components:
       scheme: bearer
       description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
+    PaymentRefundRecord:
+      type: object
+      required:
+        [
+          id,
+          donation_id,
+          claim_id,
+          item_cents,
+          shipping_cents,
+          status,
+          stripe_refund_id,
+          pool_shrink_data,
+          failure_reason,
+          resolution,
+          shipping_resolution,
+          created_by,
+          created_at,
+          updated_at,
+          accepted_at,
+          resolved_at,
+          resolved_by,
+          shipping_resolved_at,
+          shipping_resolved_by,
+        ]
+      properties:
+        id: { type: string, description: Stripe idempotency key }
+        donation_id: { type: string }
+        claim_id: { type: string }
+        item_cents: { type: integer }
+        shipping_cents: { type: integer }
+        status:
+          { type: string, enum: [REQUESTED, PENDING, REQUIRES_ACTION, SUCCEEDED, FAILED, RESOLVED] }
+        stripe_refund_id: { type: string, nullable: true }
+        pool_shrink_data:
+          type: string
+          nullable: true
+          description: JSON-encoded PaymentRefundShrink snapshot, committed once on acceptance. Includes original/effective financial components and their reduction before/after, including ended targets. Never infer original consumption from reduced allocation rows.
+        failure_reason: { type: string, nullable: true }
+        resolution:
+          {
+            type: string,
+            nullable: true,
+            enum: [REJECTED, RETURNED_OUTSIDE_APP, WALLET_CREDIT, SETTLED_BY_DISPUTE],
+          }
+        shipping_resolution:
+          { type: string, nullable: true, enum: [RETURNED_OUTSIDE_APP, KEPT_BY_AGREEMENT] }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        accepted_at: { type: string, format: date-time, nullable: true }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        resolved_by: { type: string, nullable: true }
+        shipping_resolved_at: { type: string, format: date-time, nullable: true }
+        shipping_resolved_by: { type: string, nullable: true }
+    PaymentRefundPreview:
+      type: object
+      required: [eligible, reason, claim_id, donation_id]
+      properties:
+        eligible: { type: boolean }
+        reason: { type: string, nullable: true }
+        claim_id: { type: string }
+        donation_id: { type: string, nullable: true }
+        item_cents: { type: integer }
+        shipping_cents: { type: integer }
+        money_before_cents: { type: integer }
+        money_after_cents: { type: integer }
+        pledge_before_cents: { type: integer }
+        pledge_after_cents: { type: integer }
+        wallet_applied_cents: { type: integer }
+        pool_shrink: { $ref: '#/components/schemas/PaymentRefundShrink' }
+    PaymentRefundShrink:
+      type: object
+      properties:
+        donation_id: { type: string }
+        claim_id: { type: string }
+        money_before_cents: { type: integer }
+        money_after_cents: { type: integer }
+        pledge_before_cents: { type: integer }
+        pledge_after_cents: { type: integer }
+        wallet_applied_cents: { type: integer }
+        failed_payment_wallet_credit_cents: { type: integer }
+        categories:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              before_cents: { type: integer }
+              after_cents: { type: integer }
+              unused_consumed_cents: { type: integer }
+              reduced_cents: { type: integer }
+        components:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [claim, vote, contribution, redemption, credit] }
+              id: { type: string }
+              category: { type: string, enum: [reward, poll, goal] }
+              before_cents: { type: integer }
+              after_cents: { type: integer }
+              target_id: { type: string, nullable: true }
+              allocation_id: { type: string, nullable: true }
+              ended: { type: boolean }
+              completed: { type: boolean }
+              reduced_before_cents: { type: integer }
+              reduced_after_cents: { type: integer }
     PoolAmounts:
       type: object
       required: [reward, poll, goal]

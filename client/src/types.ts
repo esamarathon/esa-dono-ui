@@ -558,6 +558,88 @@ export interface AdminDonorList {
   total: number;
 }
 
+export type PaymentRefundStatus =
+  'REQUESTED' | 'PENDING' | 'REQUIRES_ACTION' | 'SUCCEEDED' | 'FAILED' | 'RESOLVED';
+export type PaymentRefundItemResolution =
+  'RETURNED_OUTSIDE_APP' | 'WALLET_CREDIT' | 'SETTLED_BY_DISPUTE';
+export type PaymentRefundShippingResolution = 'RETURNED_OUTSIDE_APP' | 'KEPT_BY_AGREEMENT';
+export interface PaymentRefundRecord {
+  id: string;
+  donation_id: string;
+  claim_id: string;
+  item_cents: number;
+  shipping_cents: number;
+  status: PaymentRefundStatus;
+  stripe_refund_id: string | null;
+  /** JSON-encoded PaymentRefundShrink; null until accepted. */
+  pool_shrink_data: string | null;
+  failure_reason: string | null;
+  resolution: 'REJECTED' | PaymentRefundItemResolution | null;
+  shipping_resolution: PaymentRefundShippingResolution | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  accepted_at: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  shipping_resolved_at: string | null;
+  shipping_resolved_by: string | null;
+}
+export interface PaymentRefundList {
+  records: PaymentRefundRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+export interface PaymentRefundShrink {
+  donation_id: string;
+  claim_id: string;
+  money_before_cents: number;
+  money_after_cents: number;
+  pledge_before_cents: number;
+  pledge_after_cents: number;
+  wallet_applied_cents: number;
+  failed_payment_wallet_credit_cents: number;
+  categories: Record<
+    'reward' | 'poll' | 'goal',
+    {
+      before_cents: number;
+      after_cents: number;
+      unused_consumed_cents: number;
+      reduced_cents: number;
+    }
+  >;
+  components: {
+    kind: 'claim' | 'vote' | 'contribution' | 'redemption' | 'credit';
+    id: string;
+    category: 'reward' | 'poll' | 'goal';
+    before_cents: number;
+    after_cents: number;
+    target_id: string | null;
+    allocation_id: string | null;
+    ended: boolean;
+    completed: boolean;
+    reduced_before_cents: number;
+    reduced_after_cents: number;
+  }[];
+}
+export type PaymentRefundPreview =
+  | { eligible: false; reason: string; claim_id: string; donation_id: string | null }
+  | {
+      eligible: true;
+      reason: null;
+      claim_id: string;
+      donation_id: string;
+      item_cents: number;
+      shipping_cents: number;
+      money_before_cents: number;
+      money_after_cents: number;
+      pledge_before_cents: number;
+      pledge_after_cents: number;
+      wallet_applied_cents: number;
+      pool_shrink: PaymentRefundShrink;
+    };
+
 export interface RefundResult {
   success: boolean;
   refunded_count: number;
