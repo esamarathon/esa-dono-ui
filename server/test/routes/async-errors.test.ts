@@ -108,16 +108,16 @@ describe('async route errors keep the backend running (#175)', () => {
     { label: 'moderator voted poll', path: '/api/moderator/polls/', id: () => pollId },
     { label: 'admin voted poll', path: '/api/admin/polls/', id: () => pollId },
   ])(
-    'returns a generic 500 for a $label delete and serves a following request',
+    'returns the history conflict for a $label delete and serves a following request',
     async ({ path, id }) => {
       const { stdout, stderr } = await runDelete(path + id());
       const result = JSON.parse(stdout.split('RESULT ')[1]!);
       expect(result).toEqual({
-        status: 500,
-        body: { error: 'Internal server error' },
+        status: 409,
+        body: { error: 'This has allocation history. Deactivate it instead.' },
         health: 200,
       });
-      expect(stderr).toContain('P2003');
+      expect(stderr).not.toContain('P2003');
     },
   );
 

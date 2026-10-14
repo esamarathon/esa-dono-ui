@@ -1494,7 +1494,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /admin/simulate-donation:
     post:
@@ -1908,7 +1910,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /admin/polls/{id}/options:
     post:
@@ -3002,7 +3006,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /moderator/polls/{id}/options:
     post:
@@ -3062,7 +3068,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /moderator/polls/{id}/custom-entries:
     get:
@@ -3210,7 +3218,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /moderator/claims:
     get:
@@ -3336,7 +3346,9 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Deleted
+          description: Deleted (no allocation history)
+        '409':
+          $ref: '#/components/responses/AllocationHistoryConflict'
 
   /moderator/auctions:
     get:
@@ -3503,6 +3515,18 @@ paths:
           description: Offer email resent
 
 components:
+  responses:
+    AllocationHistoryConflict:
+      description: The incentive has allocation history, including reversed rows. Nothing is removed.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
+                enum: ['This has allocation history. Deactivate it instead.']
   securitySchemes:
     AdminKey:
       type: http

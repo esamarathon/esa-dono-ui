@@ -3,6 +3,17 @@ import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { sendError } from '../lib/httpError.js';
 import { moderateCustomEntryTx } from '../services/reversal.js';
+import {
+  createReward,
+  updateReward,
+  createPoll,
+  updatePoll,
+  createPollOption,
+  updatePollOption,
+  createGoal,
+  updateGoal,
+  removeIncentive,
+} from '../services/incentiveLifecycle.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
@@ -75,21 +86,18 @@ router.post('/polls', async (req, res) => {
     auto_approve,
     channel_id,
   } = req.body;
-  const poll = await prisma.poll.create({
-    data: {
-      title,
-      description,
-      is_active: is_active ?? true,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-      options: options?.length
-        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
-        : undefined,
-    },
-    include: { options: true },
+  const poll = await createPoll({
+    title,
+    description,
+    is_active: is_active ?? true,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id: channel_id || null,
+    options: options?.length
+      ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+      : undefined,
   });
   res.json(poll);
 });
@@ -105,32 +113,30 @@ router.put('/polls/:id', async (req, res) => {
     auto_approve,
     channel_id,
   } = req.body;
-  const poll = await prisma.poll.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      is_active,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-    },
-    include: { options: true },
+  const poll = await updatePoll(req.params.id, {
+    title,
+    description,
+    is_active,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id: channel_id || null,
   });
   res.json(poll);
 });
 
 router.delete('/polls/:id', async (req, res) => {
-  await prisma.poll.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('POLL', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/polls]');
+  }
 });
 
 router.post('/polls/:id/options', async (req, res) => {
-  const option = await prisma.pollOption.create({
-    data: { poll_id: req.params.id, label: req.body.label },
-  });
+  const option = await createPollOption(req.params.id, req.body.label);
   res.json(option);
 });
 
@@ -139,16 +145,17 @@ router.patch('/polls/options/:id', async (req, res) => {
   if (!label || !String(label).trim()) {
     return res.status(400).json({ error: 'label is required' });
   }
-  const option = await prisma.pollOption.update({
-    where: { id: req.params.id },
-    data: { label: String(label).trim() },
-  });
+  const option = await updatePollOption(req.params.id, String(label).trim());
   res.json(option);
 });
 
 router.delete('/polls/options/:id', async (req, res) => {
-  await prisma.pollOption.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('POLL_OPTION', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/polls/options]');
+  }
 });
 
 // Custom entries
@@ -218,18 +225,16 @@ router.post('/rewards', async (req, res) => {
     image_url,
     channel_id,
   } = req.body;
-  const reward = await prisma.reward.create({
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active: is_active ?? true,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await createReward({
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active: is_active ?? true,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id: channel_id || null,
   });
   res.json(reward);
 });
@@ -246,55 +251,26 @@ router.put('/rewards/:id', async (req, res) => {
     image_url,
     channel_id,
   } = req.body;
-  // Best-effort cleanup of old upload if the image is being replaced/removed
-  const existing = await prisma.reward.findUnique({
-    where: { id: req.params.id },
-    select: { image_url: true },
-  });
-  if (existing && existing.image_url !== (image_url || null)) {
-    await deleteUploadByUrl(existing.image_url);
-  }
-  const reward = await prisma.reward.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await updateReward(req.params.id, {
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id: channel_id || null,
   });
   res.json(reward);
 });
 
 router.delete('/rewards/:id', async (req, res) => {
   try {
-    const claims = await prisma.rewardClaim.count({ where: { reward_id: req.params.id } });
-    if (claims > 0) {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    const existing = await prisma.reward.findUnique({
-      where: { id: req.params.id },
-      select: { image_url: true },
-    });
-    await prisma.reward.delete({ where: { id: req.params.id } });
-    await deleteUploadByUrl(existing?.image_url);
+    await removeIncentive('REWARD', req.params.id);
     res.json({ success: true });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === 'P2025') return res.status(404).json({ error: 'Reward not found' });
-    if (code === 'P2003') {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    throw err;
+    sendError(res, err, '[moderator/rewards]');
   }
 });
 
@@ -512,37 +488,36 @@ router.get('/goals', async (req, res) => {
 
 router.post('/goals', async (req, res) => {
   const { title, description, target_cents, is_active, channel_id } = req.body;
-  const goal = await prisma.fundGoal.create({
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active: is_active ?? true,
-      channel_id: channel_id || null,
-    },
+  const goal = await createGoal({
+    title,
+    description,
+    target_cents,
+    is_active: is_active ?? true,
+    channel_id: channel_id || null,
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
   const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
-  const goal = await prisma.fundGoal.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active,
-      is_complete,
-      channel_id: channel_id || null,
-    },
+  const goal = await updateGoal(req.params.id, {
+    title,
+    description,
+    target_cents,
+    is_active,
+    is_complete,
+    channel_id: channel_id || null,
   });
   res.json(goal);
 });
 
 router.delete('/goals/:id', async (req, res) => {
-  await prisma.fundGoal.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('GOAL', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/goals]');
+  }
 });
 
 // Auctions CRUD — same shape as admin, but offer/cascade views never expose
