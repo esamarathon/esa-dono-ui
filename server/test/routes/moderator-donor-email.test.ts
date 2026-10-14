@@ -20,6 +20,8 @@ describe('moderator routes never select/include donor.email', () => {
     '../../routes/identityRoutes.ts',
     '../../services/reversal.ts',
     '../../services/poolAccounting.ts',
+    '../../services/unusedPool.ts',
+    '../../services/eventEnd.ts',
     '../../services/incentiveLifecycle.ts',
     '../../services/channels.ts',
     '../../services/events.ts',

@@ -40,6 +40,7 @@ import ModeratorPolls from './pages/moderator/ModeratorPolls';
 import ModeratorRewards from './pages/moderator/ModeratorRewards';
 import ModeratorGoals from './pages/moderator/ModeratorGoals';
 import ModeratorClaims from './pages/moderator/ModeratorClaims';
+import ModeratorUnusedPoolMoney from './pages/moderator/ModeratorUnusedPoolMoney';
 import ModeratorDonations from './pages/moderator/ModeratorDonations';
 import ModeratorAuctions from './pages/moderator/ModeratorAuctions';
 /** Fires a `page_view` span on every client-side route change. */
@@ -81,6 +82,7 @@ export default function App() {
           <Route path="rewards" element={<ModeratorRewards />} />
           <Route path="goals" element={<ModeratorGoals />} />
           <Route path="claims" element={<ModeratorClaims />} />
+          <Route path="unused-pool-money" element={<ModeratorUnusedPoolMoney />} />
           <Route path="donations" element={<ModeratorDonations />} />
           <Route path="auctions" element={<ModeratorAuctions />} />
           <Route path="help" element={<ModeratorHelp />} />

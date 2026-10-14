@@ -5,7 +5,8 @@ import prisma from '../lib/prisma.js';
 import { countedDonation } from '../lib/donationTotals.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
-import { sendError } from '../lib/httpError.js';
+import { handle, sendError } from '../lib/httpError.js';
+import { previewEventEndTx, endEventTx, undoEventEndTx } from '../services/eventEnd.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { intakeDonation } from '../services/donation.js';
@@ -111,6 +112,40 @@ router.get('/stats', async (req, res) => {
 
 // Channels and Events (routes/identityRoutes.ts)
 mountIdentityRoutes(router);
+
+// Admin-only: deliberately outside the shared identity mount.
+router.get(
+  '/events/:id/end-preview',
+  handle('[admin/events]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewEventEndTx(tx, req.params.id!)));
+  }),
+);
+router.get(
+  '/events/:id/undo-end-preview',
+  handle('[admin/events]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewEventEndTx(tx, req.params.id!, true)));
+  }),
+);
+router.post(
+  '/events/:id/end',
+  handle('[admin/events]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        endEventTx(tx, req.params.id!, req.body?.slug, req.donor?.email || 'admin'),
+      ),
+    );
+  }),
+);
+router.post(
+  '/events/:id/undo-end',
+  handle('[admin/events]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        undoEventEndTx(tx, req.params.id!, req.body?.slug, req.donor?.email || 'admin'),
+      ),
+    );
+  }),
+);
 
 // Donations
 const DONATION_STATUSES = ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'];
