@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { MIN_SPEND_CENTS, type ClaimData, type PoolCategory } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
+import { readDonationAccountingTx } from './poolAccounting.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -54,23 +55,11 @@ async function fundSpend(
   }
   if (incentiveChannel && incentiveChannel !== donation.channel_id)
     throw httpError(400, 'Incentive belongs to another Channel');
-  const where = { donation_id: donationId, reversed_at: null };
-  const used =
-    category === 'reward'
-      ? await tx.rewardClaim.aggregate({
-          where: { ...where, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
-          _sum: { amount_cents: true },
-        })
-      : category === 'poll'
-        ? await tx.pollVote.aggregate({ where, _sum: { amount_cents: true } })
-        : await tx.fundContribution.aggregate({ where, _sum: { amount_cents: true } });
-  const reserved = await tx.poolCredit.aggregate({
-    where: { donation_id: donationId, category },
-    _sum: { remaining_cents: true },
-  });
+  const accounting = await readDonationAccountingTx(tx, donationId);
+  const budget = accounting.pools[category];
   if (
-    (used._sum.amount_cents ?? 0) +
-      (reserved._sum.remaining_cents ?? 0) +
+    budget.live_cents +
+      budget.outstanding_credit_cents +
       donation.failed_payment_wallet_credit_cents +
       cents >
     donation.pledge_amount_cents

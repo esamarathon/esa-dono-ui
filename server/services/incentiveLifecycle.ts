@@ -63,15 +63,17 @@ export async function reverseAndDeactivate(
   id: string,
   actor: string,
 ) {
-  return withWebhooks(async (tx, emit) => {
+  return withWebhooks(async (tx, emit, publisher) => {
+    // Match the common Reversal lock before reading activation state.
+    await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
     if (kind === 'POLL_OPTION') {
-      const refund = await refundPollOptionVotes(tx, id, actor);
+      const refund = await refundPollOptionVotes(tx, id, actor, publisher);
       await tx.pollOption.update({ where: { id }, data: { status: 'REJECTED' } });
       return refund;
     }
     const prior = await tx.fundGoal.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Goal not found');
-    const refund = await refundGoalContributions(tx, id, actor);
+    const refund = await refundGoalContributions(tx, id, actor, publisher);
     const updated = await tx.fundGoal.update({ where: { id }, data: { is_active: false } });
     await publishActivation(emit, 'GOAL', prior, updated);
     return refund;

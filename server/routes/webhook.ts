@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import Stripe from 'stripe';
 import { reconcileCheckoutNotification, type CheckoutNotification } from '../services/checkout.js';
 import type { CheckoutSession } from '../services/stripe.js';
+import { recordLegacyAsyncFailureTx } from '../services/reversal.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
 
 const router = Router();
 
@@ -57,11 +59,12 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const result = await reconcileCheckoutNotification(event.type as CheckoutNotification, session);
-    // #188 consumes the legacy failure receipt here; this slice deliberately
-    // does not apply reversal accounting. The pooled release ships together.
-    res
-      .status(200)
-      .json({ received: true, ...(result && 'legacy_async_failure' in result ? result : {}) });
+    if (result && 'legacy_async_failure' in result) {
+      await withWebhooks((tx, _emit, publisher) =>
+        recordLegacyAsyncFailureTx(tx, result.legacy_async_failure, publisher),
+      );
+    }
+    res.status(200).json({ received: true });
   } catch (err) {
     console.error('Webhook error:', err);
     res.status(500).json({ error: 'Internal server error' });

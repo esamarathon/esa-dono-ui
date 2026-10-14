@@ -34,6 +34,7 @@ async function donor(balance: number) {
 
 afterEach(async () => {
   await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_reversal_adjustment');
+  await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donorIds } } } });
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.fundContribution.deleteMany({ where: { donor_id: { in: donorIds } } });
@@ -41,6 +42,10 @@ afterEach(async () => {
   await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.poll.deleteMany({ where: { id: { in: pollIds } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goalIds } } });
+  await prisma.balanceAdjustment.updateMany({
+    where: { donor_id: { in: donorIds } },
+    data: { donation_id: null },
+  });
   await prisma.donation.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.balanceAdjustment.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.donor.deleteMany({ where: { id: { in: donorIds } } });
@@ -63,17 +68,58 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe('Reversal accounting on SQLite', () => {
-  it('a per-goal reversal with no live rows preserves even a manually set completion flag', async () => {
+  it('returns a pooled donor vote as category credit, never Wallet credit', async () => {
+    const owner = await donor(100);
+    const donation = await prisma.donation.create({
+      data: {
+        donor_id: owner.id,
+        external_id: crypto.randomUUID(),
+        amount_cents: 1000,
+        pledge_amount_cents: 1000,
+      },
+    });
+    const poll = await prisma.poll.create({
+      data: {
+        title: 'Pool',
+        total_votes_cents: 1000,
+        options: { create: { label: 'A', votes_cents: 1000 } },
+      },
+      include: { options: true },
+    });
+    pollIds.push(poll.id);
+    const vote = await prisma.pollVote.create({
+      data: {
+        donor_id: owner.id,
+        donation_id: donation.id,
+        poll_id: poll.id,
+        poll_option_id: poll.options[0]!.id,
+        amount_cents: 1000,
+      },
+    });
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin', publisher),
+    );
+    expect(await prisma.donor.findUnique({ where: { id: owner.id } })).toMatchObject({
+      balance_remaining: 100,
+    });
+    expect(await prisma.balanceAdjustment.count({ where: { donor_id: owner.id } })).toBe(0);
+    expect(await prisma.poolCredit.findMany({ where: { donation_id: donation.id } })).toMatchObject(
+      [{ category: 'poll', amount_cents: 1000, remaining_cents: 1000, source_vote_id: vote.id }],
+    );
+  });
+  it('a per-goal reversal recomputes completion even with no live rows', async () => {
     const goal = await prisma.fundGoal.create({
       data: { title: 'Manual completion', target_cents: 1000, current_cents: 0, is_complete: true },
     });
     goalIds.push(goal.id);
     expect(
-      await prisma.$transaction((tx) => refundGoalContributions(tx, goal.id, 'admin')),
+      await withWebhooks((tx, _emit, publisher) =>
+        refundGoalContributions(tx, goal.id, 'admin', publisher),
+      ),
     ).toEqual({ refunded_count: 0, refunded_cents: 0 });
     expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
       current_cents: 0,
-      is_complete: true,
+      is_complete: false,
     });
   });
 
@@ -206,11 +252,18 @@ describe('Reversal accounting on SQLite', () => {
       withWebhooks(async (tx, _emit, publisher) => {
         switch (action) {
           case 'claim':
-            return reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin');
+            return reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin', publisher);
           case 'vote':
-            return reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin');
+            return reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin', publisher);
           case 'contribution':
-            return reverseSpendTx(tx, owner.id, 'contribution', contribution.id, 'admin');
+            return reverseSpendTx(
+              tx,
+              owner.id,
+              'contribution',
+              contribution.id,
+              'admin',
+              publisher,
+            );
           case 'status':
             return setDonationStatusTx(
               tx,
@@ -227,9 +280,9 @@ describe('Reversal accounting on SQLite', () => {
           case 'sweep':
             return sweepWalletCreditsTx(tx, { id: owner.id }, true, 'admin');
           case 'poll-option':
-            return refundPollOptionVotes(tx, option.id, 'admin');
+            return refundPollOptionVotes(tx, option.id, 'admin', publisher);
           case 'goal':
-            return refundGoalContributions(tx, goal.id, 'admin');
+            return refundGoalContributions(tx, goal.id, 'admin', publisher);
           default:
             throw new Error('Unknown test action');
         }
@@ -330,9 +383,10 @@ describe('Reversal accounting on SQLite', () => {
       WHEN (SELECT COUNT(*) FROM BalanceAdjustment WHERE donor_id IN ('${first.id}', '${second.id}')) = 1
       BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
       await expect(
-        prisma.$transaction(async (tx) => {
-          if (action === 'poll-option') return refundPollOptionVotes(tx, option.id, 'admin');
-          if (action === 'goal') return refundGoalContributions(tx, goal.id, 'admin');
+        withWebhooks(async (tx, _emit, publisher) => {
+          if (action === 'poll-option')
+            return refundPollOptionVotes(tx, option.id, 'admin', publisher);
+          if (action === 'goal') return refundGoalContributions(tx, goal.id, 'admin', publisher);
           return sweepWalletCreditsTx(tx, { id: { in: [first.id, second.id] } }, true, 'admin');
         }),
       ).rejects.toMatchObject({ code: 'P2003' });
@@ -438,7 +492,9 @@ describe('Reversal accounting on SQLite', () => {
       proposeCustomEntryTx(tx, owner.id, poll.id, 'Idea', 400),
     );
     const vote = await prisma.pollVote.findFirstOrThrow({ where: { poll_option_id: option.id } });
-    await prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin'));
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin', publisher),
+    );
     for (const status of ['APPROVED', 'REJECTED'] as const) {
       await expect(
         withWebhooks((tx, _emit, publisher) =>
@@ -476,7 +532,9 @@ describe('Reversal accounting on SQLite', () => {
       withWebhooks((tx, _emit, publisher) =>
         moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator', publisher),
       ),
-      prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin')),
+      withWebhooks((tx, _emit, publisher) =>
+        reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin', publisher),
+      ),
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toMatchObject({
@@ -517,7 +575,9 @@ describe('Reversal accounting on SQLite', () => {
         },
       });
       expect(
-        await prisma.$transaction((tx) => refundPollOptionVotes(tx, option.id, 'admin')),
+        await withWebhooks((tx, _emit, publisher) =>
+          refundPollOptionVotes(tx, option.id, 'admin', publisher),
+        ),
       ).toEqual({ refunded_count: 1, refunded_cents: 400 });
       expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toMatchObject({
         status,
@@ -676,7 +736,6 @@ describe('Reversal accounting on SQLite', () => {
       ),
     ).toEqual({
       success: true,
-      email: owner.email,
       balance_before: 100,
       balance_after: 350,
       adjustment: 250,
@@ -723,7 +782,9 @@ describe('Reversal accounting on SQLite', () => {
       });
       const results = await Promise.all(
         Array.from({ length: 2 }, () =>
-          prisma.$transaction((tx) => refundGoalContributions(tx, goal.id, 'admin')),
+          withWebhooks((tx, _emit, publisher) =>
+            refundGoalContributions(tx, goal.id, 'admin', publisher),
+          ),
         ),
       );
       expect(results).toHaveLength(2);
@@ -734,7 +795,9 @@ describe('Reversal accounting on SQLite', () => {
         ]),
       );
       expect(
-        await prisma.$transaction((tx) => refundGoalContributions(tx, goal.id, 'admin')),
+        await withWebhooks((tx, _emit, publisher) =>
+          refundGoalContributions(tx, goal.id, 'admin', publisher),
+        ),
       ).toEqual({ refunded_count: 0, refunded_cents: 0 });
       expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
         current_cents: remaining,
@@ -790,7 +853,9 @@ describe('Reversal accounting on SQLite', () => {
     });
     const results = await Promise.all(
       Array.from({ length: 2 }, () =>
-        prisma.$transaction((tx) => refundPollOptionVotes(tx, option.id, 'admin')),
+        withWebhooks((tx, _emit, publisher) =>
+          refundPollOptionVotes(tx, option.id, 'admin', publisher),
+        ),
       ),
     );
     expect(results).toHaveLength(2);
@@ -830,14 +895,14 @@ describe('Reversal accounting on SQLite', () => {
   });
 
   it.each([
-    { status: 'REFUNDED', balance: 300, after: 0, amount: -300, type: 'REFUND' },
+    { status: 'REFUNDED', balance: 300, after: 1000, amount: 700, type: 'WALLET_REFUND' },
     { status: 'CHARGEBACK', balance: 300, after: 0, amount: -300, type: 'CHARGEBACK' },
-    { status: 'REFUNDED', balance: 1500, after: 500, amount: -1000, type: 'REFUND' },
-    { status: 'CHARGEBACK', balance: 1500, after: 500, amount: -1000, type: 'CHARGEBACK' },
-    { status: 'REFUNDED', balance: 0, after: 0, amount: 0, type: 'REFUND' },
+    { status: 'REFUNDED', balance: 1500, after: 2200, amount: 700, type: 'WALLET_REFUND' },
+    { status: 'CHARGEBACK', balance: 1500, after: 1200, amount: -300, type: 'CHARGEBACK' },
+    { status: 'REFUNDED', balance: 0, after: 700, amount: 700, type: 'WALLET_REFUND' },
     { status: 'CHARGEBACK', balance: 0, after: 0, amount: 0, type: 'CHARGEBACK' },
   ])(
-    '$status with $balance cents caps the wallet clawback, leaves allocations and completion alone, and links one adjustment',
+    '$status with $balance cents reverses live legacy rows and applies their one-to-one rule once',
     async ({ status, balance, after, amount, type }) => {
       const owner = await donor(balance);
       const donation = await prisma.donation.create({
@@ -871,10 +936,10 @@ describe('Reversal accounting on SQLite', () => {
       });
       expect(
         await prisma.fundContribution.findUnique({ where: { id: contribution.id } }),
-      ).toMatchObject({ reversed_at: null });
+      ).toMatchObject({ reversed_at: expect.any(Date) });
       expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
-        current_cents: 700,
-        is_complete: true,
+        current_cents: 0,
+        is_complete: status === 'CHARGEBACK',
       });
       expect(await prisma.balanceAdjustment.findMany({ where: { donor_id: owner.id } })).toEqual([
         expect.objectContaining({
@@ -890,7 +955,7 @@ describe('Reversal accounting on SQLite', () => {
     },
   );
 
-  it('single contribution reversal keeps a completed goal complete below target, but clears it at zero', async () => {
+  it('single contribution reversal reopens a goal below target and remains safe to repeat', async () => {
     const owner = await donor(100);
     const goal = await prisma.fundGoal.create({
       data: { title: 'Complete goal', target_cents: 1000, current_cents: 1200, is_complete: true },
@@ -903,17 +968,17 @@ describe('Reversal accounting on SQLite', () => {
       data: { goal_id: goal.id, donor_id: owner.id, amount_cents: 700 },
     });
 
-    await prisma.$transaction((tx) =>
-      reverseSpendTx(tx, owner.id, 'contribution', first.id, 'admin'),
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, owner.id, 'contribution', first.id, 'admin', publisher),
     );
     expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
       current_cents: 700,
-      is_complete: true,
+      is_complete: false,
     });
     const results = await Promise.allSettled(
       Array.from({ length: 2 }, () =>
-        prisma.$transaction((tx) =>
-          reverseSpendTx(tx, owner.id, 'contribution', second.id, 'admin'),
+        withWebhooks((tx, _emit, publisher) =>
+          reverseSpendTx(tx, owner.id, 'contribution', second.id, 'admin', publisher),
         ),
       ),
     );
@@ -978,7 +1043,9 @@ describe('Reversal accounting on SQLite', () => {
 
     const results = await Promise.allSettled(
       Array.from({ length: 2 }, () =>
-        prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin')),
+        withWebhooks((tx, _emit, publisher) =>
+          reverseSpendTx(tx, owner.id, 'vote', vote.id, 'admin', publisher),
+        ),
       ),
     );
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -1009,20 +1076,22 @@ describe('Reversal accounting on SQLite', () => {
     ]);
   });
 
-  it('reverses a pending claim once using the live reward price and releases its stock', async () => {
+  it('reverses a pending claim once using its recorded price and releases its stock', async () => {
     const owner = await donor(100);
     const reward = await prisma.reward.create({
       data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500, quantity_claimed: 1 },
     });
     rewardIds.push(reward.id);
     const claim = await prisma.rewardClaim.create({
-      data: { donor_id: owner.id, reward_id: reward.id },
+      data: { donor_id: owner.id, reward_id: reward.id, amount_cents: 500 },
     });
     await prisma.reward.update({ where: { id: reward.id }, data: { cost_cents: 700 } });
 
     const results = await Promise.allSettled(
       Array.from({ length: 2 }, () =>
-        prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin')),
+        withWebhooks((tx, _emit, publisher) =>
+          reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin', publisher),
+        ),
       ),
     );
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -1030,11 +1099,13 @@ describe('Reversal accounting on SQLite', () => {
       reason: { status: 400, message: 'Claim already reversed' },
     });
     await expect(
-      prisma.$transaction((tx) => reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin')),
+      withWebhooks((tx, _emit, publisher) =>
+        reverseSpendTx(tx, owner.id, 'claim', claim.id, 'admin', publisher),
+      ),
     ).rejects.toMatchObject({ status: 400, message: 'Claim already reversed' });
 
     expect(await prisma.donor.findUnique({ where: { id: owner.id } })).toMatchObject({
-      balance_remaining: 800,
+      balance_remaining: 600,
     });
     expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
       quantity_claimed: 0,
@@ -1046,8 +1117,8 @@ describe('Reversal accounting on SQLite', () => {
     });
     expect(await prisma.balanceAdjustment.findMany({ where: { donor_id: owner.id } })).toEqual([
       expect.objectContaining({
-        amount_cents: 700,
-        balance_after_cents: 800,
+        amount_cents: 500,
+        balance_after_cents: 600,
         type: 'REFUND',
         reason: 'Reversed reward claim',
         reference_id: claim.id,

@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import prisma from '../../../lib/prisma.js';
 import { withWebhooks } from '../../../services/webhooks/outbox.js';
-import { moderateCustomEntryTx } from '../../../services/reversal.js';
+import { moderateCustomEntryTx, reverseSpendTx } from '../../../services/reversal.js';
 import { proposeCustomEntryTx, votePollTx } from '../../../services/spend.js';
 import { createPledge } from '../../../services/pledge.js';
 import { intakeDonation } from '../../../services/donation.js';
@@ -129,6 +129,7 @@ afterEach(async () => {
     where: { destination_id: { in: destinations } },
   });
   await prisma.webhookDestination.deleteMany({ where: { id: { in: destinations } } });
+  await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.pollOption.deleteMany({ where: { poll_id: { in: polls } } });
   await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: donors } } });
@@ -150,6 +151,79 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe('Donation publisher through the SQLite outbox', () => {
+  it('opt-in donation.updated carries stable safe full state, even with no active Tiltify Destination', async () => {
+    const { donor, channel, event, native, tiltify } = await fixture();
+    await prisma.webhookDestination.update({
+      where: { id: tiltify.id },
+      data: { is_active: false },
+    });
+    const optedIn = await prisma.webhookDestination.create({
+      data: {
+        url: 'http://127.0.0.1:1',
+        secret: 'test',
+        event_types: '["donation.created","donation.updated"]',
+      },
+    });
+    destinations.push(optedIn.id);
+    const poll = await prisma.poll.create({
+      data: { title: 'Sources', options: { create: { label: 'A' } } },
+      include: { options: true },
+    });
+    polls.push(poll.id);
+    const donation = await prisma.donation.create({
+      data: {
+        donor_id: donor.id,
+        external_id: crypto.randomUUID(),
+        amount_cents: 1000,
+        pledge_amount_cents: 1000,
+        channel_id: channel.id,
+        event_id: event.id,
+        moderated_by: 'staff-marker',
+      },
+    });
+    const vote = await prisma.pollVote.create({
+      data: {
+        donor_id: donor.id,
+        donation_id: donation.id,
+        poll_id: poll.id,
+        poll_option_id: poll.options[0]!.id,
+        amount_cents: 1000,
+        source: 'moderator',
+        allocated_by: 'staff-marker',
+        allocated_at: new Date(),
+      },
+    });
+    await withWebhooks(async (tx, _emit, publisher) => {
+      await publisher.publish(donation.id, null);
+      const before = await publisher.snapshot(donation.id);
+      await publisher.publish(donation.id, before);
+      await tx.donation.update({ where: { id: donation.id }, data: { status: 'REFUNDED' } });
+      await tx.pollVote.update({ where: { id: vote.id }, data: { reversed_at: new Date() } });
+      await publisher.publish([donation.id, donation.id], before);
+      const after = await publisher.snapshot(donation.id);
+      await publisher.publish(donation.id, after);
+    });
+    const queued = await messages(optedIn.id);
+    expect(queued.map((message) => message.type)).toEqual(['donation.created', 'donation.updated']);
+    expect(queued[0]!.payload.data).toMatchObject({
+      status: 'COMPLETED',
+      pledge_amount_cents: 1000,
+      amount_cents: 1000,
+      allocations: { poll: [{ id: vote.id, amount_cents: 1000, source: 'moderator' }] },
+    });
+    expect(queued[1]!.payload.data).toMatchObject({
+      status: 'REFUNDED',
+      pledge_amount_cents: 1000,
+      amount_cents: 1000,
+      allocations: { reward: [], poll: [], goal: [] },
+    });
+    expect(JSON.stringify(queued)).not.toContain(donor.email);
+    expect(JSON.stringify(queued)).not.toContain('staff-marker');
+    expect((await messages(native.id)).map((message) => message.type)).toEqual([
+      'donation.created',
+    ]);
+    expect(await messages(tiltify.id)).toEqual([]);
+  });
   it('approves the full $1 donor plus $9 auto write-in funding once and publishes one combined vote', async () => {
     const { donor, poll, entry, option, donation, native, tiltify } = await pooledWriteIn();
     expect(
@@ -200,6 +274,32 @@ describe('Donation publisher through the SQLite outbox', () => {
       },
     ]);
   });
+  it('reversing one funding row leaves the write-in pending so approval counts all remaining live funding', async () => {
+    const { donor, donation, poll, entry, option } = await pooledWriteIn();
+    const donorVote = await prisma.pollVote.findFirstOrThrow({
+      where: { donation_id: donation.id, source: 'donor' },
+    });
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, donor.id, 'vote', donorVote.id, 'admin', publisher),
+    );
+    expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toMatchObject({
+      status: 'PENDING_APPROVAL',
+      votes_cents: 0,
+    });
+    await withWebhooks((tx, _emit, publisher) =>
+      moderateCustomEntryTx(tx, entry.id, 'APPROVED', 'moderator', publisher),
+    );
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+      total_votes_cents: 900,
+    });
+    expect(await prisma.poolCredit.findMany({ where: { donation_id: donation.id } })).toMatchObject(
+      [{ category: 'poll', remaining_cents: 100, source_vote_id: donorVote.id }],
+    );
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 0,
+    });
+  });
+
   it.each(['APPROVED', 'REJECTED'] as const)(
     '%s handles every donor and donation funding the pending option',
     async (status) => {
@@ -228,7 +328,7 @@ describe('Donation publisher through the SQLite outbox', () => {
         total_votes_cents: approved ? 1500 : 0,
       });
       expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
-        balance_remaining: approved ? 0 : 1000,
+        balance_remaining: 0,
       });
       expect(await prisma.donor.findUnique({ where: { id: second.donor.id } })).toMatchObject({
         balance_remaining: approved ? 0 : 500,
@@ -305,7 +405,7 @@ describe('Donation publisher through the SQLite outbox', () => {
       });
       expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
         total_donated: 1000,
-        balance_remaining: approved ? 0 : 1000,
+        balance_remaining: 0,
       });
       const votes = await prisma.pollVote.findMany({
         where: { poll_option_id: option.id },
@@ -318,22 +418,27 @@ describe('Donation publisher through the SQLite outbox', () => {
         where: { donor_id: donor.id },
         orderBy: { amount_cents: 'asc' },
       });
-      // #188 owns Pool credit; this correction deliberately retains today's Wallet refunds.
-      expect(adjustments).toMatchObject(
+      expect(adjustments).toEqual([]);
+      expect(
+        await prisma.poolCredit.findMany({
+          where: { donation: { donor_id: donor.id } },
+          orderBy: { amount_cents: 'asc' },
+        }),
+      ).toMatchObject(
         approved
           ? []
           : [
               {
+                category: 'poll',
                 amount_cents: 100,
-                reference_id: votes[0]!.id,
-                type: 'REFUND',
-                reason: 'Rejected custom poll entry',
+                remaining_cents: 100,
+                source_vote_id: votes[0]!.id,
               },
               {
+                category: 'poll',
                 amount_cents: 900,
-                reference_id: votes[1]!.id,
-                type: 'REFUND',
-                reason: 'Rejected custom poll entry',
+                remaining_cents: 900,
+                source_vote_id: votes[1]!.id,
               },
             ],
       );
@@ -344,12 +449,12 @@ describe('Donation publisher through the SQLite outbox', () => {
     },
   );
 
-  it('rolls back every pooled rejection credit and funding row when the second ledger write fails', async () => {
+  it('rolls back every pooled rejection credit and funding row when the second category credit write fails', async () => {
     const { donor, poll, entry, option, native, tiltify } = await pooledWriteIn();
     const beforeNative = await messages(native.id);
     const beforeTiltify = await messages(tiltify.id);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_pooled_rejection BEFORE INSERT ON BalanceAdjustment
-      WHEN (SELECT COUNT(*) FROM BalanceAdjustment WHERE donor_id = '${donor.id}') = 1
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_pooled_rejection BEFORE INSERT ON PoolCredit
+      WHEN (SELECT COUNT(*) FROM PoolCredit WHERE donation_id IN (SELECT id FROM Donation WHERE donor_id = '${donor.id}')) = 1
       BEGIN SELECT RAISE(ABORT, 'late rejection ledger failure'); END`);
     await expect(
       withWebhooks((tx, _emit, publisher) =>
@@ -781,6 +886,10 @@ describe('Donation publisher through the SQLite outbox', () => {
             donation_id: donation.id,
             external_id: donation.external_id,
             amount_cents: 1200,
+            status: 'COMPLETED',
+            pledge_amount_cents: null,
+            wallet_applied_cents: 0,
+            allocations: { reward: [], poll: [], goal: [] },
             channel_id: channel.id,
             event_id: event.id,
             donor_ref: donor.id,

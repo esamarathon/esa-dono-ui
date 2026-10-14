@@ -1383,16 +1383,76 @@ paths:
         '200':
           description: Donations (all Donation fields incl. status, refund_id, external_id, channel_id, event_id, hidden_from_overlay, moderation flags) with donor email and channel (id, name, slug, event_id), ordered by created_at descending
 
+  /admin/donations/{id}/reversal-preview:
+    get:
+      tags: [Admin]
+      summary: Preview a Wallet refund or chargeback
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - {
+            name: status,
+            in: query,
+            required: true,
+            schema: { type: string, enum: [REFUNDED, CHARGEBACK] },
+          }
+      responses:
+        '200':
+          description: Computed effect; confirmation rechecks the same rules inside its transaction
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  [
+                    donation_id,
+                    status,
+                    accounting,
+                    wallet_adjustment_cents,
+                    money_before_cents,
+                    money_after_cents,
+                    reversed_rows,
+                    retained_claim_ids,
+                    cleared_pool_credit_cents,
+                  ]
+                properties:
+                  donation_id: { type: string }
+                  status: { type: string, enum: [REFUNDED, CHARGEBACK] }
+                  accounting: { type: string, enum: [POOLED, LEGACY] }
+                  wallet_adjustment_cents: { type: integer }
+                  money_before_cents: { type: integer }
+                  money_after_cents: { type: integer }
+                  reversed_rows:
+                    type: object
+                    properties:
+                      reward: { type: integer }
+                      poll: { type: integer }
+                      goal: { type: integer }
+                  retained_claim_ids: { type: array, items: { type: string } }
+                  cleared_pool_credit_cents:
+                    type: object
+                    properties:
+                      reward: { type: integer }
+                      poll: { type: integer }
+                      goal: { type: integer }
+        '400': { description: Invalid status, terminal donation, or zero-money chargeback }
+        '404': { description: Donation not found }
+        '409': { description: A Payment refund is REQUESTED }
+
   /admin/donations/{id}/status:
     patch:
       tags: [Admin]
       summary: Set a donation's lifecycle status (#63)
       description: >-
-        Moving into REFUNDED/CHARGEBACK claws back whatever of the donation's
-        amount is still sitting in the donor's unspent balance_remaining
-        (capped there), records a linked BalanceAdjustment, and stamps
-        Donation.refund_id. Once a donation has a refund_id it is terminal —
-        no further status changes are allowed.
+        ADR-0011 pooled or NULL-D legacy accounting is selected per donation.
+        Both actions reverse live linked rows except FULFILLED claims and clear Pool credit.
+        REFUNDED grants the max-rule Wallet difference (legacy: live linked sum), records
+        WALLET_REFUND and keeps money counted. CHARGEBACK returns original Wallet funding
+        minus prior grants (legacy: live linked sum minus money), caps a negative adjustment
+        at available Wallet credit, flags shipped claims, preserves completed goals and
+        removes the remaining money from totals. Ordinary reversals recompute goal completion
+        against its target. Both statuses are terminal; old terminal history is not repaired.
+        Chargeback is blocked when money is zero. All changes and messages commit atomically.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -1415,9 +1475,11 @@ paths:
         '200':
           description: Donation updated
         '400':
-          description: Invalid status, unchanged status, or donation already refunded/charged back
+          description: Invalid status, unchanged status, terminal donation or zero-money chargeback
         '404':
           description: Donation not found
+        '409':
+          description: A Payment refund is REQUESTED
 
   /admin/donations/{id}/channel:
     patch:
@@ -1498,7 +1560,34 @@ paths:
                   enum: [PENDING, FULFILLED]
       responses:
         '200':
-          description: Claim updated
+          description: Claim updated (with reward and admin-only donor email)
+        '400': { description: Invalid status }
+        '404': { description: Claim not found }
+        '409': { description: Charged-back donation, REQUESTED Payment refund or non-live claim }
+
+  /admin/claims/{id}/acknowledge-chargeback:
+    post:
+      tags: [Admin]
+      summary: Acknowledge a shipped claim flagged after a chargeback
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        '200':
+          {
+            description: Claim with flag cleared and acknowledgement actor,
+            time and optional note recorded; no credit or stock change,
+          }
+        '400': { description: Invalid note }
+        '404': { description: Claim not found }
+        '409': { description: No shipped chargeback flag to acknowledge }
 
   /admin/rewards:
     get:
@@ -1889,7 +1978,14 @@ paths:
   /admin/donors/{id}/reverse-spend:
     post:
       tags: [Admin]
-      summary: Reverse a claim, vote, or contribution (refunds donor)
+      summary: Reverse a claim, vote, or contribution
+      description: >-
+        Pooled donor/auto rows give category-bound Pool credit; moderator rows return
+        computed Unused pool money. No Wallet adjustment is written for pooled rows.
+        Legacy/unlinked rows credit their recorded amount as REFUND. Claims use their
+        recorded price and restore stock. FULFILLED claims must first be marked PENDING.
+        Every row linked to CHARGEBACK is blocked. REQUESTED Payment refunds block conflicts.
+        Goal completion is recomputed from remaining allocated cents against its target.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2055,7 +2151,8 @@ paths:
   /admin/polls/options/{id}/refund:
     post:
       tags: [Admin]
-      summary: Refund all unreversed votes for a poll option
+      summary: Reverse all live votes for a poll option
+      description: Pooled donor/auto funding becomes poll Pool credit; moderator funding becomes Unused pool money. Legacy/unlinked rows receive Wallet REFUND; old CHARGEBACK rows receive zero. REQUESTED Payment refunds block conflicts.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2064,7 +2161,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Votes refunded and audit adjustments recorded
+          description: Votes reversed; category credit or legacy Wallet adjustments recorded
           content:
             application/json:
               schema:
@@ -2301,6 +2398,7 @@ paths:
                     enum:
                       [
                         donation.created,
+                        donation.updated,
                         donation.moderated,
                         donation.hidden,
                         donation.unhidden,
@@ -2379,6 +2477,7 @@ paths:
                     enum:
                       [
                         donation.created,
+                        donation.updated,
                         donation.moderated,
                         donation.hidden,
                         donation.unhidden,
@@ -2601,7 +2700,8 @@ paths:
   /admin/goals/{id}/refund:
     post:
       tags: [Admin]
-      summary: Refund all unreversed contributions to a fund goal
+      summary: Reverse all live contributions to a fund goal
+      description: Pooled donor/auto funding becomes goal Pool credit; moderator funding becomes Unused pool money. Legacy/unlinked rows receive Wallet REFUND; old CHARGEBACK rows receive zero. Goal completion is recomputed against its target. REQUESTED Payment refunds block conflicts.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -3940,6 +4040,7 @@ components:
             enum:
               [
                 donation.created,
+                donation.updated,
                 donation.moderated,
                 donation.hidden,
                 donation.unhidden,

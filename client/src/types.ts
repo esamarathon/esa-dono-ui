@@ -455,6 +455,7 @@ export interface AdminDonorWallet {
 
 export type WebhookMessageType =
   | 'donation.created'
+  | 'donation.updated'
   | 'donation.moderated'
   | 'donation.hidden'
   | 'donation.unhidden'

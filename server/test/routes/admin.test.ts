@@ -114,6 +114,9 @@ vi.mock('../../services/reversal.js', () => ({
   reverseSpendTx: vi.fn(),
   setDonationStatusTx: vi.fn(),
   sweepWalletCreditsTx: vi.fn(),
+  previewDonationReversalTx: vi.fn(),
+  setClaimStatusTx: vi.fn(),
+  acknowledgeChargebackClaimTx: vi.fn(),
 }));
 
 // Loose alias for configuring the mocked Prisma client with partial fixtures.
@@ -283,9 +286,9 @@ describe('Admin donor management', () => {
   });
 
   it('POST /donors/:id/adjust-balance preserves the response shape', async () => {
+    px.donor.findUnique.mockResolvedValue({ email: 'a@b.com' });
     vi.mocked(reversal.adjustWalletCreditTx).mockResolvedValue({
       success: true,
-      email: 'a@b.com',
       balance_before: 500,
       balance_after: 1500,
       adjustment: 1000,
