@@ -23,15 +23,15 @@ Paths below are relative to `/api`.
 
 ## Test and staging tooling (parent folder)
 
-| Caller                      | How it runs                                                    | Endpoints                                                                                                                                                                                                                                                                                                                     |
-| --------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `staging/reconcile.py`      | **systemd timer on staging** (`esa-consumers-reconcile.timer`) | `GET /channels`, `GET /admin/events`, `GET`/`POST`/`PUT /admin/destinations`, `/tiltify/…`                                                                                                                                                                                                                                    |
-| `scripts/e2e-incentives.ts` | `scripts/test-incentives.sh`                                   | `POST /pledge`, `GET /pledge/:token`, `POST /webhooks/stripe`, public poll/goal/reward spend routes, `POST /admin/{polls,goals,rewards,simulate-donation}`, `GET /admin/donations`, `GET /admin/claims`, `GET /moderator/polls/:id/custom-entries`, `PATCH /moderator/polls/custom-entries/:id`, `GET /tiltify/campaigns/:id` |
-| `scripts/e2e-overlay.ts`    | `scripts/e2e-common.sh`                                        | `GET`/`POST`/`PUT /admin/events`, `GET`/`POST`/`PUT /admin/channels`, `/admin/destinations` (incl. `/:id/deliveries`), `POST /admin/simulate-donation`, `GET /tiltify/campaigns/:id`                                                                                                                                          |
-| `scripts/test-e2e.sh`       | manual / E2E                                                   | `GET /health`, `GET /admin/stats` (status code only)                                                                                                                                                                                                                                                                          |
-| `scripts/start-e2e.sh`      | E2E startup                                                    | `GET /health`                                                                                                                                                                                                                                                                                                                 |
-| `staging/smoke-test.py`     | manual                                                         | `/admin/destinations`, `POST /admin/simulate-donation`, `GET /channels`, `GET /tiltify/campaigns/:id`                                                                                                                                                                                                                         |
-| `staging/incentive-test.py` | manual                                                         | `POST /admin/simulate-donation`. It also imports `services/pledge.ts` `createPledge` directly and reads `pledge.total_cents`.                                                                                                                                                                                                 |
+| Caller                      | How it runs                                                    | Endpoints                                                                                                                                                                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `staging/reconcile.py`      | **systemd timer on staging** (`esa-consumers-reconcile.timer`) | `GET /channels`, `GET /admin/events`, `GET`/`POST`/`PUT /admin/destinations`, `/tiltify/…`                                                                                                                                                                                                           |
+| `scripts/e2e-incentives.ts` | `scripts/test-incentives.sh`                                   | `POST /pledge`, `GET /pledge/:token`, public poll/goal/reward spend routes, `POST /admin/{polls,goals,rewards,simulate-donation}`, `GET /admin/donations`, `GET /admin/claims`, `GET /moderator/polls/:id/custom-entries`, `PATCH /moderator/polls/custom-entries/:id`, `GET /tiltify/campaigns/:id` |
+| `scripts/e2e-overlay.ts`    | `scripts/e2e-common.sh`                                        | `GET`/`POST`/`PUT /admin/events`, `GET`/`POST`/`PUT /admin/channels`, `/admin/destinations` (incl. `/:id/deliveries`), `POST /admin/simulate-donation`, `GET /tiltify/campaigns/:id`                                                                                                                 |
+| `scripts/test-e2e.sh`       | manual / E2E                                                   | `GET /health`, `GET /admin/stats` (status code only)                                                                                                                                                                                                                                                 |
+| `scripts/start-e2e.sh`      | E2E startup                                                    | `GET /health`                                                                                                                                                                                                                                                                                        |
+| `staging/smoke-test.py`     | manual                                                         | `/admin/destinations`, `POST /admin/simulate-donation`, `GET /channels`, `GET /tiltify/campaigns/:id`                                                                                                                                                                                                |
+| `staging/incentive-test.py` | manual                                                         | `POST /admin/simulate-donation`. It also imports `services/pledge.ts` `createPledge` and the shared planner directly; after applying the tracked #194 patch it uses explicit D/draft/plan and `pledge.new_money_cents`.                                                                              |
 
 ## Amount-first pledge contract (#185)
 
@@ -58,11 +58,16 @@ run/donor/sequence draft id, and verifies `/pledge/:token` fulfillment. It does 
 complete Stripe or release held funding. Tiltify retains its existing shape; pooled
 donor/auto rows are combined per option/goal and allocations remain distinct from money.
 
-**Coordinated follow-up (#194), not changed by #185:** `scripts/e2e-incentives.ts` reads
-and asserts `total_cents`; `staging/incentive-test.py` calls `createPledge` directly and
-posts that old total as money. Both must adopt the shared planner/new-money contract
-before the single pooled release. Do not run those old callers against this intermediate
-branch. The donate client (#187) and the remaining pooled-release slices are also required.
+**Coordinated rollout (#194):** apply the tracked `scripts/parent-pledge-callers.patch`
+from the ESA parent root as described in `docs/deployment.md`. The parent is not a Git
+repository; the patch is the version-controlled delivery artifact. Until applied, those
+external files still use the obsolete contract and must not run against this release.
+The public caller confirms a real corrected-409 plan and independently tests D1500:
+reward1500, polls500+1000, goals643+857 (money1500, not category sum4500). The direct
+staging caller uses the shared planner. Both settle through admin simulated intake,
+preserving optional pledge token and external id; neither claims Stripe Checkout or
+exact-Session coverage. Physical direct-Wallet claims must reject without side effects.
+The matrix requires a dedicated fresh sandbox; the staging probe has no live defaults.
 
 ## Checkout reconciliation contract (#186)
 
@@ -108,8 +113,8 @@ Stripe adapters/synthetic tests must provide `status='complete'` and `payment_st
 to record payment; `completed` alone is insufficient. Pooled Stripe intake also requires
 the exact persisted Checkout Session id. Supplying an unknown pledge token never falls
 back to email; no-token historical matching remains legacy-only. Existing auction
-completed/expired handling and Tiltify wire shapes are unchanged. Sibling caller updates
-remain #194, not part of this slice.
+completed/expired handling and Tiltify wire shapes are unchanged. The tracked #194 caller
+patch avoids fake Stripe Session injection; it does not weaken this boundary.
 
 Legacy async-failure handoff: `reconcileCheckoutNotification` returns
 `{legacy_async_failure: {donation_id, checkout_session_id, pledge_token}}` internally for an existing

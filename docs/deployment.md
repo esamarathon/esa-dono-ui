@@ -182,7 +182,8 @@ curl -sI https://donations.example.com/api/campaign | grep -i x-ratelimit-remain
 Each network should count down from `RATE_LIMIT_API` (default 600) on its own.
 If a second network continues the first one's count, `TRUST_PROXY` is too low.
 
-Full end-to-end validation (tears the stack down on exit):
+Disposable local end-to-end validation only (writes donations and tears the stack down
+on exit). **Never run this against a deployment or its volumes:**
 
 ```bash
 ADMIN_API_KEY=… FRONTEND_PORT=18080 ./scripts/smoke-test.sh
@@ -302,7 +303,8 @@ docker compose cp dono-backend:/data/dono.db ./dono-backup.db
 docker compose start dono-backend
 ```
 
-Restore: stop the backend, copy the file back into the volume, restart.
+Restore requires the [no-new-writes guard](#rollback-without-erasing-writes) below.
+A timestamp or a zero creation count alone is not permission to restore.
 
 ### Seeding data (development / staging)
 
@@ -363,8 +365,296 @@ docker compose pull && docker compose up -d
 docker tag ghcr.io/esamarathon/esa-dono-ui/backend:<sha> ghcr.io/esamarathon/esa-dono-ui/backend:latest
 ```
 
-DB migrations are append-only; rolling back an image with a schema change may
-require a manual DB restore from backup.
+DB migrations are append-only. A previous image must not open an incompatible new
+schema. Follow the guard below before considering a backup restore; otherwise fix forward.
+
+### Amount-first transition: one release between Events
+
+This is an operator procedure, **not authorization to deploy**. Rehearse on a disposable
+copy first. Ship the complete pooled release, not individual slices. The unresolved cold
+cross-Channel Kollekt hydration acceptance is a release HOLD: do not prewarm caches,
+widen producer lists, reassign donations or drop assertions to make it pass.
+
+Tools: `server/scripts/transition-cli.ts --help` (run with `node --import tsx` from
+the release root). They never load `.env` or default to `DATABASE_URL`. Every operation
+requires an existing absolute `file:` URL and a **new** absolute report path (0600;
+never overwrite evidence). `--apply` is opt-in. Keep reports in a private operator directory.
+For container execution use `/app/node_modules/.bin/tsx`; do not use npm/npx in the
+runtime image. Run tools in a one-off container with its entrypoint overridden, only the
+explicit DB/report mounts, and no backend process, rather than inheriting live startup.
+
+1. With separate human deployment authorization, inspect the Stripe webhook endpoint's
+   **actual API version** and the installed Stripe SDK (`npm ls stripe` in the build
+   checkout; the tested SDK was 22.5.0, default API `2026-07-29.dahlia`). Review versioned
+   Checkout/Refund notification shapes. In the dashboard subscribe to
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed`, `checkout.session.expired`, and `refund.*`
+   (including created, updated, failed). Preserve auction subscriptions. Do not change
+   dashboard versions/subscriptions or use real keys during rehearsal.
+2. Confirm **no Event is active**. Deactivate the Event first, then every Channel
+   (`PUT /api/admin/events/:id`, `PUT /api/admin/channels/:id`, `is_active:false`). Do
+   not End an Event as a substitute: End changes credit eligibility. Check both lists.
+   Inactive Channels stop new pledges (404), but are NOT a complete write freeze.
+3. Establish an external write freeze: block all public/staff mutations, pause external
+   callers/simulators, worker/consumer administrative writes and schedulers; restrict
+   database access. During the drain retain the old backend's signed Stripe receipt path
+   so already paid money is recorded. Inventory unresolved/processing Sessions; their
+   receipts may arrive after cutover. Never treat a local deadline as non-payment.
+4. From the new tooling checkout, against the explicit **old-schema** DB, run the drain.
+   It reads only old OPEN pledges, expires only provider-open/unpaid Sessions on apply,
+   then retrieves again even after an expire error. It never marks local pledges terminal,
+   releases funding, records payment or guesses missing/unbound Sessions. `PAID`,
+   `COMPLETE_UNPAID`, `STILL_OPEN`, `UNKNOWN` require review; complete/unpaid can settle
+   later. Missing Sessions/lost creates stay unknown. Review every page and rerun from
+   the start to verify the final provider state before stopping the old backend.
+
+   ```bash
+   # Set DB, REPORTS and CUTOVER explicitly to the rehearsal paths / chosen UTC instant.
+   # KEY_FILE is an explicit private Stripe key file; never an environment fallback.
+   node --import tsx server/scripts/transition-cli.ts drain --database-url "$DB" \
+     --before "$CUTOVER" --limit 100 --stripe-key-file "$KEY_FILE" --report "$REPORTS/drain-dry.json"
+   # Only after reviewing dry run; use --after <next_after> for each further page.
+   node --import tsx server/scripts/transition-cli.ts drain --database-url "$DB" \
+     --before "$CUTOVER" --limit 100 --stripe-key-file "$KEY_FILE" --apply --report "$REPORTS/drain-applied.json"
+   ```
+
+   In rehearsal replace `--stripe-key-file` with `--stripe-fixture /absolute/sessions.json`.
+   Fixture format: an object keyed by Session id, each value containing `id`, `status`,
+   `payment_status`, `amount_total`, `total_details:{amount_shipping}`. No network is used.
+
+5. Stop the backend and all remaining writers (including outbox dispatch), complete the
+   freeze, then take a consistent SQLite backup. This stop requires human authorization.
+   Record UTC `BACKUP_AT`, release/image hashes, schema migrations, freeze owner and all
+   outstanding provider facts. Use host `sqlite3` or a separate approved SQLite utility;
+   it is **not installed in the runtime image**. With the backend stopped, an example on
+   the explicitly mounted DB is:
+
+   ```bash
+   BACKUP_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   sqlite3 "$DB_FILE" ".backup '$BACKUP_FILE'"
+   sqlite3 -readonly "$BACKUP_FILE" 'PRAGMA integrity_check;'
+   node --import tsx server/scripts/transition-cli.ts report --database-url "$BACKUP_DB" \
+     --report "$REPORTS/pre-migration.json"
+   ```
+
+   Keep the backup immutable and private. Do not copy a running WAL database's main file
+   alone. Preserve uploads/config separately. A queued Stripe retry after cutover is a
+   **new write** and ends restore eligibility.
+
+6. Deploy **one pinned release** and apply its append-only migrations/backfills once.
+   The normal entrypoint runs `prisma migrate deploy`; do not seed/reset or run dev
+   migrations. Under the freeze, use the entrypoint's migration command with the backend
+   still stopped if a rollback checkpoint is required. Rehearse all migrations against a
+   populated backup. #184 zeros historical `wallet-` amounts and expires old OPEN pledges;
+   terminal legacy records, Wallet balances and NULL pledge amounts remain historical.
+   #194 does not repeat the wallet amount migration.
+7. Before starting writers, capture a final-schema checkpoint with `checkpoint
+--database-url "$DB" --backup-at "$BACKUP_AT" --report "$REPORTS/checkpoint.json"`.
+   Review the migration-only delta from the backup (prefer a separately migrated backup
+   as the expected state). Migration timestamps, including old OPEN expiry dates and
+   `_prisma_migrations.finished_at`, can be after the backup; they need explicit review,
+   not silent exclusion. If any application write occurred before this checkpoint, or
+   you cannot prove the freeze, **FIX FORWARD**. Then start the new backend with external
+   writes still blocked and perform only read-only health/report checks. Starting outbox
+   dispatch can update deliveries, so it can itself end restore eligibility.
+8. Run `GET /api/health`, `server/scripts/pooled-migration-report.ts --database-url "$DB"`,
+   and `transition-cli.ts report --database-url "$DB" --report "$REPORTS/post-migration.json"`.
+   Reconcile: **old counted money − counted old wallet amounts = post-migration counted
+   money**; after shipping, subtract only successfully corrected counted shipping.
+   Counted means COMPLETED + REFUNDED, never incentive allocations. Compare each Donor's
+   `total_donated` with counted money; existing mismatches are evidence for manual review,
+   not permission to overwrite balances/totals. #184 does not rewrite historical donor
+   totals. Preserve/referral-report legacy REFUNDED/CHARGEBACK rows and their prior
+   adjustments; never automatically repair them. No donation-writing smoke/seed/reset
+   command is permitted against a deployment.
+9. **Overlay binding check before any replay:** verify Event/Channel ids AND slugs,
+   Destination exchange/routing keys and each overlay/reader binding, with the operator
+   off air or explicitly accepting replay. Check consumers' active image/source revisions.
+   Shipping dry-run/apply is separate from publication:
+
+   ```bash
+   node --import tsx server/scripts/transition-cli.ts shipping --database-url "$DB" \
+     --before "$CUTOVER" --limit 100 --stripe-key-file "$KEY_FILE" --report "$REPORTS/shipping-dry.json"
+   node --import tsx server/scripts/transition-cli.ts shipping --database-url "$DB" \
+     --before "$CUTOVER" --limit 100 --stripe-key-file "$KEY_FILE" --apply --report "$REPORTS/shipping-applied.json"
+   node --import tsx server/scripts/transition-cli.ts publish --database-url "$DB" \
+     --corrections "$REPORTS/shipping-applied.json" --wallet-baseline "$REPORTS/pre-migration.json" \
+     --report "$REPORTS/publication-dry.json"
+   node --import tsx server/scripts/transition-cli.ts publish --database-url "$DB" \
+     --corrections "$REPORTS/shipping-applied.json" --wallet-baseline "$REPORTS/pre-migration.json" \
+     --apply --overlay-binding-ack --report "$REPORTS/publication-applied.json"
+   ```
+
+   Paginate shipping to exhaustion; pass each applied report with repeatable
+   `--corrections`. A publication accepts at most 1000 input corrections; if more are
+   needed stop for a reviewed publication plan (separate batches repeat scoped totals).
+   Shipping requires the exact complete/paid Session, gross matching the old amount and
+   an integer nonnegative shipping amount. Already-recorded shipping (even zero) is never
+   subtracted again. Unknown, mismatched, pooled-with-missing-shipping and terminal legacy
+   records are reported, not guessed. PENDING corrections do not lower counted money or
+   donor totals. Wallet credit/stock/allocations are untouched. Recheck financial reports.
+   Only positive amount corrections are eligible for forced publication. Stale manifests
+   fail atomically. Publication uses the existing publisher/outbox, one message per corrected
+   donation and totals once per source Channel/Event per invocation. Native update opt-in
+   is unchanged. It queues only; normal backend dispatch sends later. Record the publication
+   receipt; **do not rerun applied publication** casually (it intentionally replays alerts).
+
+10. Opt only capable NATIVE Destinations into `donation.updated` through the existing
+    Destination editor/API, preserving their other `event_types`. TILTIFY format stays
+    unchanged. Decide update opt-in before publication if native correction delivery is
+    required; enabling it afterward does not replay missed updates automatically.
+11. At next go-live, populate each Channel's ordered `default_goals` list (own/shared goals),
+    inspect live fallback and own/shared scope, activate the primary Channel then other
+    intended Channels, then activate the Event. Ended Events require explicit reviewed
+    Undo End first. Remove the external freeze only after all financial, binding, caller
+    and consumer acceptance gates pass.
+
+### Parent callers and isolated rehearsal
+
+The ESA parent `scripts/` and `staging/` are **not Git repositories**. The necessary
+caller changes are versioned here as `scripts/parent-pledge-callers.patch`, not untracked
+edits to parent files. The patch changes only the two callers and the matrix safety wrapper.
+After integration, apply it from the ESA root (never the dono root):
+
+```bash
+# ESA_ROOT must be the explicit parent directory; PATCH the absolute tracked patch path.
+cd "$ESA_ROOT"
+git apply --check "$PATCH"
+git apply "$PATCH"
+git apply --reverse --check "$PATCH"
+```
+
+Git apply was verified in a standalone directory without `.git`; GNU patch is not needed.
+If `--check` fails, stop and manually reconcile unrelated parent edits; do not force it.
+`python3 scripts/check-parent-pledge-callers.py --parent-root "$ESA_ROOT"` from the dono
+checkout tests application on private copies, syntax and independent pooled literals.
+The public caller obtains a real 409 corrected review then confirms it, uses explicit D
+and the admin **simulated settled-intake** boundary with token/new money/external id.
+It does **not** fabricate unbound Stripe success or relax production exact-Session checks.
+The direct staging caller uses the shared planner and a stable draft. Direct PHYSICAL
+Wallet claims must return 400 with no debit/claim/stock change; cash-backed physical
+pledges still fulfill. Nonphysical direct Wallet spends are not new donations.
+
+Rehearse a fresh dedicated `esa-e2e-*` Compose project: `--env-file /dev/null`, unique
+localhost ports, fresh volumes/overlay, synthetic credentials and no Stripe/SMTP/OAuth.
+Resolve configuration into a private virtual root: point dono build contexts at the
+integration worktree, siblings at their current source, and assign unique local image
+tags. Parent Compose defaults otherwise build the main checkout, not this worktree.
+Do not change shared build/CI configuration or sibling source. Run the patched
+`scripts/test-incentives.sh` and the patched staging probe only with explicit owned
+`--engine`, `--sandbox-project`, `--backend`, `--overlay`, `--channel-slug` inputs.
+The staging probe refuses defaults and mismatched project labels before reading a key.
+No live-looking default containers, reused overlays, schedules or deployment APIs are
+allowed. Tear down only that project/volumes and its private engine socket/helpers.
+Report producer/overlay gates, baseline Kollekt target-value limitations and the cold
+cross-Channel HOLD separately; a partial matrix is **not full E2E success**.
+
+### Rollback without erasing writes
+
+Restore **both** the original backup and previous pinned image only when no application
+or delivery write occurred after the backup. Never mount the final-schema DB into the
+old image. The external freeze must cover staff, late Stripe receipts, workers and direct
+SQLite access, not merely inactive Channels. Without proof, fix forward/manual review.
+
+A concrete final-schema diagnostic (SQLite dates can be integer milliseconds or text):
+
+```sql
+-- Bind :backup_ms to the recorded UTC backup instant in milliseconds.
+WITH dates(scope, id, at) AS (
+ SELECT 'Donation', id, created_at FROM Donation
+ UNION ALL SELECT 'Donation', id, moderated_at FROM Donation
+ UNION ALL SELECT 'Donation', id, shipping_recorded_at FROM Donation
+ UNION ALL SELECT 'Donor', id, updated_at FROM Donor
+ UNION ALL SELECT 'PendingPledge', id, updated_at FROM PendingPledge
+ UNION ALL SELECT 'RewardClaim', id, updated_at FROM RewardClaim
+ UNION ALL SELECT 'PollVote', id, created_at FROM PollVote
+ UNION ALL SELECT 'PollVote', id, reversed_at FROM PollVote
+ UNION ALL SELECT 'PollVote', id, allocated_at FROM PollVote
+ UNION ALL SELECT 'FundContribution', id, created_at FROM FundContribution
+ UNION ALL SELECT 'FundContribution', id, reversed_at FROM FundContribution
+ UNION ALL SELECT 'FundContribution', id, allocated_at FROM FundContribution
+ UNION ALL SELECT 'BalanceAdjustment', id, created_at FROM BalanceAdjustment
+ UNION ALL SELECT 'PaymentRefund', id, updated_at FROM PaymentRefund
+ UNION ALL SELECT 'PoolCredit', id, created_at FROM PoolCredit
+ UNION ALL SELECT 'PoolCredit', id, cleared_at FROM PoolCredit
+ UNION ALL SELECT 'PoolCreditBatch', id, created_at FROM PoolCreditBatch
+ UNION ALL SELECT 'PoolCreditRedemption', id, created_at FROM PoolCreditRedemption
+ UNION ALL SELECT 'EventEndAudit', id, created_at FROM EventEndAudit
+ UNION ALL SELECT 'WebhookDelivery', id, updated_at FROM WebhookDelivery
+), normalized AS (
+ SELECT scope, id, at, CASE WHEN typeof(at) IN ('integer','real')
+   THEN at ELSE unixepoch(at)*1000 END AS ms FROM dates
+)
+SELECT scope, count(DISTINCT CASE WHEN ms>:backup_ms THEN id END) AS dated_rows,
+ count(DISTINCT CASE WHEN at IS NOT NULL AND ms IS NULL THEN id END) AS unknown_dates
+ FROM normalized GROUP BY scope ORDER BY scope;
+```
+
+These counts are **diagnostics, never a no-write proof**: Donation has no `updated_at`,
+PollOption/ChannelDefaultGoal have no timestamps, reductions can update old redemptions,
+and deletes leave no timestamp at all. Migration-induced dates also appear. The checkpoint
+hashes **every table's schema and full rows**, including timestamp-less joins, all ledgers,
+auction/config/auth data and migration history, without exposing their secrets. Run while
+all writers are stopped, on a stable snapshot:
+
+```bash
+node --import tsx server/scripts/transition-cli.ts rollback --database-url "$DB" \
+  --checkpoint "$REPORTS/checkpoint.json" --report "$REPORTS/rollback-diagnostic.json"
+# Add BOTH acknowledgements only with documented proof, not to bypass a failure:
+node --import tsx server/scripts/transition-cli.ts rollback --database-url "$DB" \
+  --checkpoint "$REPORTS/checkpoint.json" --freeze-ack --migration-review-ack \
+  --report "$REPORTS/rollback-reviewed.json"
+```
+
+`SAFE_TO_RESTORE` requires an identical checkpoint **and** the operator's continuous-freeze
+and migration-only-review attestations from backup through checkpoint/check. A checkpoint
+created after unknown writes cannot establish safety. Any changed/deleted row, missing
+checkpoint, unexplained migration delta or interrupted freeze means **FIX_FORWARD**.
+The tool never restores, erases data, repairs history or grants deployment permission.
+
+### Payment refund, Wallet refund and chargeback recovery
+
+- **Wallet refund** keeps cash at the charity (`REFUNDED` still counts). Preview with
+  `GET /api/admin/donations/:id/reversal-preview?status=REFUNDED`, then the existing status
+  PATCH only after review. **Payment refund** returns original-payment-method cash for
+  an eligible pending physical claim before Event end. Use
+  `GET /api/admin/claims/:id/payment-refund-preview` and
+  `POST /api/admin/claims/:id/payment-refund`; server eligibility and Pool shrink preview
+  are authoritative. Never run SQL to mimic either action.
+- `REQUESTED` holds the claim CANCELLING and locks conflicting changes. Lost responses
+  are uncertain, not failed. Use `POST /api/admin/payment-refunds/:id/retry`; it discovers
+  Stripe's original refund by durable metadata/key, without creating a fresh refund key.
+  Check the exact payment, receipt and dashboard before escalation.
+- **Acceptance is not settlement.** On accepted pending/requires_action/succeeded the
+  application lowers item money, D, donor total and Pools once and returns stock. Shipping
+  is separately refunded only with the last physical claim. A `REQUIRES_ACTION` total can
+  therefore be lower than settled bank cash. Do not manually add it back while awaiting
+  action/settlement. Reconcile/retry and inspect the provider's required action.
+- Definite rejection before acceptance resolves REJECTED, restores PENDING and changes
+  no money. Accepted **failed/canceled later** stays FAILED with prior accounting intact.
+  Resolve item once using `POST /api/admin/payment-refunds/:id/resolve-item` and one of
+  `RETURNED_OUTSIDE_APP`, `WALLET_CREDIT`, `SETTLED_BY_DISPUTE`. Wallet credit restores ITEM
+  money/D/donor total and available Wallet, not shrunken allocations; the Pool gap remains
+  unavailable. It is allowed only for COMPLETED/REFUNDED, never CHARGEBACK. Dispute resolution
+  requires CHARGEBACK. Record external return evidence; do not mark settled merely to clear
+  the queue. Identical repeats are idempotent; different choices conflict.
+- Failed shipping is independent, remains discoverable even after item resolution, and
+  **never becomes Wallet or donation money**. Use
+  `POST /api/admin/payment-refunds/:id/resolve-shipping` with `RETURNED_OUTSIDE_APP` or
+  `KEPT_BY_AGREEMENT`. Use the default open `GET /api/admin/payment-refunds` list to find
+  outstanding item AND shipping decisions. Never apply an item resolution to shipping.
+- For a later dispute, compare the **full original charge**, accepted/refunded item and
+  shipping, current `amount_cents`, and provider dispute amount. Preview CHARGEBACK via
+  the reversal-preview endpoint before recording it. The app removes only **remaining
+  counted donation money**, once; it does not subtract a previously accepted Payment
+  refund again. A full-charge dispute may exceed that remaining money (or include shipping).
+  Handle that external excess with Stripe/accounting support, not negative donations or
+  repeated reversals. Late refund failure after chargeback permits outside return/dispute
+  resolution, never Wallet credit; acknowledge flagged shipped claims after investigation.
+- Stripe processing fees retained on refunds and dispute fees are expenses outside donation,
+  shipping, incentive and counted-money totals. Reconcile fees in the charity's external
+  books, not by reducing donation amounts. Endpoint API-version checks, subscription changes,
+  dashboard actions and real payment/refund exercises require separate human authorization.
 
 ---
 
