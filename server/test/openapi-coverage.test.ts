@@ -52,6 +52,46 @@ function normalizeExpressPath(p: string): string {
 }
 
 describe('OpenAPI route coverage', () => {
+  it('documents the allocation-history conflict on every hard-remove route', async () => {
+    const { default: yaml } = await import('js-yaml');
+    const spec = yaml.load(readFileSync(resolve(__dirname, '..', 'openapi.yaml'), 'utf8'));
+    expect(spec).toMatchObject({
+      paths: Object.fromEntries(
+        [
+          '/admin/rewards/{id}',
+          '/admin/polls/{id}',
+          '/moderator/rewards/{id}',
+          '/moderator/polls/{id}',
+          '/moderator/polls/options/{id}',
+          '/moderator/goals/{id}',
+        ].map((path) => [
+          path,
+          {
+            delete: {
+              responses: { '409': { $ref: '#/components/responses/AllocationHistoryConflict' } },
+            },
+          },
+        ]),
+      ),
+      components: {
+        responses: {
+          AllocationHistoryConflict: {
+            content: {
+              'application/json': {
+                schema: {
+                  required: ['error'],
+                  properties: {
+                    error: { enum: ['This has allocation history. Deactivate it instead.'] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('every Express route has a corresponding OpenAPI path', async () => {
     const { default: yaml } = await import('js-yaml');
     const specPath = resolve(__dirname, '..', 'openapi.yaml');
