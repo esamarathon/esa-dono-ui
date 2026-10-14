@@ -3741,6 +3741,176 @@ paths:
         '200':
           description: Offer email resent
 
+  /moderator/unused-pool-money:
+    get:
+      tags: [Moderator]
+      summary: List computed Unused pool money and live moderator assignments
+      description: COMPLETED pooled donations only; no donor email. Unassigned donations require admin routing before assignment. No stored unused balances or end-conversion transfers.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: comments_only, in: query, schema: { type: boolean, default: true } }
+        - { name: show_ended, in: query, schema: { type: boolean, default: false } }
+        - { name: channel_id, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Safe donation list, including zero-unused donations with live assignments for undo
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/UnusedDonation' } }
+  /moderator/donations/{id}/unused-pool-money/targets:
+    get:
+      tags: [Moderator]
+      summary: Eligible own-Channel or shared targets with server-computed impact
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - {
+            name: category,
+            in: query,
+            required: true,
+            schema: { type: string, enum: [poll, goal] },
+          }
+      responses:
+        '200':
+          description: All category unused cents and eligible targets; positive cents, overshoot and no age limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnusedPicker' }
+        '400': { description: Invalid category }
+        '404': { description: Donation not found }
+        '409': { description: Legacy, terminal, unassigned or REQUESTED Payment refund source }
+  /moderator/donations/{id}/unused-pool-money:
+    post:
+      tags: [Moderator]
+      summary: Atomically assign all of one unused category and publish the donation
+      description: Requires an ACTIVE option of an open poll or an active incomplete goal. Event end does not prohibit assignment. Records source moderator and allocated_at; allocated_by is the session email or moderator fallback. No Wallet or Pool credit grant.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, target_id, expected_amount_cents]
+              properties:
+                category: { type: string, enum: [poll, goal] }
+                target_id: { type: string }
+                expected_amount_cents: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Created allocation row (never donor email)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  donation_id: { type: string }
+                  amount_cents: { type: integer }
+                  source: { type: string, enum: [moderator] }
+                  allocated_by: { type: string }
+                  allocated_at: { type: string, format: date-time }
+        '400': { description: Invalid category, target id or expected positive integer cents }
+        '404': { description: Donation not found }
+        '409':
+          {
+            description: Stale unused amount,
+            ineligible target,
+            unassigned or non-live source,
+            or REQUESTED Payment refund,
+          }
+  /moderator/unused-pool-money/{category}/{id}/undo:
+    post:
+      tags: [Moderator]
+      summary: Reverse a moderator assignment while its target is open
+      description: Returns funding to computed Unused pool money, never Wallet or Pool credit. Publishes changed donation state atomically through the common reversal boundary.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: category, in: path, required: true, schema: { type: string, enum: [poll, goal] } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Assignment reversed }
+        '400': { description: Invalid category or already reversed }
+        '404': { description: Moderator assignment not found }
+        '409': { description: Target closed, chargeback or REQUESTED Payment refund }
+  /admin/events/{id}/end-preview:
+    get:
+      tags: [Admin]
+      summary: Preview explicit Event end, not deactivation
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Conversion, reward expiry, closing physical-refund window and open pledges, with blockers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventEndPreview' }
+        '404': { description: Event not found }
+  /admin/events/{id}/undo-end-preview:
+    get:
+      tags: [Admin]
+      summary: Preview restored Pool credit and any consuming post-end assignments
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Restore preview; live post-end assignments block only when restoring raw credit would exceed their donation category budget
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventEndPreview' }
+        '404': { description: Event not found }
+  /admin/events/{id}/end:
+    post:
+      tags: [Admin]
+      summary: Explicitly end an inactive Event with slug confirmation
+      description: No REQUESTED Payment refund may exist. Sets ended_at/by and appends EventEndAudit; credit conversion/expiry is derived, never transferred. Ended Events cannot reactivate.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [slug], properties: { slug: { type: string } } }
+      responses:
+        '200':
+          description: Ended Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400': { description: Slug confirmation does not match }
+        '404': { description: Event not found }
+        '409': { description: Event active, already ended or REQUESTED Payment refund }
+  /admin/events/{id}/undo-end:
+    post:
+      tags: [Admin]
+      summary: Undo Event end without a time limit
+      description: Clears ended_at/by, leaves the Event inactive, restores derived credit and the Payment refund window, records end_undone_at/by and appends EventEndAudit. Reverse live post-end assignments consuming converted credit first; assignments funded entirely by original Unused do not block.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }, { AdminKey: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [slug], properties: { slug: { type: string } } }
+      responses:
+        '200':
+          description: Inactive Event with restored credit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400': { description: Slug confirmation does not match }
+        '404': { description: Event not found }
+        '409':
+          {
+            description: Event not ended or converted credit consumed by live post-end moderator assignments,
+          }
+
 components:
   responses:
     PledgeState:
@@ -4022,9 +4192,85 @@ components:
               id: { type: string, format: uuid }
               name: { type: string }
               amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+    UnusedDonation:
+      type: object
+      description: Safe projection; no donor email, private claim data or Pool credit.
+      properties:
+        id: { type: string }
+        donor_name: { type: string, nullable: true }
+        comment: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        channel_id: { type: string, nullable: true }
+        event:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+            ended_at: { type: string, format: date-time, nullable: true }
+        unused_cents:
+          type: object
+          properties:
+            poll: { type: integer }
+            goal: { type: integer }
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              category: { type: string, enum: [poll, goal] }
+              label: { type: string }
+              amount_cents: { type: integer }
+              allocated_at: { type: string, format: date-time, nullable: true }
+              can_undo: { type: boolean }
+    UnusedPicker:
+      type: object
+      properties:
+        amount_cents: { type: integer }
+        targets:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+              channel_id: { type: string, nullable: true }
+              before_cents: { type: integer }
+              after_cents: { type: integer }
+              target_cents: { type: integer, nullable: true }
+    EventEndPreview:
+      type: object
+      properties:
+        event_id: { type: string }
+        slug: { type: string }
+        action: { type: string, enum: [END, UNDO_END] }
+        can_apply: { type: boolean }
+        blockers: { type: array, items: { type: string } }
+        pool_credit_cents:
+          type: object
+          properties:
+            reward: { type: integer }
+            poll: { type: integer }
+            goal: { type: integer }
+        unshipped_physical_donations:
+          {
+            type: integer,
+            description: 'Distinct COMPLETED pooled donations with PENDING or CANCELLING physical claims; confirmed type takes precedence over live catalog type. Credit-funded claims have no physical-refund window.',
+          }
+        open_pledges: { type: integer }
+        requested_payment_refunds: { type: integer }
+        consuming_assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              donation_id: { type: string }
+              category: { type: string, enum: [poll, goal] }
+              assignment_ids: { type: array, items: { type: string } }
     Event:
       type: object
-      description: A charity event (a marathon, or a one-day stream event) that owns Channels.
+      description: A charity event (a marathon, or a one-day stream event) that owns Channels. Deactivation does not end it. Reactivation is blocked while ended_at is set.
       properties:
         id: { type: string }
         name: { type: string }
@@ -4032,6 +4278,10 @@ components:
           type: string
           description: Lowercase, URL- and AMQP-routing-safe name; unique across Events and Channels (PRD-0002 §S6)
         is_active: { type: boolean }
+        ended_at: { type: string, format: date-time, nullable: true }
+        ended_by: { type: string, nullable: true }
+        end_undone_at: { type: string, format: date-time, nullable: true }
+        end_undone_by: { type: string, nullable: true }
         primary_channel_id:
           {
             type: string,
