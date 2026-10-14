@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockTxDonor = { upsert: vi.fn() };
-const mockTxDonation = { create: vi.fn() };
+const mockTxDonation = { create: vi.fn(), findUnique: vi.fn().mockResolvedValue(null) };
 // No webhook destinations: the donation.created emit inside the transaction queues nothing.
 const mockTxWebhookDestination = { findMany: vi.fn().mockResolvedValue([]) };
 // Pledge resolution runs on the transaction client: no matching pledge by default.

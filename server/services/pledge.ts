@@ -7,7 +7,7 @@ import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } fro
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
 import { sendMagicLink } from './email.js';
-import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { withWebhooks } from './webhooks/outbox.js';
 import { resolveDonationRoute } from './routing.js';
 import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 
@@ -505,7 +505,7 @@ export async function createCheckoutForPledge(
         // donor's history like any other donation (#43). amount_cents is the
         // wallet spend that fulfilled the pledge (the full total).
         const walletExternalId = `wallet-${crypto.randomUUID()}`;
-        await withWebhooks(async (tx, emit, tiltify) => {
+        await withWebhooks(async (tx, _emit, publisher) => {
           // Same routing as every other donation: the pledge's Channel and its Event.
           const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
           const created = await tx.donation.create({
@@ -528,7 +528,7 @@ export async function createCheckoutForPledge(
               fulfilled_by_donation_id: created.id,
             },
           });
-          await publishRoutedDonation(emit, tiltify, created);
+          await publisher.publish(created.id, null);
         });
 
         sendMagicLink(donor.email, donor.magic_token!).catch((err) =>

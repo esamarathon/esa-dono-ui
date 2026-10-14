@@ -1,7 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { countsTowardTotals } from '../lib/donationTotals.js';
-import type { EmitTiltify } from './webhooks/outbox.js';
+import type { DonationPublisher } from './webhooks/donationPublisher.js';
 
 type Tx = Prisma.TransactionClient;
 export type AdjustmentType = 'REFUND' | 'FREEZE_ZERO' | 'MANUAL' | 'CHARGEBACK';
@@ -50,6 +49,7 @@ export async function moderateCustomEntryTx(
   entryId: string,
   status: 'APPROVED' | 'REJECTED',
   actor: string,
+  publisher: DonationPublisher,
 ) {
   const entry = await tx.pollCustomEntry.findUnique({ where: { id: entryId } });
   if (!entry) throw httpError(404, 'Entry not found');
@@ -65,6 +65,8 @@ export async function moderateCustomEntryTx(
     throw httpError(400, 'Only pending entries can be moderated');
   }
 
+  const before =
+    status === 'APPROVED' && vote.donation_id ? await publisher.snapshot(vote.donation_id) : null;
   if (status === 'APPROVED') {
     await tx.pollOption.update({
       where: { id: option.id },
@@ -90,7 +92,9 @@ export async function moderateCustomEntryTx(
     });
     await tx.pollOption.update({ where: { id: option.id }, data: { status: 'REJECTED' } });
   }
-  return tx.pollCustomEntry.update({ where: { id: entry.id }, data: { status } });
+  const updated = await tx.pollCustomEntry.update({ where: { id: entry.id }, data: { status } });
+  if (before && vote.donation_id) await publisher.publish(vote.donation_id, before);
+  return updated;
 }
 
 export async function sweepWalletCreditsTx(
@@ -230,7 +234,7 @@ export async function setDonationStatusTx(
   status: string,
   reason: string | undefined,
   actor: string,
-  tiltify: EmitTiltify,
+  publisher: DonationPublisher,
 ) {
   const donation = await tx.donation.findUnique({
     where: { id: donationId },
@@ -242,6 +246,7 @@ export async function setDonationStatusTx(
   }
   if (donation.status === status) throw httpError(400, 'Donation already has this status');
 
+  const before = await publisher.snapshot(donationId);
   let refundId: string | undefined;
   if (status === 'REFUNDED' || status === 'CHARGEBACK') {
     const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
@@ -264,10 +269,7 @@ export async function setDonationStatusTx(
       channel: { select: { id: true, name: true, slug: true, event_id: true } },
     },
   });
-  // Preserve existing publication: only counted-set transitions publish totals.
-  if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
-    await tiltify.totals(row.channel_id);
-  }
+  await publisher.publish(donationId, before);
   return row;
 }
 
