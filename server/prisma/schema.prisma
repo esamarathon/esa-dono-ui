@@ -417,6 +417,8 @@ model PoolCreditRedemption {
   credit_id       String
   batch_id        String
   amount_cents    Int
+  /// Immutable original consumption minus this audited Payment-refund reduction is effective funding.
+  reduced_cents   Int      @default(0)
   claim_id        String?
   vote_id         String?
   contribution_id String?

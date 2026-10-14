@@ -142,6 +142,62 @@ export async function findPledgeCheckoutSessions(
   return sessions;
 }
 
+export type PaymentRefundReceipt = Pick<
+  Stripe.Refund,
+  'id' | 'amount' | 'payment_intent' | 'metadata' | 'status'
+> &
+  Pick<Partial<Stripe.Refund>, 'failure_reason'>;
+
+export interface PaymentRefundRequest {
+  refundId: string;
+  donationId: string;
+  claimId: string;
+  paymentIntent: string;
+  itemCents: number;
+  shippingCents: number;
+}
+
+export async function createPaymentRefund(
+  input: PaymentRefundRequest,
+): Promise<PaymentRefundReceipt> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return stripe.refunds.create(
+    {
+      payment_intent: input.paymentIntent,
+      amount: input.itemCents + input.shippingCents,
+      metadata: {
+        payment_refund_id: input.refundId,
+        donation_id: input.donationId,
+        claim_id: input.claimId,
+      },
+    },
+    { idempotencyKey: input.refundId },
+  );
+}
+
+/** Auto-pagination is exhaustive, with no age window or silent first-page limit. */
+export async function listPaymentRefunds(paymentIntent: string): Promise<PaymentRefundReceipt[]> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  const refunds: PaymentRefundReceipt[] = [];
+  for await (const refund of stripe.refunds.list({ payment_intent: paymentIntent, limit: 100 }))
+    refunds.push(refund);
+  return refunds;
+}
+
+/** A transport timeout, rate limit or 5xx is NOT evidence that no refund exists. */
+export function isDefiniteRefundRejection(error: unknown): boolean {
+  return (
+    error instanceof Stripe.errors.StripeInvalidRequestError &&
+    error.statusCode !== undefined &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500 &&
+    error.statusCode !== 409 &&
+    error.statusCode !== 429
+  );
+}
+
 export interface CreateAuctionCheckoutOptions {
   amountCents: number;
   email: string;

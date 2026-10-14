@@ -12,6 +12,15 @@ import { deleteUploadByUrl } from '../lib/uploads.js';
 import { intakeDonation } from '../services/donation.js';
 import { reconcilePledge } from '../services/checkout.js';
 import {
+  previewPaymentRefundTx,
+  requestPaymentRefund,
+  listPaymentRefundsTx,
+  getPaymentRefundTx,
+  retryPaymentRefund,
+  resolvePaymentRefundItem,
+  resolvePaymentRefundShipping,
+} from '../services/paymentRefund.js';
+import {
   createReward,
   updateReward,
   createPoll,
@@ -272,6 +281,77 @@ router.post('/claims/:id/acknowledge-chargeback', async (req, res) => {
     sendError(res, e, '[admin/claims/acknowledge-chargeback]');
   }
 });
+
+// Payment refunds are admin-only, never mounted on identity/moderator routers.
+router.get(
+  '/claims/:id/payment-refund-preview',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewPaymentRefundTx(tx, req.params.id!)));
+  }),
+);
+router.post(
+  '/claims/:id/payment-refund',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await requestPaymentRefund(req.params.id!, req.donor?.email || 'admin'));
+  }),
+);
+router.get(
+  '/payment-refunds',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    const { status, donation_id } = req.query;
+    if (
+      (status !== undefined && typeof status !== 'string') ||
+      (donation_id !== undefined && typeof donation_id !== 'string')
+    )
+      return res.status(400).json({ error: 'Invalid Payment refund filter' });
+    res.json(
+      await prisma.$transaction((tx) =>
+        listPaymentRefundsTx(tx, {
+          status,
+          donation_id,
+          offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
+          limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+        }),
+      ),
+    );
+  }),
+);
+router.get(
+  '/payment-refunds/:id',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => getPaymentRefundTx(tx, req.params.id!)));
+  }),
+);
+router.post(
+  '/payment-refunds/:id/retry',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await retryPaymentRefund(req.params.id!));
+  }),
+);
+router.post(
+  '/payment-refunds/:id/resolve-item',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(
+      await resolvePaymentRefundItem(
+        req.params.id!,
+        req.body?.resolution,
+        req.donor?.email || 'admin',
+      ),
+    );
+  }),
+);
+router.post(
+  '/payment-refunds/:id/resolve-shipping',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(
+      await resolvePaymentRefundShipping(
+        req.params.id!,
+        req.body?.resolution,
+        req.donor?.email || 'admin',
+      ),
+    );
+  }),
+);
 
 // Rewards CRUD
 router.get('/rewards', async (req, res) => {

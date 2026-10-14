@@ -11,6 +11,7 @@ export async function readRewardFundingTx(
       id: true,
       credit_id: true,
       amount_cents: true,
+      reduced_cents: true,
       credit: { select: { donation_id: true, donation: { select: { created_at: true } } } },
     },
   });
@@ -18,7 +19,7 @@ export async function readRewardFundingTx(
   for (const row of rows)
     amounts.set(
       row.credit.donation_id,
-      (amounts.get(row.credit.donation_id) ?? 0) + row.amount_cents,
+      (amounts.get(row.credit.donation_id) ?? 0) + row.amount_cents - row.reduced_cents,
     );
   const ordered = [...rows].sort(
     (a, b) =>
@@ -27,7 +28,11 @@ export async function readRewardFundingTx(
   );
   return {
     redemption_backed: rows.length > 0,
-    components: rows.map(({ credit, ...row }) => ({ ...row, donation_id: credit.donation_id })),
+    components: rows.map(({ credit, ...row }) => ({
+      ...row,
+      effective_cents: row.amount_cents - row.reduced_cents,
+      donation_id: credit.donation_id,
+    })),
     donation_ids: rows.length
       ? [...new Set(ordered.map((row) => row.credit.donation_id))]
       : claim.donation_id

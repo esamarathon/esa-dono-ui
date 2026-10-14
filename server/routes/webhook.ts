@@ -3,6 +3,8 @@ import Stripe from 'stripe';
 import { reconcileCheckoutNotification, type CheckoutNotification } from '../services/checkout.js';
 import type { CheckoutSession } from '../services/stripe.js';
 import { recordLegacyAsyncFailureTx } from '../services/reversal.js';
+import { reconcilePaymentRefund } from '../services/paymentRefund.js';
+import type { PaymentRefundReceipt } from '../services/stripe.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
 
 const router = Router();
@@ -23,6 +25,11 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   try {
+    if (event.type.startsWith('refund.')) {
+      const refund = event.data?.object;
+      if (refund?.object === 'refund') await reconcilePaymentRefund(refund as PaymentRefundReceipt);
+      return res.status(200).json({ received: true });
+    }
     if (
       ![
         'checkout.session.completed',

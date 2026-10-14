@@ -152,6 +152,7 @@ export async function readPoolCreditEventTx(
           select: {
             id: true,
             amount_cents: true,
+            reduced_cents: true,
             created_at: true,
             claim: { select: { id: true, reversed_at: true } },
             vote: { select: { id: true, reversed_at: true } },
@@ -207,6 +208,7 @@ export async function readPoolCreditEventTx(
               },
         redemptions: redemptions.map(({ claim, vote, contribution, ...r }) => ({
           ...r,
+          effective_cents: r.amount_cents - r.reduced_cents,
           created_at: r.created_at.toISOString(),
           allocation_id: (claim ?? vote ?? contribution)!.id,
           reversed: !!(claim ?? vote ?? contribution)!.reversed_at,

@@ -37,6 +37,7 @@ async function returnRowFundingTx(
           : { contribution_id: row.id },
     select: {
       amount_cents: true,
+      reduced_cents: true,
       credit_id: true,
       credit: { select: { donation_id: true, donation: { select: { status: true } } } },
     },
@@ -52,7 +53,7 @@ async function returnRowFundingTx(
       await tx.poolCredit.update({
         where: { id: redemption.credit_id },
         data: {
-          remaining_cents: { increment: redemption.amount_cents },
+          remaining_cents: { increment: redemption.amount_cents - redemption.reduced_cents },
           cleared_at: null,
           cleared_by: null,
         },

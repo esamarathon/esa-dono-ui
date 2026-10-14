@@ -58,7 +58,10 @@ export interface CreditEvent extends CreditEventSummary {
     origin: { kind: 'claim' | 'vote' | 'contribution'; id: string; title: string };
     redemptions: {
       id: string;
+      /** Original consumption, retained even after a Payment refund shrinks funding. */
       amount_cents: number;
+      reduced_cents: number;
+      effective_cents: number;
       created_at: string;
       allocation_id: string;
       reversed: boolean;
