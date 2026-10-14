@@ -254,6 +254,10 @@ describe('Donation intake on SQLite', () => {
         amountCents: 1000,
         pledgeToken: pledge_token,
       };
+      await prisma.pendingPledge.update({
+        where: { pledge_token },
+        data: { checkout_session_id: facts.externalId },
+      });
       const result = await intakeDonation(facts);
       if ('duplicate' in result) throw new Error('Unexpected duplicate');
       expect(result.pledge).toMatchObject({ totalSpent: remaining ? 1000 : 0, skipped: 1 });
@@ -375,9 +379,14 @@ describe('Donation intake on SQLite', () => {
       data: { ends_at: new Date('2000-01-01') },
     });
     await prisma.fundGoal.update({ where: { id: c.id }, data: { is_complete: true } });
+    const externalId = crypto.randomUUID();
+    await prisma.pendingPledge.update({
+      where: { pledge_token },
+      data: { checkout_session_id: externalId },
+    });
     const result = await intakeDonation({
       source: 'stripe',
-      externalId: crypto.randomUUID(),
+      externalId,
       email,
       donorName: 'Reader',
       amountCents: 1000,
@@ -461,9 +470,14 @@ describe('Donation intake on SQLite', () => {
     });
     pledges.push(pledge_token);
     await prisma.reward.update({ where: { id: reward.id }, data: { cost_cents: 2000 } });
+    const externalId = crypto.randomUUID();
+    await prisma.pendingPledge.update({
+      where: { pledge_token },
+      data: { checkout_session_id: externalId },
+    });
     const result = await intakeDonation({
       source: 'stripe',
-      externalId: crypto.randomUUID(),
+      externalId,
       email,
       donorName: 'Reader',
       amountCents: 800,
@@ -569,13 +583,18 @@ describe('Donation intake on SQLite', () => {
         await prisma.$executeRawUnsafe(
           `CREATE TRIGGER intake_reject_delivery BEFORE INSERT ON WebhookDelivery WHEN NEW.event_type = 'tiltify.fact.updated' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
         );
+      const externalId = crypto.randomUUID();
+      await prisma.pendingPledge.update({
+        where: { pledge_token },
+        data: { checkout_session_id: externalId },
+      });
       await expect(
         intakeDonation({
           source: 'stripe',
           email,
           donorName: 'Reader',
           amountCents: 600,
-          externalId: crypto.randomUUID(),
+          externalId,
           pledgeToken: pledge_token,
         }),
       ).rejects.toThrow();
@@ -643,9 +662,14 @@ describe('Donation intake on SQLite', () => {
         where: { id: reward.id },
         data: change === 'sold-out' ? { quantity_claimed: 1 } : { type: 'DIGITAL' },
       });
+      const externalId = crypto.randomUUID();
+      await prisma.pendingPledge.update({
+        where: { pledge_token },
+        data: { checkout_session_id: externalId },
+      });
       const result = await intakeDonation({
         source: 'stripe',
-        externalId: crypto.randomUUID(),
+        externalId,
         email,
         donorName: 'Reader',
         amountCents: 600,

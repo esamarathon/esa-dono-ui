@@ -94,17 +94,69 @@ async function intakeDonationInner(input: DonationIntake) {
             include: { items: true },
           })
         : await resolvePledge({ pledgeToken: input.pledgeToken, email, amountCents }, tx);
-      const pooled = pledge?.format === 'POOLED';
-      if (pooled && pledge!.fulfilled_by_donation_id) return null;
+      let pooled = pledge?.format === 'POOLED';
+      if (
+        input.source === 'stripe' &&
+        pledge &&
+        (pooled || pledge.checkout_session_id) &&
+        pledge.checkout_session_id !== externalId
+      )
+        throw httpError(409, 'Checkout Session does not match this pledge');
+      if (pledge?.fulfilled_by_donation_id && (pooled || pledge.status === 'LEGACY_PAID'))
+        return null;
       if (pooled && pledge!.new_money_cents !== amountCents)
         throw httpError(409, 'Payment differs from confirmed new money');
-      if (wallet && pooled && pledge!.wallet_donor_id !== input.donor.id)
-        throw httpError(403, 'Wallet pledge belongs to another donor');
+      if (
+        wallet &&
+        (pledge!.status !== 'OPEN' || (pledge!.wallet_donor_id !== input.donor.id && pooled))
+      )
+        throw httpError(403, 'Wallet pledge is unavailable or belongs to another donor');
       const bound =
         pooled && pledge!.wallet_donor_id
           ? await tx.donor.findUniqueOrThrow({ where: { id: pledge!.wallet_donor_id } })
           : null;
       if (bound) email = bound.email;
+      let paymentReview = false;
+      if (pooled && pledge!.held_wallet_cents > 0 && pledge!.wallet_hold_status === 'RELEASED') {
+        // A paid-after-confirmed-failure notification contradicts the provider's
+        // expiration contract. Reacquire ALL original Wallet funding before any
+        // new money is credited. Never borrow from the received cash or create debt.
+        const reacquired = await tx.donor.updateMany({
+          where: {
+            id: bound!.id,
+            balance_remaining: { gte: pledge!.held_wallet_cents },
+            is_frozen: false,
+          },
+          data: {
+            balance_remaining: { decrement: pledge!.held_wallet_cents },
+            balance_held_cents: { increment: pledge!.held_wallet_cents },
+          },
+        });
+        if (reacquired.count === 1) {
+          await tx.pendingPledge.update({
+            where: { id: pledge!.id },
+            data: { wallet_hold_status: 'HELD' },
+          });
+          pledge!.wallet_hold_status = 'HELD';
+        } else {
+          // Approved #186 amendment: actual cash only, NULL-D legacy accounting,
+          // no original incentives. Persist a distinct, admin-visible outcome.
+          pooled = false;
+          paymentReview = true;
+        }
+      }
+      const legacyLate =
+        !!pledge &&
+        pledge.format === 'LEGACY' &&
+        !wallet &&
+        (pledge.status !== 'OPEN' || pledge.expires_at <= new Date());
+      if (legacyLate && input.source === 'stripe' && !pledge!.checkout_session_id) {
+        await tx.pendingPledge.update({
+          where: { id: pledge!.id },
+          data: { checkout_session_id: externalId },
+        });
+      }
+      const creditOnly = paymentReview || legacyLate;
       const credit = pooled ? 0 : amountCents;
       // Keep stable identity/token and role. A self-supplied payment email cannot
       // replace the donor who supplied the pledge's held Wallet funding.
@@ -115,6 +167,7 @@ async function intakeDonationInner(input: DonationIntake) {
               where: { id: bound.id },
               data: {
                 total_donated: { increment: amountCents },
+                balance_remaining: { increment: credit },
                 token_expires_at: new Date(Date.now() + TOKEN_TTL_MS),
               },
             })
@@ -145,16 +198,13 @@ async function intakeDonationInner(input: DonationIntake) {
           pledge_amount_cents: pooled ? pledge!.pledge_amount_cents : null,
           wallet_applied_cents: pooled ? pledge!.held_wallet_cents : 0,
           // Helpers can inspect immutable physical prices/types while fulfilling.
-          ...(pooled ? { pledge: { connect: { id: pledge!.id } } } : {}),
+          ...(pooled || creditOnly ? { pledge: { connect: { id: pledge!.id } } } : {}),
           shipping_cents: shippingCents,
           shipping_recorded_at: new Date(),
           payment_intent: input.source === 'stripe' ? input.paymentIntent : null,
-          donor_name: wallet ? input.pledge.display_name : input.donorName,
-          comment: wallet
-            ? input.pledge.comment
-            : input.source === 'admin'
-              ? (input.comment ?? null)
-              : null,
+          donor_name:
+            pledge?.display_name ?? (wallet ? input.pledge.display_name : input.donorName),
+          comment: pledge?.comment ?? (input.source === 'admin' ? (input.comment ?? null) : null),
           channel_id: route.channelId,
           event_id: route.eventId,
           ...(input.source === 'admin' && input.occurredAt ? { created_at: input.occurredAt } : {}),
@@ -162,7 +212,14 @@ async function intakeDonationInner(input: DonationIntake) {
       });
 
       let pledgeResult: Awaited<ReturnType<typeof fulfillPledge>> | null = null;
-      if (pledge) {
+      if (pledge && creditOnly) {
+        await tx.pendingPledge.update({
+          where: { id: pledge.id },
+          data: {
+            status: paymentReview ? 'PAYMENT_REVIEW' : 'LEGACY_PAID',
+          },
+        });
+      } else if (pledge) {
         const fulfillAndLink = async () => {
           pledgeResult = pooled
             ? await fulfillPooledPledge(tx, pledge, donor.id, donation.id)
@@ -178,10 +235,11 @@ async function intakeDonationInner(input: DonationIntake) {
           if (pooled && pledge.held_wallet_cents > 0) {
             if (pledge.wallet_hold_status !== 'HELD')
               throw httpError(409, 'Wallet funding is not held');
-            await tx.donor.update({
-              where: { id: donor.id },
+            const consumed = await tx.donor.updateMany({
+              where: { id: donor.id, balance_held_cents: { gte: pledge.held_wallet_cents } },
               data: { balance_held_cents: { decrement: pledge.held_wallet_cents } },
             });
+            if (consumed.count !== 1) throw httpError(409, 'Wallet hold is inconsistent');
             await tx.pendingPledge.update({
               where: { id: pledge.id },
               data: { wallet_hold_status: 'CONSUMED', wallet_consumed_at: new Date() },
@@ -205,6 +263,16 @@ async function intakeDonationInner(input: DonationIntake) {
         }
       }
 
+      if (pledge && input.source === 'stripe') {
+        await tx.pendingPledge.update({
+          where: { id: pledge.id },
+          data: {
+            payment_status: 'paid',
+            checkout_session_status: 'complete',
+            reconciled_at: new Date(),
+          },
+        });
+      }
       await publisher.publish(donation.id, null);
       return { donor, donation, pledge: pledgeResult };
     });
@@ -535,19 +603,22 @@ async function resolvePledge(
   },
   tx: Prisma.TransactionClient,
 ) {
-  if (pledgeToken) {
+  if (pledgeToken !== undefined && pledgeToken !== null) {
     const pledge = await tx.pendingPledge.findUnique({
       where: { pledge_token: pledgeToken },
       include: { items: true },
     });
-    if (pledge?.format === 'POOLED') return pledge;
+    // An exact token is authoritative even after a local terminal state. Unknown
+    // tokens NEVER fall through to another pledge with the same email address.
+    if (pledge?.format === 'POOLED' || pledge?.status === 'LEGACY_PAID') return pledge;
+    if (pledge?.fulfilled_by_donation_id || pledge?.status === 'FULFILLED') return null;
     if (
-      pledge &&
-      pledge.status === 'OPEN' &&
-      pledge.total_cents <= amountCents + (pledge.wallet_discount_cents ?? 0) &&
-      new Date() < pledge.expires_at
+      pledge?.status === 'OPEN' &&
+      pledge.expires_at > new Date() &&
+      pledge.total_cents > amountCents + pledge.wallet_discount_cents
     )
-      return pledge;
+      return null;
+    return pledge;
   }
 
   const cutoff = new Date(Date.now() - PLEDGE_TTL_MS);

@@ -9,6 +9,7 @@ import { sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { intakeDonation } from '../services/donation.js';
+import { reconcilePledge } from '../services/checkout.js';
 import {
   createReward,
   updateReward,
@@ -637,6 +638,15 @@ router.post('/polls/options/:id/refund', async (req, res) => {
 });
 
 // Pledges
+router.post('/pledges/:id/check-stripe', async (req, res) => {
+  try {
+    const pledge = await prisma.pendingPledge.findUnique({ where: { id: req.params.id } });
+    if (!pledge) return res.status(404).json({ error: 'Pledge not found' });
+    res.json(await reconcilePledge(pledge.pledge_token));
+  } catch (error) {
+    sendError(res, error, '[admin/check-stripe]');
+  }
+});
 router.get('/pledges', async (req, res) => {
   const pledges = await prisma.pendingPledge.findMany({
     include: {
@@ -648,7 +658,12 @@ router.get('/pledges', async (req, res) => {
     orderBy: { created_at: 'desc' },
     take: 100,
   });
-  res.json(pledges);
+  res.json(
+    pledges.map((pledge) => ({
+      ...pledge,
+      admin_review_required: pledge.status === 'PAYMENT_REVIEW',
+    })),
+  );
 });
 router.get('/blocked-words', async (req, res) => {
   const words = await prisma.blockedWord.findMany({ orderBy: { word: 'asc' } });

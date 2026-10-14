@@ -622,6 +622,11 @@ describe('pooled accounting migration on populated SQLite', () => {
     >(
       'SELECT id, status, format, pledge_amount_cents, total_cents, top_up_cents, wallet_discount_cents FROM PendingPledge ORDER BY id',
     );
+    expect(
+      await db.$queryRawUnsafe('SELECT checkout_requested_at, checkout_request FROM PendingPledge'),
+    ).toEqual(
+      Array.from({ length: 4 }, () => ({ checkout_requested_at: null, checkout_request: null })),
+    );
     expect(pledges.map((p) => [p.id, p.status])).toEqual([
       ['CANCELLED', 'CANCELLED'],
       ['EXPIRED', 'EXPIRED'],

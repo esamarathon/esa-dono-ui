@@ -62,4 +62,57 @@ donor/auto rows are combined per option/goal and allocations remain distinct fro
 and asserts `total_cents`; `staging/incentive-test.py` calls `createPledge` directly and
 posts that old total as money. Both must adopt the shared planner/new-money contract
 before the single pooled release. Do not run those old callers against this intermediate
-branch. Checkout reconciliation (#186) and the donate client (#187) are also required.
+branch. The donate client (#187) and the remaining pooled-release slices are also required.
+
+## Checkout reconciliation contract (#186)
+
+All paths are relative to `/api`, with empty POST bodies:
+
+| Endpoint                               | Contract                                                                                                                                                              |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /pledge/:token`                   | Immutable POOLED/LEGACY review and derived payment state; no email/auth token.                                                                                        |
+| `POST /pledge/:token/reconcile`        | Public exact-token Stripe reconciliation, never donor authentication.                                                                                                 |
+| `POST /pledge/:token/cancel`           | Expire first, retrieve if unclear; release once only after confirmed non-payment. Wallet-bound pledges require their owning donor session. LEGACY is read-only (409). |
+| `POST /pledge/:token/continue`         | Reconcile then return the same payable Session, or retry the frozen create/key within 24h. No replanning. Same owner/LEGACY restrictions as cancel.                   |
+| `POST /admin/pledges/:id/check-stripe` | Admin key/ADMIN donor session only; the same reconciliation. No manual release.                                                                                       |
+
+Common public fields: `payment_state`, `can_edit`, `can_continue`, `read_only`,
+`admin_review_required`, `donate_url` (nullable), and `has_checkout`. POST `/pledge`
+also returns nullable `checkout_error`; a failed create retains its confirmed plan/hold.
+Action conflicts return 409 with `{error, pledge}` (the safe public projection).
+
+States:
+
+- `READY`: confirmed, with no known payment attempt (also possible with Stripe unconfigured).
+- `OPEN`: continue only the same Session. The review stays read-only.
+- `PROCESSING`: complete/unpaid; payment can still settle. Keep the hold and block edits/new checkout. An async-failure notification with current processing/retryable PaymentIntent evidence also retains funding; its receipt allows later reconciliation.
+- `UNKNOWN`: create/expire/retrieve is unresolved. Keep the hold and block edits/new checkout.
+- `NON_PAYMENT`: authoritative non-payment; only a POOLED pledge has `can_edit=true`/`read_only=false`.
+- `FULFILLED`: original immutable plan fulfilled once; never undone by a cancel/expired response.
+- `LEGACY_PAID`: old-shape payment recorded as new-money Wallet credit without D/allocations. Historical review stays read-only; pledge amount is unavailable. A legacy lost create with no stored Session id atomically binds its first verified paid non-recovered Session for this cash-only receipt, never for original incentive fulfillment.
+- `PAYMENT_REVIEW`: contradictory paid-after-release money recorded as NULL-D Wallet credit because all original W could not be reacquired. `admin_review_required=true`. Do not report original incentives fulfilled or delete a draft as a fulfilled pledge.
+
+A late pooled payment fulfills normally while funding stays held, or after atomically
+reacquiring all released W. Under the [approved amendment](https://github.com/esamarathon/esa-dono-ui/issues/186#issuecomment-6164165797),
+D=1000/W=950/cash=50 with W spent elsewhere records only cash=50 as legacy Wallet credit,
+with the original pledge linked, routing/comment/name retained and no allocations/debt.
+Shipping stays outside all totals. Both special late outcomes are distinct from `FULFILLED`.
+
+Stripe success returns to `/pledge/:token`; cancel returns to `/pledge/:token?cancelled=1`.
+A browser cancel and an elapsed local deadline are not non-payment. Session recovery is
+disabled. Lost-create retries reuse exact parameters/key only within 24 hours; later
+reconciliation discovers the original Session without issuing another create. Unknown
+or ambiguous discovery remains blocked. No operation establishes a donor session.
+
+Stripe adapters/synthetic tests must provide `status='complete'` and `payment_status='paid'`
+to record payment; `completed` alone is insufficient. Pooled Stripe intake also requires
+the exact persisted Checkout Session id. Supplying an unknown pledge token never falls
+back to email; no-token historical matching remains legacy-only. Existing auction
+completed/expired handling and Tiltify wire shapes are unchanged. Sibling caller updates
+remain #194, not part of this slice.
+
+Legacy async-failure handoff to #188: `reconcileCheckoutNotification` returns
+`{legacy_async_failure: {donation_id, checkout_session_id, pledge_token}}` for an existing
+NULL-D donation and persists the bound pledge's `payment_status='failed'`. The webhook
+currently exposes the receipt; #188 must consume it there and apply the legacy chargeback
+rule before the single pooled release. #186 performs no reversal accounting.

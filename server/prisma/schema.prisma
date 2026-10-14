@@ -322,15 +322,19 @@ model PendingPledge {
   wallet_consumed_at    DateTime?
   wallet_released_at    DateTime?
   non_payment_confirmed_at DateTime?
-  payment_status        String? // Stripe payment_status, last reconciled value
-  checkout_session_status String? // Stripe session status, last reconciled value
+  payment_status        String? // Stripe value, or failed as a verified async-failure receipt
+  checkout_session_status String? // Stripe value, or unknown after an indeterminate operation
   reconciled_at         DateTime?
   /// Retained only for old-shape returns and late payments. New pledges leave these at zero.
   total_cents           Int          @default(0)
   top_up_cents          Int          @default(0) // optional additional donation beyond cart items
   wallet_discount_cents Int          @default(0) // cents deducted from existing wallet balance at checkout
-  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED
+  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED | LEGACY_PAID | PAYMENT_REVIEW
   requires_shipping     Boolean      @default(false) // true when any cart item is a PHYSICAL reward
+  /// Written BEFORE the external create. Null session id does not prove no payment opportunity exists.
+  checkout_requested_at DateTime?
+  /// Exact Stripe create parameters, frozen for same-key retries (including configuration).
+  checkout_request      String?
   checkout_session_id   String?      // Stripe Checkout Session id for deterministic linkage
   checkout_url          String?      // Stripe Checkout Session URL used in the redirect
   comment               String?      // donor comment captured in the cart before checkout

@@ -307,7 +307,24 @@ export interface PledgeItem {
   confirmed_reward_type?: string | null;
 }
 
+export type PledgePaymentState =
+  | 'READY'
+  | 'OPEN'
+  | 'PROCESSING'
+  | 'UNKNOWN'
+  | 'NON_PAYMENT'
+  | 'FULFILLED'
+  | 'LEGACY_PAID'
+  | 'PAYMENT_REVIEW';
+
 interface PledgeBase {
+  payment_state: PledgePaymentState;
+  can_edit: boolean;
+  can_continue: boolean;
+  read_only: boolean;
+  admin_review_required: boolean;
+  donate_url: string | null;
+  has_checkout: boolean;
   pledge_token: string;
   status: string;
   expires_at: string;
@@ -330,8 +347,7 @@ export interface LegacyPledge extends PledgeBase {
 /** Legacy pledges can only be read; new POST responses never contain old totals. */
 export type Pledge = PooledPledge | LegacyPledge;
 export interface PledgeResult extends PooledPledge {
-  donate_url: string | null;
-  has_checkout: boolean;
+  checkout_error: string | null;
 }
 
 // ─── Admin/moderator shapes ───
@@ -499,6 +515,16 @@ export interface AdminPledgeItem {
 }
 
 export interface AdminPledge {
+  format: 'POOLED' | 'LEGACY';
+  pledge_amount_cents: number | null;
+  new_money_cents: number | null;
+  held_wallet_cents: number;
+  wallet_hold_status: 'NONE' | 'HELD' | 'CONSUMED' | 'RELEASED';
+  payment_status: string | null;
+  checkout_session_status: string | null;
+  non_payment_confirmed_at: string | null;
+  reconciled_at: string | null;
+  admin_review_required: boolean;
   id: string;
   status: string;
   donor_email?: string | null;

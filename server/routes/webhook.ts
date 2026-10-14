@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import Stripe from 'stripe';
+import { reconcileCheckoutNotification, type CheckoutNotification } from '../services/checkout.js';
+import type { CheckoutSession } from '../services/stripe.js';
 
 const router = Router();
 
@@ -19,29 +21,28 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   try {
-    if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.expired') {
+    if (
+      ![
+        'checkout.session.completed',
+        'checkout.session.expired',
+        'checkout.session.async_payment_succeeded',
+        'checkout.session.async_payment_failed',
+      ].includes(event.type)
+    ) {
       return res.status(200).json({ received: true });
     }
 
-    const session = event.data?.object as
-      | {
-          id?: string;
-          amount_total?: number | null;
-          payment_intent?: string | { id: string } | null;
-          customer_details?: { email?: string | null; name?: string | null } | null;
-          customer_email?: string | null;
-          metadata?: Record<string, string> | null;
-          client_reference_id?: string | null;
-          total_details?: { amount_shipping?: number | null } | null;
-        }
-      | undefined;
+    const session = event.data?.object as CheckoutSession | undefined;
 
-    if (!session) {
+    if (!session?.id) {
       return res.status(200).json({ received: true, skipped: 'no session object' });
     }
 
     const auctionId = session.metadata?.auction_id ?? null;
     if (auctionId && session.id) {
+      // Auctions retain their own completed/expired lifecycle, not pledge holds.
+      if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.expired')
+        return res.status(200).json({ received: true });
       const prisma = (await import('../lib/prisma.js')).default;
       if (event.type === 'checkout.session.expired') {
         const { advanceCascadeTx } = await import('../services/auction.js');
@@ -55,40 +56,12 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(200).json({ received: true });
     }
 
-    if (event.type !== 'checkout.session.completed') {
-      // checkout.session.expired for a non-auction (pledge) session — no
-      // action needed, pledges simply remain OPEN until their own TTL.
-      return res.status(200).json({ received: true });
-    }
-
-    const externalId = session.id;
-    const pledgeToken = session.metadata?.pledge_token ?? session.client_reference_id ?? null;
-    const email = session.customer_details?.email ?? session.customer_email;
-    const donorName = session.customer_details?.name ?? 'Anonymous';
-    const amountCents = session.amount_total ?? 0;
-    const shippingCents = session.total_details?.amount_shipping ?? 0;
-
-    if (!email || !externalId) {
-      return res.status(200).json({ received: true, skipped: 'missing email or id' });
-    }
-
-    // Intake owns donor accounting and pledge resolution/fulfillment.
-    const { intakeDonation } = await import('../services/donation.js');
-    await intakeDonation({
-      source: 'stripe',
-      externalId,
-      email,
-      donorName,
-      amountCents,
-      pledgeToken,
-      shippingCents,
-      paymentIntent:
-        typeof session.payment_intent === 'string'
-          ? session.payment_intent
-          : session.payment_intent?.id,
-    });
-
-    res.status(200).json({ received: true });
+    const result = await reconcileCheckoutNotification(event.type as CheckoutNotification, session);
+    // #188 consumes the legacy failure receipt here; this slice deliberately
+    // does not apply reversal accounting. The pooled release ships together.
+    res
+      .status(200)
+      .json({ received: true, ...(result && 'legacy_async_failure' in result ? result : {}) });
   } catch (err) {
     console.error('Webhook error:', err);
     res.status(500).json({ error: 'Internal server error' });

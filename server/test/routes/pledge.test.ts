@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { planPledge } from '@dono/shared';
 import pledgeRouter from '../../routes/pledge.js';
+import adminRouter from '../../routes/admin.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
@@ -16,6 +17,7 @@ function app() {
   const app = express();
   app.use(express.json());
   app.use('/api/pledge', pledgeRouter);
+  app.use('/api/admin', adminRouter);
   return app;
 }
 afterEach(async () => {
@@ -30,6 +32,69 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe('pledge HTTP contract on SQLite', () => {
+  it('exposes read-only reconciliation, authenticated cancellation and admin-only Check Stripe without PII', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const donor = await prisma.donor.create({
+      data: {
+        email: `${crypto.randomUUID()}@example.com`,
+        balance_remaining: 975,
+        magic_token: crypto.randomUUID(),
+        token_expires_at: new Date(Date.now() + 60000),
+      },
+    });
+    donors.push(donor.id);
+    const draft_id = crypto.randomUUID();
+    drafts.push(draft_id);
+    const created = await request(app())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${donor.magic_token}`)
+      .send({
+        draft_id,
+        channel_id: channel.id,
+        pledge_amount_cents: 1000,
+        items: [],
+        plan: planPledge({
+          pledge_amount_cents: 1000,
+          selections: [],
+          available_wallet_cents: 975,
+        }),
+      });
+    const token = created.body.pledge_token as string;
+    expect((await request(app()).post(`/api/pledge/${token}/reconcile`)).body).toMatchObject({
+      read_only: true,
+      can_edit: false,
+    });
+    expect((await request(app()).post(`/api/pledge/${token}/cancel`)).status).toBe(403);
+    const cancelled = await request(app())
+      .post(`/api/pledge/${token}/cancel`)
+      .set('Authorization', `Bearer ${donor.magic_token}`);
+    expect(cancelled.body).toMatchObject({
+      payment_state: 'NON_PAYMENT',
+      can_edit: true,
+      can_continue: false,
+    });
+    const continued = await request(app())
+      .post(`/api/pledge/${token}/continue`)
+      .set('Authorization', `Bearer ${donor.magic_token}`);
+    expect(continued.body).toMatchObject({ payment_state: 'NON_PAYMENT', donate_url: null });
+    const row = await prisma.pendingPledge.findUniqueOrThrow({ where: { pledge_token: token } });
+    expect((await request(app()).post(`/api/admin/pledges/${row.id}/check-stripe`)).status).toBe(
+      401,
+    );
+    vi.stubEnv('ADMIN_API_KEY', 'checkout-test');
+    try {
+      const checked = await request(app())
+        .post(`/api/admin/pledges/${row.id}/check-stripe`)
+        .set('Authorization', 'Bearer key_admin_checkout-test');
+      expect(checked.status).toBe(200);
+      expect(checked.body.payment_state).toBe('NON_PAYMENT');
+      expect(JSON.stringify(checked.body)).not.toContain(donor.email);
+      expect(JSON.stringify(checked.body)).not.toContain(donor.magic_token!);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it.each([{ items: [] }, { pledge_amount_cents: 1000, top_up_cents: 0, items: [] }])(
     'rejects the obsolete donate contract',
     async (body) => {
