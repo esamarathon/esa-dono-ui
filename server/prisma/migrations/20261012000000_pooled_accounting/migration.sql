@@ -89,12 +89,15 @@ CREATE TABLE "PaymentRefund" (
     "pool_shrink_data" TEXT,
     "failure_reason" TEXT,
     "resolution" TEXT,
+    "shipping_resolution" TEXT,
     "created_by" TEXT NOT NULL,
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" DATETIME NOT NULL,
     "accepted_at" DATETIME,
     "resolved_at" DATETIME,
     "resolved_by" TEXT,
+    "shipping_resolved_at" DATETIME,
+    "shipping_resolved_by" TEXT,
     CONSTRAINT "PaymentRefund_donation_id_fkey" FOREIGN KEY ("donation_id") REFERENCES "Donation" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT "PaymentRefund_claim_id_fkey" FOREIGN KEY ("claim_id") REFERENCES "RewardClaim" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );

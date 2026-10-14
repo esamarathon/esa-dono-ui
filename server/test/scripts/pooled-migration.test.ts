@@ -456,6 +456,41 @@ describe('pooled accounting migration on populated SQLite', () => {
       include: { wallet_adjustment: true },
     });
     expect(resolved.wallet_adjustment?.amount_cents).toBe(275);
+    expect(
+      await db.$queryRaw`SELECT shipping_resolution, shipping_resolved_at, shipping_resolved_by
+        FROM PaymentRefund WHERE id = ${refund.id}`,
+    ).toEqual([
+      { shipping_resolution: null, shipping_resolved_at: null, shipping_resolved_by: null },
+    ]);
+    const historicalClaims = await db.rewardClaim.findMany({ orderBy: { id: 'asc' } });
+    const adjustmentHistory = await db.balanceAdjustment.findMany({ orderBy: { id: 'asc' } });
+    const shippingResolvedAt = new Date('2030-01-02T12:00:00Z');
+    for (const shippingResolution of ['RETURNED_OUTSIDE_APP', 'KEPT_BY_AGREEMENT']) {
+      await db.paymentRefund.update({
+        where: { id: refund.id },
+        data: {
+          shipping_resolution: shippingResolution,
+          shipping_resolved_at: shippingResolvedAt,
+          shipping_resolved_by: 'shipping-admin',
+        },
+      });
+      const shippingResolved = await db.paymentRefund.findUniqueOrThrow({
+        where: { id: refund.id },
+        include: { wallet_adjustment: true },
+      });
+      // Separate shipping choices retain the item resolution and the full refund audit.
+      expect(shippingResolved).toEqual({
+        ...resolved,
+        shipping_resolution: shippingResolution,
+        shipping_resolved_at: shippingResolvedAt,
+        shipping_resolved_by: 'shipping-admin',
+        updated_at: expect.any(Date),
+      });
+    }
+    expect(await db.rewardClaim.findMany({ orderBy: { id: 'asc' } })).toEqual(historicalClaims);
+    expect(await db.balanceAdjustment.findMany({ orderBy: { id: 'asc' } })).toEqual(
+      adjustmentHistory,
+    );
     await db.event.update({
       where: { id: '00000000-0000-4000-8000-000000000001' },
       data: {

@@ -456,12 +456,15 @@ model PaymentRefund {
   pool_shrink_data String?
   failure_reason   String?
   resolution       String?  // REJECTED | RETURNED_OUTSIDE_APP | WALLET_CREDIT | SETTLED_BY_DISPUTE
+  shipping_resolution String? // RETURNED_OUTSIDE_APP | KEPT_BY_AGREEMENT
   created_by       String
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
   accepted_at      DateTime?
   resolved_at      DateTime?
   resolved_by      String?
+  shipping_resolved_at DateTime?
+  shipping_resolved_by String?
   donation         Donation @relation(fields: [donation_id], references: [id], onDelete: Restrict)
   claim            RewardClaim @relation(fields: [claim_id], references: [id], onDelete: Restrict)
   wallet_adjustment BalanceAdjustment?
