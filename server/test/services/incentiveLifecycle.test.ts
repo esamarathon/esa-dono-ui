@@ -1,0 +1,713 @@
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
+import type { PathLike } from 'fs';
+
+// Observe the filesystem boundary, while still deleting real fixture files.
+const files = vi.hoisted(() => ({ beforeUnlink: vi.fn<(path: PathLike) => Promise<void>>() }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('fs/promises')>();
+  return {
+    ...fs,
+    unlink: async (path: PathLike) => {
+      await files.beforeUnlink(path);
+      return fs.unlink(path);
+    },
+  };
+});
+
+// Real SQLite and outbox; no delivery network calls.
+vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
+import prisma from '../../lib/prisma.js';
+import {
+  createReward,
+  updateReward,
+  createPoll,
+  updatePoll,
+  createGoal,
+  updateGoal,
+  createPollOption,
+  updatePollOption,
+  removeIncentive,
+  reverseAndDeactivate,
+} from '../../services/incentiveLifecycle.js';
+import { access, writeFile, unlink } from 'fs/promises';
+import { join } from 'path';
+import { UPLOADS_DIR, ensureUploadsDir } from '../../lib/uploads.js';
+
+const imagePaths: string[] = [];
+// A separate WAL reader sees committed state even while the writer has a transaction open.
+const committed = new PrismaClient();
+
+const rewardIds: string[] = [];
+const pollIds: string[] = [];
+const goalIds: string[] = [];
+const donorIds: string[] = [];
+const destinationIds: string[] = [];
+
+async function destination() {
+  const row = await prisma.webhookDestination.create({
+    data: {
+      url: 'http://127.0.0.1:1/hook',
+      secret: 's',
+      event_types:
+        '["incentive.created","incentive.enabled","incentive.disabled","incentive.value_changed"]',
+    },
+  });
+  destinationIds.push(row.id);
+  return row.id;
+}
+
+async function messages(destinationId: string) {
+  const rows = await prisma.webhookDelivery.findMany({
+    where: { destination_id: destinationId },
+    orderBy: { seq: 'asc' },
+  });
+  return rows.map((row) => JSON.parse(row.payload));
+}
+
+afterEach(async () => {
+  files.beforeUnlink.mockReset();
+  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_lifecycle_delivery');
+  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_lifecycle_deactivation');
+  for (const path of imagePaths.splice(0)) await unlink(path).catch(() => {});
+  await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
+  await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
+  await prisma.fundContribution.deleteMany({ where: { donor_id: { in: donorIds } } });
+  await prisma.balanceAdjustment.deleteMany({ where: { donor_id: { in: donorIds } } });
+  await prisma.donor.deleteMany({ where: { id: { in: donorIds } } });
+  donorIds.length = 0;
+  await prisma.reward.deleteMany({ where: { id: { in: rewardIds } } });
+  await prisma.poll.deleteMany({ where: { id: { in: pollIds } } });
+  await prisma.fundGoal.deleteMany({ where: { id: { in: goalIds } } });
+  pollIds.length = goalIds.length = 0;
+  await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
+  rewardIds.length = destinationIds.length = 0;
+});
+afterAll(async () => {
+  await committed.$disconnect();
+  await prisma.$disconnect();
+});
+
+describe('Incentive lifecycle on SQLite', () => {
+  it('updates reward activation and price, but ignores unchanged values and title-only changes', async () => {
+    const target = await destination();
+    const reward = await prisma.reward.create({
+      data: { title: 'Old', type: 'DIGITAL', cost_cents: 500 },
+    });
+    rewardIds.push(reward.id);
+    await updateReward(reward.id, { title: 'New', is_active: false, cost_cents: 700 });
+    await updateReward(reward.id, { title: 'Renamed', is_active: false, cost_cents: 700 });
+    await updateReward(reward.id, { is_active: true });
+    expect(await messages(target)).toEqual([
+      expect.objectContaining({
+        type: 'incentive.disabled',
+        data: { incentive_kind: 'REWARD', incentive_id: reward.id, channel_id: null, title: 'New' },
+      }),
+      expect.objectContaining({
+        type: 'incentive.value_changed',
+        data: {
+          incentive_kind: 'REWARD',
+          incentive_id: reward.id,
+          channel_id: null,
+          title: 'New',
+          changed_fields: ['cost_cents'],
+          old_cost_cents: 500,
+          new_cost_cents: 700,
+        },
+      }),
+      expect.objectContaining({
+        type: 'incentive.enabled',
+        data: {
+          incentive_kind: 'REWARD',
+          incentive_id: reward.id,
+          channel_id: null,
+          title: 'Renamed',
+        },
+      }),
+    ]);
+    expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+      title: 'Renamed',
+      is_active: true,
+      cost_cents: 700,
+    });
+  });
+  it('keeps the old image and record when an update rolls back, and deletes the image only on success', async () => {
+    const target = await destination();
+    await ensureUploadsDir();
+    const filename = `${crypto.randomUUID()}.webp`;
+    const imagePath = join(UPLOADS_DIR, filename);
+    imagePaths.push(imagePath);
+    await writeFile(imagePath, 'old image');
+    const reward = await createReward({
+      title: 'Image reward',
+      type: 'DIGITAL',
+      cost_cents: 500,
+      image_url: `/api/uploads/${filename}`,
+    });
+    rewardIds.push(reward.id);
+    const deletedStates: unknown[] = [];
+    files.beforeUnlink.mockImplementation(async (path) => {
+      if (path === imagePath)
+        deletedStates.push(await committed.reward.findUnique({ where: { id: reward.id } }));
+    });
+    await prisma.webhookDelivery.deleteMany({ where: { destination_id: target } });
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_lifecycle_delivery BEFORE INSERT ON WebhookDelivery
+      WHEN NEW.destination_id = '${target}' AND NEW.event_type = 'incentive.value_changed'
+      BEGIN SELECT RAISE(ABORT, 'forced delivery failure'); END`);
+    await expect(
+      updateReward(reward.id, {
+        cost_cents: 700,
+        is_active: false,
+        image_url: '/api/uploads/new.webp',
+      }),
+    ).rejects.toMatchObject({ code: 'P2003' });
+    await expect(access(imagePath)).resolves.toBeUndefined();
+    expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+      cost_cents: 500,
+      is_active: true,
+      image_url: `/api/uploads/${filename}`,
+    });
+    expect(await messages(target)).toEqual([]);
+    await prisma.$executeRawUnsafe('DROP TRIGGER fail_lifecycle_delivery');
+    await updateReward(reward.id, { cost_cents: 700, image_url: '/api/uploads/new.webp' });
+    await expect(access(imagePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(deletedStates).toEqual([
+      expect.objectContaining({ cost_cents: 700, image_url: '/api/uploads/new.webp' }),
+    ]);
+    expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+      cost_cents: 700,
+      image_url: '/api/uploads/new.webp',
+    });
+  });
+
+  it('creates and updates a poll with options, activation and end-time messages in order', async () => {
+    const target = await destination();
+    const poll = await createPoll({
+      title: 'Poll',
+      is_active: false,
+      options: { create: [{ label: 'A' }, { label: 'B' }] },
+    });
+    pollIds.push(poll.id);
+    expect(poll.options.map((option) => option.label)).toEqual(['A', 'B']);
+    const endsAt = new Date('2026-12-01T12:00:00Z');
+    const updated = await updatePoll(poll.id, {
+      title: 'Open poll',
+      is_active: true,
+      ends_at: endsAt,
+    });
+    expect(updated.options).toHaveLength(2);
+    await updatePoll(poll.id, {
+      description: 'Only text',
+      ends_at: new Date('2026-12-01T12:00:00Z'),
+    });
+    await updatePoll(poll.id, { is_active: false, ends_at: null });
+    expect(await messages(target)).toEqual([
+      expect.objectContaining({
+        type: 'incentive.created',
+        data: {
+          incentive_kind: 'POLL',
+          incentive_id: poll.id,
+          channel_id: null,
+          title: 'Poll',
+          is_active: false,
+          ends_at: null,
+        },
+      }),
+      expect.objectContaining({
+        type: 'incentive.enabled',
+        data: {
+          incentive_kind: 'POLL',
+          incentive_id: poll.id,
+          channel_id: null,
+          title: 'Open poll',
+        },
+      }),
+      expect.objectContaining({
+        type: 'incentive.value_changed',
+        data: {
+          incentive_kind: 'POLL',
+          incentive_id: poll.id,
+          channel_id: null,
+          title: 'Open poll',
+          changed_fields: ['ends_at'],
+          old_ends_at: null,
+          new_ends_at: endsAt.toISOString(),
+        },
+      }),
+      expect.objectContaining({ type: 'incentive.disabled' }),
+      expect.objectContaining({
+        type: 'incentive.value_changed',
+        data: expect.objectContaining({ old_ends_at: endsAt.toISOString(), new_ends_at: null }),
+      }),
+    ]);
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+      is_active: false,
+      ends_at: null,
+      description: 'Only text',
+    });
+  });
+
+  it('creates and updates a goal without inventing completion policy or messages', async () => {
+    const target = await destination();
+    const goal = await createGoal({ title: 'Goal', target_cents: 1000 });
+    goalIds.push(goal.id);
+    await updateGoal(goal.id, { target_cents: 2000, is_active: false, is_complete: true });
+    await updateGoal(goal.id, {
+      description: 'Changed text',
+      target_cents: 2000,
+      is_complete: false,
+    });
+    await updateGoal(goal.id, { is_active: true });
+    expect(await messages(target)).toEqual([
+      expect.objectContaining({
+        type: 'incentive.created',
+        data: {
+          incentive_kind: 'GOAL',
+          incentive_id: goal.id,
+          channel_id: null,
+          title: 'Goal',
+          is_active: true,
+          target_cents: 1000,
+        },
+      }),
+      expect.objectContaining({ type: 'incentive.disabled' }),
+      expect.objectContaining({
+        type: 'incentive.value_changed',
+        data: {
+          incentive_kind: 'GOAL',
+          incentive_id: goal.id,
+          channel_id: null,
+          title: 'Goal',
+          changed_fields: ['target_cents'],
+          old_target_cents: 1000,
+          new_target_cents: 2000,
+        },
+      }),
+      expect.objectContaining({ type: 'incentive.enabled' }),
+    ]);
+    expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
+      target_cents: 2000,
+      current_cents: 0,
+      is_active: true,
+      is_complete: false,
+    });
+  });
+
+  it('adds and renames poll options without queueing messages', async () => {
+    const target = await destination();
+    const poll = await prisma.poll.create({ data: { title: 'Options' } });
+    pollIds.push(poll.id);
+    const option = await createPollOption(poll.id, 'A');
+    expect(await updatePollOption(option.id, 'B')).toMatchObject({
+      id: option.id,
+      label: 'B',
+      status: 'ACTIVE',
+    });
+    expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toMatchObject({
+      poll_id: poll.id,
+      label: 'B',
+    });
+    expect(await messages(target)).toEqual([]);
+  });
+
+  it.each(['REWARD', 'POLL', 'POLL_OPTION', 'GOAL'] as const)(
+    'removes an unused %s, leaving no messages',
+    async (kind) => {
+      const target = await destination();
+      const reward = await prisma.reward.create({
+        data: { title: 'Unused reward', type: 'DIGITAL', cost_cents: 500 },
+      });
+      rewardIds.push(reward.id);
+      const poll = await prisma.poll.create({
+        data: { title: 'Unused poll', options: { create: { label: 'Unused option' } } },
+        include: { options: true },
+      });
+      pollIds.push(poll.id);
+      const goal = await prisma.fundGoal.create({
+        data: { title: 'Unused goal', target_cents: 1000 },
+      });
+      goalIds.push(goal.id);
+      const option = poll.options[0]!;
+      const id = { REWARD: reward.id, POLL: poll.id, POLL_OPTION: option.id, GOAL: goal.id }[kind];
+      await removeIncentive(kind, id);
+      const removed =
+        kind === 'REWARD'
+          ? await prisma.reward.findUnique({ where: { id } })
+          : kind === 'POLL'
+            ? await prisma.poll.findUnique({ where: { id } })
+            : kind === 'POLL_OPTION'
+              ? await prisma.pollOption.findUnique({ where: { id } })
+              : await prisma.fundGoal.findUnique({ where: { id } });
+      expect(removed).toBeNull();
+      if (kind === 'POLL')
+        expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toBeNull();
+      expect(await messages(target)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['REWARD', false],
+    ['REWARD', true],
+    ['POLL', false],
+    ['POLL', true],
+    ['POLL_OPTION', false],
+    ['POLL_OPTION', true],
+    ['GOAL', false],
+    ['GOAL', true],
+  ] as const)('protects %s allocation history (reversed-only: %s)', async (kind, reversed) => {
+    const target = await destination();
+    const owner = await prisma.donor.create({
+      data: { email: `history-${crypto.randomUUID()}@example.com` },
+    });
+    donorIds.push(owner.id);
+    const reward = await prisma.reward.create({
+      data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
+    });
+    rewardIds.push(reward.id);
+    const poll = await prisma.poll.create({
+      data: { title: 'Poll', options: { create: { label: 'A' } } },
+      include: { options: true },
+    });
+    pollIds.push(poll.id);
+    const option = poll.options[0]!;
+    const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 1000 } });
+    goalIds.push(goal.id);
+    const reversedAt = reversed ? new Date('2026-01-01') : null;
+    const claim = await prisma.rewardClaim.create({
+      data: {
+        reward_id: reward.id,
+        donor_id: owner.id,
+        status: reversed ? 'REVERSED' : 'PENDING',
+        reversed_at: reversedAt,
+      },
+    });
+    const vote = await prisma.pollVote.create({
+      data: {
+        poll_id: poll.id,
+        poll_option_id: option.id,
+        donor_id: owner.id,
+        amount_cents: 500,
+        reversed_at: reversedAt,
+      },
+    });
+    const contribution = await prisma.fundContribution.create({
+      data: { goal_id: goal.id, donor_id: owner.id, amount_cents: 500, reversed_at: reversedAt },
+    });
+    const id = { REWARD: reward.id, POLL: poll.id, POLL_OPTION: option.id, GOAL: goal.id }[kind];
+    await expect(removeIncentive(kind, id)).rejects.toMatchObject({
+      status: 409,
+      message: 'This has allocation history. Deactivate it instead.',
+    });
+    expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toEqual(reward);
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toEqual(
+      expect.objectContaining({ id: poll.id, title: 'Poll' }),
+    );
+    expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toEqual(option);
+    expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toEqual(goal);
+    expect(await prisma.rewardClaim.findUnique({ where: { id: claim.id } })).toEqual(claim);
+    expect(await prisma.pollVote.findUnique({ where: { id: vote.id } })).toEqual(vote);
+    expect(await prisma.fundContribution.findUnique({ where: { id: contribution.id } })).toEqual(
+      contribution,
+    );
+    expect(await messages(target)).toEqual([]);
+  });
+
+  it.each(['GOAL', 'POLL_OPTION'] as const)(
+    'reverses live %s allocations once, deactivates and preserves history',
+    async (kind) => {
+      const target = await destination();
+      const owner = await prisma.donor.create({
+        data: { email: `reverse-${crypto.randomUUID()}@example.com`, balance_remaining: 100 },
+      });
+      donorIds.push(owner.id);
+      const goal = await prisma.fundGoal.create({
+        data: { title: 'Goal', target_cents: 500, current_cents: 750, is_complete: true },
+      });
+      goalIds.push(goal.id);
+      const poll = await prisma.poll.create({
+        data: {
+          title: 'Poll',
+          total_votes_cents: 750,
+          options: { create: { label: 'A', votes_cents: 750 } },
+        },
+        include: { options: true },
+      });
+      pollIds.push(poll.id);
+      const option = poll.options[0]!;
+      for (const amount of [250, 500, 900]) {
+        const reversedAt = amount === 900 ? new Date('2026-01-01') : null;
+        if (kind === 'GOAL')
+          await prisma.fundContribution.create({
+            data: {
+              goal_id: goal.id,
+              donor_id: owner.id,
+              amount_cents: amount,
+              reversed_at: reversedAt,
+            },
+          });
+        else
+          await prisma.pollVote.create({
+            data: {
+              poll_id: poll.id,
+              poll_option_id: option.id,
+              donor_id: owner.id,
+              amount_cents: amount,
+              reversed_at: reversedAt,
+            },
+          });
+      }
+      const id = kind === 'GOAL' ? goal.id : option.id;
+      const results = await Promise.all([
+        reverseAndDeactivate(kind, id, 'admin'),
+        reverseAndDeactivate(kind, id, 'admin'),
+      ]);
+      expect(results).toEqual(
+        expect.arrayContaining([
+          { refunded_count: 2, refunded_cents: 750 },
+          { refunded_count: 0, refunded_cents: 0 },
+        ]),
+      );
+      expect(await prisma.donor.findUnique({ where: { id: owner.id } })).toMatchObject({
+        balance_remaining: 850,
+      });
+      expect(
+        await prisma.balanceAdjustment.findMany({
+          where: { donor_id: owner.id },
+          orderBy: { created_at: 'asc' },
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          amount_cents: 250,
+          balance_after_cents: 350,
+          type: 'REFUND',
+          created_by: 'admin',
+        }),
+        expect.objectContaining({
+          amount_cents: 500,
+          balance_after_cents: 850,
+          type: 'REFUND',
+          created_by: 'admin',
+        }),
+      ]);
+      if (kind === 'GOAL') {
+        expect(await prisma.fundGoal.findUnique({ where: { id } })).toMatchObject({
+          is_active: false,
+          is_complete: false,
+          current_cents: 0,
+        });
+        expect(await prisma.fundContribution.count({ where: { goal_id: id } })).toBe(3);
+        expect(
+          await prisma.fundContribution.count({ where: { goal_id: id, reversed_at: null } }),
+        ).toBe(0);
+        expect(await messages(target)).toEqual([
+          expect.objectContaining({
+            type: 'incentive.disabled',
+            data: { incentive_kind: 'GOAL', incentive_id: id, channel_id: null, title: 'Goal' },
+          }),
+        ]);
+      } else {
+        expect(await prisma.pollOption.findUnique({ where: { id } })).toMatchObject({
+          status: 'REJECTED',
+          votes_cents: 0,
+        });
+        expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+          total_votes_cents: 0,
+        });
+        expect(await prisma.pollVote.count({ where: { poll_option_id: id } })).toBe(3);
+        expect(
+          await prisma.pollVote.count({ where: { poll_option_id: id, reversed_at: null } }),
+        ).toBe(0);
+        expect(await messages(target)).toEqual([]);
+      }
+      await expect(removeIncentive(kind, id)).rejects.toMatchObject({ status: 409 });
+    },
+  );
+
+  it.each(['GOAL', 'POLL_OPTION'] as const)(
+    'rolls back %s reversals if deactivation fails',
+    async (kind) => {
+      const target = await destination();
+      const owner = await prisma.donor.create({
+        data: { email: `rollback-${crypto.randomUUID()}@example.com`, balance_remaining: 100 },
+      });
+      donorIds.push(owner.id);
+      const goal = await prisma.fundGoal.create({
+        data: { title: 'Goal', target_cents: 500, current_cents: 500 },
+      });
+      goalIds.push(goal.id);
+      const poll = await prisma.poll.create({
+        data: {
+          title: 'Poll',
+          total_votes_cents: 500,
+          options: { create: { label: 'A', votes_cents: 500 } },
+        },
+        include: { options: true },
+      });
+      pollIds.push(poll.id);
+      const option = poll.options[0]!;
+      const contribution = await prisma.fundContribution.create({
+        data: { goal_id: goal.id, donor_id: owner.id, amount_cents: 500 },
+      });
+      const vote = await prisma.pollVote.create({
+        data: {
+          poll_id: poll.id,
+          poll_option_id: option.id,
+          donor_id: owner.id,
+          amount_cents: 500,
+        },
+      });
+      await prisma.$executeRawUnsafe(
+        kind === 'GOAL'
+          ? `CREATE TRIGGER fail_lifecycle_deactivation BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${target}' AND NEW.event_type = 'incentive.disabled' BEGIN SELECT RAISE(ABORT, 'forced failure'); END`
+          : `CREATE TRIGGER fail_lifecycle_deactivation BEFORE UPDATE ON PollOption WHEN NEW.id = '${option.id}' AND NEW.status = 'REJECTED' BEGIN SELECT RAISE(ABORT, 'forced failure'); END`,
+      );
+      await expect(
+        reverseAndDeactivate(kind, kind === 'GOAL' ? goal.id : option.id, 'admin'),
+      ).rejects.toMatchObject({ code: 'P2003' });
+      expect(await prisma.donor.findUnique({ where: { id: owner.id } })).toMatchObject({
+        balance_remaining: 100,
+      });
+      expect(await prisma.balanceAdjustment.count({ where: { donor_id: owner.id } })).toBe(0);
+      expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toEqual(goal);
+      expect(await prisma.pollOption.findUnique({ where: { id: option.id } })).toEqual(option);
+      expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+        total_votes_cents: 500,
+      });
+      expect(await prisma.fundContribution.findUnique({ where: { id: contribution.id } })).toEqual(
+        contribution,
+      );
+      expect(await prisma.pollVote.findUnique({ where: { id: vote.id } })).toEqual(vote);
+      expect(await messages(target)).toEqual([]);
+    },
+  );
+
+  it.each(['REWARD', 'POLL', 'GOAL'] as const)(
+    'concurrent %s updates compare the committed prior state and publish each change once',
+    async (kind) => {
+      const target = await destination();
+      const reward = await prisma.reward.create({
+        data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
+      });
+      rewardIds.push(reward.id);
+      const poll = await prisma.poll.create({ data: { title: 'Poll' } });
+      pollIds.push(poll.id);
+      const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 1000 } });
+      goalIds.push(goal.id);
+      const update = () =>
+        kind === 'REWARD'
+          ? updateReward(reward.id, { is_active: false, cost_cents: 700 })
+          : kind === 'POLL'
+            ? updatePoll(poll.id, { is_active: false, ends_at: new Date('2026-12-01') })
+            : updateGoal(goal.id, { is_active: false, target_cents: 2000 });
+      await Promise.all([update(), update()]);
+      expect((await messages(target)).map((message) => message.type)).toEqual([
+        'incentive.disabled',
+        'incentive.value_changed',
+      ]);
+    },
+  );
+
+  it('deactivation alone preserves live votes and contributions without crediting the wallet', async () => {
+    const owner = await prisma.donor.create({
+      data: { email: `deactivate-${crypto.randomUUID()}@example.com`, balance_remaining: 100 },
+    });
+    donorIds.push(owner.id);
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'Goal', target_cents: 500, current_cents: 500, is_complete: true },
+    });
+    goalIds.push(goal.id);
+    const poll = await prisma.poll.create({
+      data: {
+        title: 'Poll',
+        total_votes_cents: 500,
+        options: { create: { label: 'A', votes_cents: 500 } },
+      },
+      include: { options: true },
+    });
+    pollIds.push(poll.id);
+    const contribution = await prisma.fundContribution.create({
+      data: { goal_id: goal.id, donor_id: owner.id, amount_cents: 500 },
+    });
+    const vote = await prisma.pollVote.create({
+      data: {
+        poll_id: poll.id,
+        poll_option_id: poll.options[0]!.id,
+        donor_id: owner.id,
+        amount_cents: 500,
+      },
+    });
+    await updateGoal(goal.id, { is_active: false });
+    await updatePoll(poll.id, { is_active: false });
+    expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
+      is_active: false,
+      current_cents: 500,
+      is_complete: true,
+    });
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+      is_active: false,
+      total_votes_cents: 500,
+    });
+    expect(await prisma.pollOption.findUnique({ where: { id: poll.options[0]!.id } })).toEqual(
+      poll.options[0],
+    );
+    expect(await prisma.fundContribution.findUnique({ where: { id: contribution.id } })).toEqual(
+      contribution,
+    );
+    expect(await prisma.pollVote.findUnique({ where: { id: vote.id } })).toEqual(vote);
+    expect(await prisma.donor.findUnique({ where: { id: owner.id } })).toMatchObject({
+      balance_remaining: 100,
+    });
+    expect(await prisma.balanceAdjustment.count({ where: { donor_id: owner.id } })).toBe(0);
+  });
+
+  it.each(['REWARD', 'POLL', 'GOAL'] as const)(
+    'rolls back %s creation when the outbox write fails',
+    async (kind) => {
+      const target = await destination();
+      const title = `Failed ${crypto.randomUUID()}`;
+      await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_lifecycle_delivery BEFORE INSERT ON WebhookDelivery
+      WHEN NEW.destination_id = '${target}' BEGIN SELECT RAISE(ABORT, 'forced delivery failure'); END`);
+      const create =
+        kind === 'REWARD'
+          ? createReward({ title, type: 'DIGITAL', cost_cents: 500 })
+          : kind === 'POLL'
+            ? createPoll({ title, options: { create: { label: title } } })
+            : createGoal({ title, target_cents: 1000 });
+      await expect(create).rejects.toMatchObject({ code: 'P2003' });
+      expect(await prisma.reward.count({ where: { title } })).toBe(0);
+      expect(await prisma.poll.count({ where: { title } })).toBe(0);
+      expect(await prisma.pollOption.count({ where: { label: title } })).toBe(0);
+      expect(await prisma.fundGoal.count({ where: { title } })).toBe(0);
+      expect(await messages(target)).toEqual([]);
+    },
+  );
+
+  it('creates a reward and queues its committed values', async () => {
+    const target = await destination();
+    const reward = await createReward({
+      title: `Reward ${crypto.randomUUID()}`,
+      type: 'DIGITAL',
+      cost_cents: 500,
+      is_active: false,
+    });
+    rewardIds.push(reward.id);
+    expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+      cost_cents: 500,
+      is_active: false,
+    });
+    expect(await messages(target)).toEqual([
+      expect.objectContaining({
+        type: 'incentive.created',
+        data: {
+          incentive_kind: 'REWARD',
+          incentive_id: reward.id,
+          channel_id: null,
+          title: reward.title,
+          is_active: false,
+          cost_cents: 500,
+        },
+      }),
+    ]);
+  });
+});
