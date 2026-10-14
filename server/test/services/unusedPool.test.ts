@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
+import { readDonationAccountingTx } from '../../services/poolAccounting.js';
 import {
   assignUnusedTx,
   listUnusedTx,
@@ -301,6 +302,39 @@ it('rejects stale/concurrent assignments without overspending and filters eligib
   expect(
     (await prisma.poll.findUniqueOrThrow({ where: { id: f.poll.id } })).total_votes_cents,
   ).toBe(37);
+});
+
+it('terminal sources never convert their retained raw reservation into Unused', async () => {
+  const f = await fixture(100);
+  const prior = await prisma.pollVote.create({
+    data: {
+      donor_id: f.donor.id,
+      donation_id: f.donation.id,
+      poll_id: f.poll.id,
+      poll_option_id: f.poll.options[0]!.id,
+      amount_cents: 70,
+      reversed_at: new Date(),
+    },
+  });
+  await prisma.poolCredit.create({
+    data: {
+      donation_id: f.donation.id,
+      category: 'poll',
+      amount_cents: 70,
+      remaining_cents: 70,
+      source_vote_id: prior.id,
+      created_by: 'admin',
+    },
+  });
+  await prisma.donation.update({ where: { id: f.donation.id }, data: { status: 'REFUNDED' } });
+  await prisma.event.update({ where: { id: f.event.id }, data: { ended_at: new Date() } });
+  const state = await prisma.$transaction((tx) => readDonationAccountingTx(tx, f.donation.id));
+  expect(state.pools.poll).toMatchObject({
+    unused_cents: 0,
+    pool_credit_cents: 0,
+    outstanding_credit_cents: 70,
+    used_cents: 70,
+  });
 });
 
 it('assigns converted credit after end exactly once even though raw grants survive', async () => {

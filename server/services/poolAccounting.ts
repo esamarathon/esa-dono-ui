@@ -24,7 +24,7 @@ export function computePoolAccounting(input: PoolAccountingInput) {
     const creditAvailable = pooled && ['COMPLETED', 'REFUNDED'].includes(input.status);
     // Poll/goal raw grants survive end for Undo end, but stop reserving the
     // assignment budget. Subtract live assignments BEFORE clamping at zero.
-    const reserved = input.event_ended && key !== 'reward' ? 0 : outstanding;
+    const reserved = active && input.event_ended && key !== 'reward' ? 0 : outstanding;
     const unused =
       active && key !== 'reward'
         ? Math.max(
