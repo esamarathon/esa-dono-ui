@@ -19,6 +19,7 @@ const polls: string[] = [];
 const goals: string[] = [];
 const destinations: string[] = [];
 const events: string[] = [];
+const blockedWords: string[] = [];
 
 async function deliveryDestinations() {
   const native = await prisma.webhookDestination.create({
@@ -55,6 +56,7 @@ afterEach(async () => {
   const donorIds = donors.map((donor) => donor.id);
   await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS intake_reject_delivery');
   await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS pooled_reject_vote');
+  await prisma.blockedWord.deleteMany({ where: { id: { in: blockedWords } } });
   await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinations } } });
   await prisma.webhookDestinationSeq.deleteMany({
     where: { destination_id: { in: destinations } },
@@ -78,7 +80,7 @@ afterEach(async () => {
   await prisma.poll.deleteMany({ where: { id: { in: polls } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goals } } });
   emails.length = channels.length = rewards.length = pledges.length = 0;
-  polls.length = goals.length = destinations.length = events.length = 0;
+  polls.length = goals.length = destinations.length = events.length = blockedWords.length = 0;
 });
 afterAll(() => prisma.$disconnect());
 afterEach(() => vi.unstubAllEnvs());
@@ -187,6 +189,121 @@ describe('Donation intake on SQLite', () => {
       ).toContainEqual(expect.objectContaining({ goal_id: inactive.id }));
     },
   );
+  it.each([
+    { change: 'label limit', remaining: true },
+    { change: 'label limit', remaining: false },
+    { change: 'blocked word', remaining: true },
+    { change: 'blocked word', remaining: false },
+  ])(
+    'a live $change change redistributes or reserves the full poll Pool (other selection: $remaining)',
+    async ({ change, remaining }) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      emails.push(email);
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const custom = await prisma.poll.create({
+        data: { title: 'Write-in', allow_custom_entries: true, max_entry_chars: 60 },
+      });
+      const active = await prisma.poll.create({
+        data: { title: 'Other choice', options: { create: [{ label: 'A' }] } },
+        include: { options: true },
+      });
+      polls.push(custom.id, active.id);
+      const word = `word${crypto.randomUUID().replaceAll('-', '')}`;
+      const selections = [
+        {
+          kind: 'POLL_CUSTOM' as const,
+          target_id: custom.id,
+          poll_id: custom.id,
+          amount_cents: 100,
+          insertion_order: 0,
+          data: { label: `Original ${word.toUpperCase()}` },
+        },
+        ...(remaining
+          ? [
+              {
+                kind: 'POLL_VOTE' as const,
+                target_id: active.options[0]!.id,
+                poll_id: active.id,
+                amount_cents: 200,
+                insertion_order: 1,
+              },
+            ]
+          : []),
+      ];
+      const { pledge_token } = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        channel_id: channel.id,
+        items: selections,
+        plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+      });
+      pledges.push(pledge_token);
+      if (change === 'label limit')
+        await prisma.poll.update({ where: { id: custom.id }, data: { max_entry_chars: 3 } });
+      else {
+        const blocked = await prisma.blockedWord.create({ data: { word } });
+        blockedWords.push(blocked.id);
+      }
+      const { native, tiltify } = await deliveryDestinations();
+      const facts = {
+        source: 'stripe' as const,
+        externalId: crypto.randomUUID(),
+        email,
+        donorName: 'Reader',
+        amountCents: 1000,
+        pledgeToken: pledge_token,
+      };
+      const result = await intakeDonation(facts);
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toMatchObject({ totalSpent: remaining ? 1000 : 0, skipped: 1 });
+      expect(result.donation).toMatchObject({
+        amount_cents: 1000,
+        pledge_amount_cents: 1000,
+        wallet_credit_granted_cents: 0,
+      });
+      expect(
+        await prisma.pollVote.findMany({
+          where: { donation_id: result.donation.id },
+          orderBy: { amount_cents: 'asc' },
+        }),
+      ).toMatchObject(
+        remaining
+          ? [
+              { poll_id: active.id, amount_cents: 200, source: 'donor' },
+              { poll_id: active.id, amount_cents: 800, source: 'auto' },
+            ]
+          : [],
+      );
+      expect(await prisma.poolCredit.count({ where: { donation_id: result.donation.id } })).toBe(0);
+      expect(await prisma.pollCustomEntry.count({ where: { poll_id: custom.id } })).toBe(0);
+      expect(await prisma.poll.findUnique({ where: { id: active.id } })).toMatchObject({
+        total_votes_cents: remaining ? 1000 : 0,
+      });
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: result.donation.id,
+      });
+      expect(await intakeDonation(facts)).toEqual({ duplicate: true });
+      expect(await prisma.donor.findUnique({ where: { id: result.donor.id } })).toMatchObject({
+        total_donated: 1000,
+        balance_remaining: 0,
+      });
+      expect(await prisma.donation.count({ where: { donor_id: result.donor.id } })).toBe(1);
+      expect(await deliveries(native.id)).toHaveLength(1);
+      const queued = await deliveries(tiltify.id);
+      expect(queued.map((row) => row.message_type)).toEqual([
+        'tiltify.donation',
+        'tiltify.fact.updated',
+        'tiltify.fact.updated',
+      ]);
+      expect(JSON.parse(queued[0]!.payload).poll_votes).toEqual(
+        remaining ? [{ poll_id: active.id, poll_option_id: active.options[0]!.id }] : [],
+      );
+      expect(sendMagicLink).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('redistributes freed poll/goal funding across the remaining choices, including a pending write-in', async () => {
     const email = `${crypto.randomUUID()}@example.com`;
     emails.push(email);

@@ -5,7 +5,13 @@ import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
 import { withWebhooks } from './webhooks/outbox.js';
 import { resolveDonationRoute } from './routing.js';
 import { withSpan } from '../lib/tracing.js';
-import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
+import {
+  claimRewardTx,
+  votePollTx,
+  contributeGoalTx,
+  proposeCustomEntryTx,
+  customEntryTextErrorTx,
+} from './spend.js';
 import { planPledge, type PledgePlan, type PledgeItemKind } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 
@@ -313,7 +319,13 @@ async function fulfillPooledPledge(
           const option = await tx.pollOption.findUnique({ where: { id: item.target_id } });
           valid =
             valid && !!option && option.poll_id === item.poll_id && option.status !== 'REJECTED';
-        } else valid = valid && !!poll?.allow_custom_entries;
+        } else {
+          valid = valid && !!poll?.allow_custom_entries;
+          if (valid && poll) {
+            const label = JSON.parse(item.data!).label.trim();
+            valid = !!label && !(await customEntryTextErrorTx(tx, label, poll.max_entry_chars));
+          }
+        }
       }
       if (valid) eligible.push(group);
       else {

@@ -197,7 +197,14 @@ export async function votePollTx(
   return { cost: cents };
 }
 
-async function checkBlockedWordsTx(tx: Tx, text: string): Promise<string | null> {
+/** Shared live text policy for eligibility classification and funded write-ins. */
+export async function customEntryTextErrorTx(
+  tx: Tx,
+  text: string,
+  maxEntryChars: number | null,
+): Promise<string | null> {
+  if (maxEntryChars && text.length > maxEntryChars)
+    return `Entry exceeds maximum of ${maxEntryChars} characters`;
   const blockedWords = await tx.blockedWord.findMany();
   const words = new Set(text.toLowerCase().match(/\b\w+\b/g) || []);
   for (const blocked of blockedWords) {
@@ -224,10 +231,8 @@ export async function proposeCustomEntryTx(
   if (!poll || !poll.is_active) throw httpError(404, 'Poll not found or inactive');
   if (!poll.allow_custom_entries) throw httpError(400, 'This poll does not allow custom entries');
   if (poll.ends_at && new Date() >= poll.ends_at) throw httpError(400, 'Poll has ended');
-  if (poll.max_entry_chars && trimmed.length > poll.max_entry_chars)
-    throw httpError(400, `Entry exceeds maximum of ${poll.max_entry_chars} characters`);
-  const blockedError = await checkBlockedWordsTx(tx, trimmed);
-  if (blockedError) throw httpError(400, blockedError);
+  const textError = await customEntryTextErrorTx(tx, trimmed, poll.max_entry_chars);
+  if (textError) throw httpError(400, textError);
   await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
   const autoApprove = poll.auto_approve;
   const optionStatus = autoApprove ? 'ACTIVE' : 'PENDING_APPROVAL';
