@@ -298,16 +298,17 @@ router.post(
 router.get(
   '/payment-refunds',
   handle('[admin/payment-refunds]', async (req, res) => {
+    const { status, donation_id } = req.query;
     if (
-      (req.query.status !== undefined && typeof req.query.status !== 'string') ||
-      (req.query.donation_id !== undefined && typeof req.query.donation_id !== 'string')
+      (status !== undefined && typeof status !== 'string') ||
+      (donation_id !== undefined && typeof donation_id !== 'string')
     )
       return res.status(400).json({ error: 'Invalid Payment refund filter' });
     res.json(
       await prisma.$transaction((tx) =>
         listPaymentRefundsTx(tx, {
-          status: req.query.status as string | undefined,
-          donation_id: req.query.donation_id as string | undefined,
+          status,
+          donation_id,
           offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
           limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
         }),

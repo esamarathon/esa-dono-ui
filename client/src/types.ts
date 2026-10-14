@@ -56,6 +56,7 @@ export interface RewardSummary {
 export interface RewardClaim {
   id: string;
   status: string;
+  amount_cents: number;
   claim_data?: unknown;
   created_at?: string;
   reward: RewardSummary;
@@ -600,6 +601,16 @@ export interface PaymentRefundShrink {
   pledge_after_cents: number;
   wallet_applied_cents: number;
   failed_payment_wallet_credit_cents: number;
+  affected_targets: {
+    category: 'poll' | 'goal';
+    target_id: string;
+    poll_id: string | null;
+    label: string;
+    before_cents: number;
+    after_cents: number;
+    ended: boolean;
+    completed: boolean;
+  }[];
   categories: Record<
     'reward' | 'poll' | 'goal',
     {

@@ -57,7 +57,7 @@ export async function previewPoolShrinkTx(
     });
   const votes = await tx.pollVote.findMany({
     where: { donation_id: donationId, reversed_at: null },
-    include: { poll: true, credit_redemptions: true },
+    include: { poll: true, poll_option: true, credit_redemptions: true },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
   });
   const contributions = await tx.fundContribution.findMany({
@@ -179,6 +179,45 @@ export async function previewPoolShrinkTx(
       reduced_cents: reduction,
     };
   }
+  const targets = new Map<
+    string,
+    {
+      category: 'poll' | 'goal';
+      target_id: string;
+      poll_id: string | null;
+      label: string;
+      before_cents: number;
+      after_cents: number;
+      ended: boolean;
+      completed: boolean;
+    }
+  >();
+  for (const component of components) {
+    const reduction = component.before_cents - component.after_cents;
+    if (!reduction || component.kind === 'credit' || component.category === 'reward') continue;
+    const key = `${component.category}:${component.target_id}`;
+    const vote =
+      component.category === 'poll'
+        ? votes.find((row) => row.id === component.allocation_id)
+        : undefined;
+    const contribution =
+      component.category === 'goal'
+        ? contributions.find((row) => row.id === component.allocation_id)
+        : undefined;
+    const before = vote?.poll_option.votes_cents ?? contribution!.goal.current_cents;
+    const target = targets.get(key) ?? {
+      category: component.category,
+      target_id: component.target_id!,
+      poll_id: vote?.poll_id ?? null,
+      label: vote ? `${vote.poll.title}: ${vote.poll_option.label}` : contribution!.goal.title,
+      before_cents: before,
+      after_cents: before,
+      ended: component.ended,
+      completed: component.completed,
+    };
+    if (!vote || vote.poll_option.status === 'ACTIVE') target.after_cents -= reduction;
+    targets.set(key, target);
+  }
   return {
     donation_id: donationId,
     claim_id: claimId,
@@ -190,6 +229,7 @@ export async function previewPoolShrinkTx(
     failed_payment_wallet_credit_cents: state.failed_payment_wallet_credit_cents,
     categories,
     components,
+    affected_targets: [...targets.values()],
   };
 }
 

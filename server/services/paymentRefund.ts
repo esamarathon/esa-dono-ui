@@ -4,6 +4,7 @@ import { httpError } from '../lib/httpError.js';
 import { withWebhooks } from './webhooks/outbox.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { previewPoolShrinkTx, applyPoolShrinkTx } from './paymentRefundShrink.js';
+import { readRewardFundingTx } from './rewardFunding.js';
 import {
   createPaymentRefund,
   listPaymentRefunds,
@@ -77,7 +78,6 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
     where: { id: claimId },
     include: {
       reward: true,
-      credit_redemptions: { select: { id: true } },
       donation: {
         include: {
           event: true,
@@ -96,8 +96,9 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
   });
   if (!claim) throw httpError(404, 'Claim not found');
   const donation = claim.donation;
+  const funding = await readRewardFundingTx(tx, claim);
   const reason =
-    claim.credit_redemptions.length || !donation
+    funding.redemption_backed || !donation
       ? 'Only a directly funded physical claim is eligible'
       : donation.pledge_amount_cents === null
         ? 'A pledge amount is required; legacy refunds are handled outside the app'
@@ -385,7 +386,8 @@ export type PaymentRefundShippingResolution = 'RETURNED_OUTSIDE_APP' | 'KEPT_BY_
 
 export async function resolvePaymentRefundItem(id: string, resolution: unknown, actor: string) {
   if (
-    !['RETURNED_OUTSIDE_APP', 'WALLET_CREDIT', 'SETTLED_BY_DISPUTE'].includes(String(resolution)) ||
+    typeof resolution !== 'string' ||
+    !['RETURNED_OUTSIDE_APP', 'WALLET_CREDIT', 'SETTLED_BY_DISPUTE'].includes(resolution) ||
     !actor
   )
     throw httpError(400, 'Invalid item resolution or actor');
@@ -452,7 +454,11 @@ export async function resolvePaymentRefundItem(id: string, resolution: unknown, 
 }
 
 export async function resolvePaymentRefundShipping(id: string, resolution: unknown, actor: string) {
-  if (!['RETURNED_OUTSIDE_APP', 'KEPT_BY_AGREEMENT'].includes(String(resolution)) || !actor)
+  if (
+    typeof resolution !== 'string' ||
+    !['RETURNED_OUTSIDE_APP', 'KEPT_BY_AGREEMENT'].includes(resolution) ||
+    !actor
+  )
     throw httpError(400, 'Invalid shipping resolution or actor');
   return prisma.$transaction(async (tx) => {
     await lock(tx);

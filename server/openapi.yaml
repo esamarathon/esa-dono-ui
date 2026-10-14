@@ -166,6 +166,117 @@ paths:
         '403':
           description: Account frozen
 
+  /donor/pool-credits:
+    get:
+      tags: [Donor]
+      summary: Combined category Pool credit per Event, with separate available Wallet credit
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
+      responses:
+        '200':
+          description: Safe current summaries; no actor, email, claim answers or source selection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [wallet_credit_cents, events]
+                properties:
+                  wallet_credit_cents: { type: integer, minimum: 0 }
+                  events:
+                    { type: array, items: { $ref: '#/components/schemas/CreditEventSummary' } }
+        '401': { description: Missing or invalid donor session }
+        '403': { description: Frozen donor }
+  /donor/pool-credits/{eventId}:
+    get:
+      tags: [Donor]
+      summary: Safe Pool credit catalog and source history for one Event
+      description: Includes any open own-Event Channel or shared incentive, never physical rewards. Positive unspendable credit remains visible with a reason. Ended reward credit expires; ended poll/goal credit is derived Unused pool money. Choices are not stored here.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: eventId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Category credit, catalog and immutable source/redemption history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreditEvent' }
+        '401': { description: Missing or invalid donor session }
+        '403': { description: Frozen donor }
+        '404': { description: Event not found }
+  /donor/pool-credits/{eventId}/apply:
+    post:
+      tags: [Donor]
+      summary: Atomically apply one reviewed Pool credit batch
+      description: |
+        Any positive poll/goal cents and whole nonphysical reward units at current price/stock.
+        Combined category budgets must match the reviewed totals. Partial spending is allowed;
+        no auto-allocation or Wallet debit. Sources are drawn oldest donation (created_at/id),
+        then oldest grant (created_at/id). A reward is ONE entitlement per unit, even when
+        funded by several donations. Allocation and outbox writes commit or roll back together.
+        Same donor/key/request retries return the original result BEFORE live comparison.
+        Same key with different request/Event returns 409. Every affected source is published.
+      security: [{ DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: eventId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idempotency_key, reviewed_credit_cents, selections]
+              properties:
+                idempotency_key: { type: string, minLength: 1, maxLength: 200 }
+                reviewed_credit_cents: { $ref: '#/components/schemas/PoolAmounts' }
+                selections:
+                  {
+                    type: array,
+                    minItems: 1,
+                    maxItems: 100,
+                    items: { $ref: '#/components/schemas/CreditSelection' },
+                  }
+      responses:
+        '200':
+          description: Original committed batch result, including replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  [batch_id, spent_cents, claim_ids, vote_ids, contribution_ids, donation_ids]
+                properties:
+                  batch_id: { type: string }
+                  spent_cents: { $ref: '#/components/schemas/PoolAmounts' }
+                  claim_ids:
+                    {
+                      type: array,
+                      items: { type: string },
+                      description: One id per whole reward unit,
+                    }
+                  vote_ids: { type: array, items: { type: string } }
+                  contribution_ids: { type: array, items: { type: string } }
+                  donation_ids:
+                    {
+                      type: array,
+                      items: { type: string },
+                      description: Financial sources,
+                      not changed routing,
+                    }
+        '400':
+          {
+            description: Invalid key,
+            duplicate target,
+            invalid category or nonpositive/noninteger allocation,
+          }
+        '401': { description: Missing or invalid donor session }
+        '403': { description: Frozen donor }
+        '404': { description: Event not found }
+        '409':
+          description: Reviewed credit/target/price/stock changed, wrong Event, physical reward, ended Event, unavailable or REQUESTED source, or reused key with different request. Nothing applied; refresh and reconfirm.
+          content:
+            application/json:
+              schema: { type: object, required: [error], properties: { error: { type: string } } }
+        '429': { description: Spend rate limit }
+
   # ─── Auth ───
   /auth/request-token:
     post:
@@ -4179,6 +4290,20 @@ components:
         pledge_after_cents: { type: integer }
         wallet_applied_cents: { type: integer }
         failed_payment_wallet_credit_cents: { type: integer }
+        affected_targets:
+          type: array
+          description: Aggregated target progress before/after including safe labels, ended polls and completed goals. Pending-option funding does not lower its public tally.
+          items:
+            type: object
+            properties:
+              category: { type: string, enum: [poll, goal] }
+              target_id: { type: string }
+              poll_id: { type: string, nullable: true }
+              label: { type: string }
+              before_cents: { type: integer }
+              after_cents: { type: integer }
+              ended: { type: boolean }
+              completed: { type: boolean }
         categories:
           type: object
           additionalProperties:
@@ -4204,6 +4329,197 @@ components:
               completed: { type: boolean }
               reduced_before_cents: { type: integer }
               reduced_after_cents: { type: integer }
+    CreditEventSummary:
+      type: object
+      required: [event, outstanding_cents, available_cents, reasons]
+      properties:
+        event:
+          type: object
+          required: [id, name, slug, ended_at]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            slug: { type: string }
+            ended_at: { type: string, format: date-time, nullable: true }
+        outstanding_cents: { $ref: '#/components/schemas/PoolAmounts' }
+        available_cents: { $ref: '#/components/schemas/PoolAmounts' }
+        reasons:
+          type: object
+          required: [reward, poll, goal]
+          properties:
+            reward: { type: string, nullable: true }
+            poll: { type: string, nullable: true }
+            goal: { type: string, nullable: true }
+    CreditCatalogTarget:
+      type: object
+      required: [id, title, channel]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        channel:
+          type: object
+          nullable: true
+          required: [id, name, slug]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            slug: { type: string }
+    CreditEvent:
+      allOf:
+        - { $ref: '#/components/schemas/CreditEventSummary' }
+        - type: object
+          required: [catalog, history]
+          properties:
+            catalog:
+              type: object
+              required: [rewards, polls, goals]
+              properties:
+                rewards:
+                  type: array
+                  items:
+                    allOf:
+                      - { $ref: '#/components/schemas/CreditCatalogTarget' }
+                      - type: object
+                        required: [cost_cents, type, remaining]
+                        properties:
+                          cost_cents: { type: integer, minimum: 1 }
+                          type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
+                          remaining: { type: integer, minimum: 1, nullable: true }
+                polls:
+                  type: array
+                  items:
+                    allOf:
+                      - { $ref: '#/components/schemas/CreditCatalogTarget' }
+                      - type: object
+                        required: [options, total_votes_cents]
+                        properties:
+                          total_votes_cents: { type: integer, minimum: 0 }
+                          options:
+                            type: array
+                            items:
+                              type: object
+                              required: [id, label, votes_cents]
+                              properties:
+                                id: { type: string }
+                                label: { type: string }
+                                votes_cents: { type: integer, minimum: 0 }
+                goals:
+                  type: array
+                  items:
+                    allOf:
+                      - { $ref: '#/components/schemas/CreditCatalogTarget' }
+                      - type: object
+                        required: [current_cents, target_cents]
+                        properties:
+                          current_cents: { type: integer }
+                          target_cents: { type: integer }
+            history:
+              type: array
+              items:
+                type: object
+                required:
+                  [
+                    id,
+                    donation_id,
+                    category,
+                    amount_cents,
+                    remaining_cents,
+                    created_at,
+                    cleared_at,
+                    origin,
+                    redemptions,
+                  ]
+                properties:
+                  id: { type: string }
+                  donation_id: { type: string }
+                  category: { type: string, enum: [reward, poll, goal] }
+                  amount_cents: { type: integer, minimum: 1 }
+                  remaining_cents: { type: integer, minimum: 0 }
+                  created_at: { type: string, format: date-time }
+                  cleared_at: { type: string, format: date-time, nullable: true }
+                  origin:
+                    type: object
+                    required: [kind, id, title]
+                    properties:
+                      kind: { type: string, enum: [claim, vote, contribution] }
+                      id: { type: string }
+                      title: { type: string }
+                  redemptions:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        [
+                          id,
+                          amount_cents,
+                          reduced_cents,
+                          effective_cents,
+                          created_at,
+                          allocation_id,
+                          reversed,
+                        ]
+                      properties:
+                        id: { type: string }
+                        amount_cents:
+                          { type: integer, minimum: 1, description: Original immutable consumption }
+                        reduced_cents:
+                          {
+                            type: integer,
+                            minimum: 0,
+                            description: Audited Payment-refund reduction,
+                          }
+                        effective_cents:
+                          {
+                            type: integer,
+                            minimum: 0,
+                            description: Original consumption minus reduction; the only restorable funding,
+                          }
+                        created_at: { type: string, format: date-time }
+                        allocation_id: { type: string }
+                        reversed: { type: boolean }
+    CreditSelection:
+      oneOf:
+        - type: object
+          required: [kind, target_id, quantity, unit_price_cents, reward_type]
+          properties:
+            kind: { type: string, enum: [REWARD] }
+            target_id: { type: string }
+            quantity: { type: integer, minimum: 1, maximum: 1000 }
+            unit_price_cents: { type: integer, minimum: 1 }
+            reward_type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
+        - type: object
+          required: [kind, target_id, poll_id, amount_cents]
+          properties:
+            kind: { type: string, enum: [POLL_VOTE] }
+            target_id: { type: string }
+            poll_id: { type: string }
+            amount_cents: { type: integer, minimum: 1 }
+        - type: object
+          required: [kind, target_id, amount_cents]
+          properties:
+            kind: { type: string, enum: [GOAL] }
+            target_id: { type: string }
+            amount_cents: { type: integer, minimum: 1 }
+    NativeRewardAllocation:
+      type: object
+      description: Safe native donation.created/updated allocation. Credit-funded whole claims appear source-locally; amount_cents is ONLY this donation's financial share. Count entitlement id once. Tiltify carries quantity 1 only under the stable oldest-source carrier. No email, actor or claim answers.
+      required: [id, reward_id, amount_cents, status, source]
+      properties:
+        id: { type: string }
+        reward_id: { type: string }
+        amount_cents: { type: integer }
+        status: { type: string }
+        source: { type: string, enum: [donor] }
+        entitlement_amount_cents:
+          {
+            type: integer,
+            description: Full recorded unit price; present for redemption-backed claims,
+          }
+        carrier_donation_id:
+          {
+            type: string,
+            description: Stable oldest funding source; present for redemption-backed claims,
+          }
     PoolAmounts:
       type: object
       required: [reward, poll, goal]

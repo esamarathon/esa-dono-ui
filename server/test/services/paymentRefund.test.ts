@@ -26,6 +26,8 @@ import {
   resolvePaymentRefundShipping,
 } from '../../services/paymentRefund.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
+import { applyPoolCreditTx, readPoolCreditEventTx } from '../../services/poolCredit.js';
+import { readRewardFundingTx } from '../../services/rewardFunding.js';
 
 const stripe = vi.hoisted(() => ({
   createPaymentRefund: vi.fn(),
@@ -815,26 +817,106 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
         donation_id: f.donation.id,
         category: 'reward',
         amount_cents: 300,
-        remaining_cents: 0,
+        remaining_cents: 300,
         source_claim_id: origin.id,
         created_by: 'admin',
       },
     });
-    const batch = await prisma.poolCreditBatch.create({
+    await prisma.pendingPledge.create({
       data: {
-        donor_id: f.donor.id,
-        event_id: f.event.id,
-        idempotency_key: crypto.randomUUID(),
-        request_data: '{}',
+        pledge_token: crypto.randomUUID(),
+        format: 'POOLED',
+        draft_id: crypto.randomUUID(),
+        confirmed_plan: '{}',
+        pledge_amount_cents: 1000,
+        new_money_cents: 1000,
+        fulfilled_by_donation_id: f.donation.id,
+        status: 'FULFILLED',
+        expires_at: new Date(),
+        items: {
+          create: {
+            kind: 'REWARD',
+            target_id: f.reward.id,
+            amount_cents: 300,
+            unit_price_cents: 300,
+            confirmed_reward_type: 'PHYSICAL',
+          },
+        },
       },
     });
-    await prisma.poolCreditRedemption.create({
-      data: { credit_id: grant.id, batch_id: batch.id, amount_cents: 300, claim_id: f.claim.id },
+    await prisma.reward.update({
+      where: { id: f.reward.id },
+      data: { type: 'DIGITAL', cost_cents: 300 },
+    });
+    const applied = await withWebhooks((tx, _emit, pub) =>
+      applyPoolCreditTx(
+        tx,
+        f.donor.id,
+        f.event.id,
+        {
+          idempotency_key: crypto.randomUUID(),
+          reviewed_credit_cents: { reward: 300, poll: 0, goal: 0 },
+          selections: [
+            {
+              kind: 'REWARD',
+              target_id: f.reward.id,
+              quantity: 1,
+              unit_price_cents: 300,
+              reward_type: 'DIGITAL',
+            },
+          ],
+        },
+        pub,
+      ),
+    );
+    const creditClaim = await prisma.rewardClaim.findUniqueOrThrow({
+      where: { id: applied.claim_ids[0]! },
+    });
+    await prisma.reward.update({ where: { id: f.reward.id }, data: { type: 'PHYSICAL' } });
+    expect(
+      await prisma.$transaction((tx) => previewPaymentRefundTx(tx, creditClaim.id)),
+    ).toMatchObject({
+      eligible: false,
+      reason: 'Only a directly funded physical claim is eligible',
     });
     expect(await prisma.$transaction((tx) => previewPaymentRefundTx(tx, f.claim.id))).toMatchObject(
-      { eligible: false, reason: 'Only a directly funded physical claim is eligible' },
+      { eligible: true, shipping_cents: 200 },
     );
-    await expect(requestPaymentRefund(f.claim.id, 'admin')).rejects.toMatchObject({ status: 409 });
+    await expect(requestPaymentRefund(creditClaim.id, 'admin')).rejects.toMatchObject({
+      status: 409,
+    });
+    // Populated historical effective funding: whole entitlement and immutable consumption remain 300.
+    await prisma.poolCreditRedemption.updateMany({
+      where: { claim_id: creditClaim.id },
+      data: { reduced_cents: 100 },
+    });
+    const funding = await prisma.$transaction((tx) => readRewardFundingTx(tx, creditClaim));
+    expect(funding.source_cents.get(f.donation.id)).toBe(200);
+    expect(funding.components).toMatchObject([
+      { amount_cents: 300, reduced_cents: 100, effective_cents: 200 },
+    ]);
+    const accounting = await prisma.$transaction((tx) =>
+      readDonationAccountingTx(tx, f.donation.id),
+    );
+    expect(accounting.allocations.reward).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: creditClaim.id,
+          amount_cents: 200,
+          entitlement_amount_cents: 300,
+        }),
+      ]),
+    );
+    await withWebhooks((tx, _emit, pub) =>
+      reverseSpendTx(tx, f.donor.id, 'claim', creditClaim.id, 'admin', pub),
+    );
+    expect(await prisma.poolCredit.findUniqueOrThrow({ where: { id: grant.id } })).toMatchObject({
+      amount_cents: 300,
+      remaining_cents: 200,
+    });
+    expect(await prisma.donor.findUniqueOrThrow({ where: { id: f.donor.id } })).toMatchObject({
+      balance_remaining: 50,
+    });
   });
 
   it('a retry with no metadata match reuses the exact record id and amounts after exhaustive discovery, not a new refund record', async () => {
@@ -947,6 +1029,247 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
       amount_cents: 333,
       remaining_cents: 250,
     });
+  });
+
+  it.each(['poll', 'goal'] as const)(
+    'shrunk consumed %s credit restores only effective original grant funding after a later ordinary reversal',
+    async (category) => {
+      const f = await fixture(333);
+      await withWebhooks((tx, _emit, pub) =>
+        reverseSpendTx(
+          tx,
+          f.donor.id,
+          category === 'poll' ? 'vote' : 'contribution',
+          category === 'poll' ? f.vote.id : f.contribution.id,
+          'admin',
+          pub,
+        ),
+      );
+      await prisma.poll.update({
+        where: { id: f.poll.id },
+        data: { is_active: true, ends_at: null },
+      });
+      await prisma.fundGoal.update({ where: { id: f.goal.id }, data: { is_complete: false } });
+      const applied = await withWebhooks((tx, _emit, pub) =>
+        applyPoolCreditTx(
+          tx,
+          f.donor.id,
+          f.event.id,
+          {
+            idempotency_key: crypto.randomUUID(),
+            reviewed_credit_cents: {
+              reward: 0,
+              poll: category === 'poll' ? 1000 : 0,
+              goal: category === 'goal' ? 1000 : 0,
+            },
+            selections:
+              category === 'poll'
+                ? [
+                    {
+                      kind: 'POLL_VOTE',
+                      poll_id: f.poll.id,
+                      target_id: f.vote.poll_option_id,
+                      amount_cents: 1000,
+                    },
+                  ]
+                : [{ kind: 'GOAL', target_id: f.goal.id, amount_cents: 1000 }],
+          },
+          pub,
+        ),
+      );
+      let requestedId: string | undefined;
+      if (category === 'poll') {
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER fail_payment_refund BEFORE UPDATE ON PaymentRefund WHEN NEW.accepted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'late refund audit failure'); END`,
+        );
+        await expect(requestPaymentRefund(f.claim.id, 'admin')).rejects.toThrow();
+        const pending = (await prisma.$transaction((tx) => listPaymentRefundsTx(tx))).records[0]!;
+        requestedId = pending.id;
+        expect(pending).toMatchObject({
+          status: 'REQUESTED',
+          accepted_at: null,
+          pool_shrink_data: null,
+        });
+        expect(
+          await prisma.$transaction((tx) => readDonationAccountingTx(tx, f.donation.id)),
+        ).toMatchObject({
+          amount_cents: 1000,
+          pledge_amount_cents: 1000,
+          pools: { poll: { live_cents: 1000 } },
+        });
+        expect(
+          await prisma.poolCreditRedemption.findMany({ where: { batch_id: applied.batch_id } }),
+        ).toMatchObject([{ amount_cents: 1000, reduced_cents: 0 }]);
+        await prisma.$executeRawUnsafe('DROP TRIGGER fail_payment_refund');
+        stripe.listPaymentRefunds.mockResolvedValueOnce([
+          {
+            id: `re_${pending.id}`,
+            amount: 533,
+            status: 'pending',
+            payment_intent: f.donation.payment_intent,
+            metadata: {
+              payment_refund_id: pending.id,
+              donation_id: f.donation.id,
+              claim_id: f.claim.id,
+            },
+          },
+        ]);
+      }
+      const record = requestedId
+        ? await retryPaymentRefund(requestedId)
+        : await requestPaymentRefund(f.claim.id, 'admin');
+      expect(record).toMatchObject({ status: 'PENDING' });
+      const consumed = await prisma.$transaction((tx) =>
+        readPoolCreditEventTx(tx, f.donor.id, f.event.id),
+      );
+      expect(consumed.history[0]!.redemptions).toMatchObject([
+        { amount_cents: 1000, reduced_cents: 333, effective_cents: 667 },
+      ]);
+      const rowId = category === 'poll' ? applied.vote_ids[0]! : applied.contribution_ids[0]!;
+      await withWebhooks((tx, _emit, pub) =>
+        reverseSpendTx(
+          tx,
+          f.donor.id,
+          category === 'poll' ? 'vote' : 'contribution',
+          rowId,
+          'admin',
+          pub,
+        ),
+      );
+      expect(
+        await prisma.$transaction((tx) => readPoolCreditEventTx(tx, f.donor.id, f.event.id)),
+      ).toMatchObject({
+        available_cents: { [category]: 667 },
+        history: [{ amount_cents: 1000, remaining_cents: 667 }],
+      });
+      expect(
+        await prisma.$transaction((tx) => readDonationAccountingTx(tx, f.donation.id)),
+      ).toMatchObject({
+        pledge_amount_cents: 667,
+        pools: { [category]: { live_cents: 0, outstanding_credit_cents: 667, unused_cents: 0 } },
+      });
+      expect(
+        await prisma.poolCreditRedemption.findMany({ where: { batch_id: applied.batch_id } }),
+      ).toMatchObject([{ amount_cents: 1000, reduced_cents: 333 }]);
+    },
+  );
+
+  it('a physical cancellation preserves a whole nonphysical entitlement funded by multiple sources and locks its all-source mutations while REQUESTED', async () => {
+    const f = await fixture();
+    const digital = await prisma.reward.create({
+      data: {
+        title: 'One whole digital entitlement',
+        type: 'DIGITAL',
+        cost_cents: 700,
+        quantity_total: 1,
+      },
+    });
+    rewards.push(digital.id);
+    const sourceB = await prisma.donation.create({
+      data: {
+        donor_id: f.donor.id,
+        external_id: crypto.randomUUID(),
+        amount_cents: 400,
+        pledge_amount_cents: 400,
+        channel_id: f.channel.id,
+        event_id: f.event.id,
+        created_at: new Date(Date.now() + 1000),
+      },
+    });
+    for (const [source, amount] of [
+      [f.donation, 300],
+      [sourceB, 400],
+    ] as const) {
+      const origin = await prisma.rewardClaim.create({
+        data: {
+          donor_id: f.donor.id,
+          donation_id: source.id,
+          reward_id: digital.id,
+          amount_cents: amount,
+          status: 'REVERSED',
+          reversed_at: new Date(),
+        },
+      });
+      await prisma.poolCredit.create({
+        data: {
+          donation_id: source.id,
+          category: 'reward',
+          amount_cents: amount,
+          remaining_cents: amount,
+          source_claim_id: origin.id,
+          created_by: 'admin',
+        },
+      });
+    }
+    const batch = await withWebhooks((tx, _emit, pub) =>
+      applyPoolCreditTx(
+        tx,
+        f.donor.id,
+        f.event.id,
+        {
+          idempotency_key: crypto.randomUUID(),
+          reviewed_credit_cents: { reward: 700, poll: 0, goal: 0 },
+          selections: [
+            {
+              kind: 'REWARD',
+              target_id: digital.id,
+              quantity: 1,
+              unit_price_cents: 700,
+              reward_type: 'DIGITAL',
+            },
+          ],
+        },
+        pub,
+      ),
+    );
+    const entitlement = await prisma.rewardClaim.findUniqueOrThrow({
+      where: { id: batch.claim_ids[0]! },
+    });
+    stripe.createPaymentRefund.mockRejectedValueOnce(new Error('timeout'));
+    const record = await requestPaymentRefund(f.claim.id, 'admin');
+    await expect(
+      withWebhooks((tx, _emit, pub) => setClaimStatusTx(tx, entitlement.id, 'FULFILLED', pub)),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      withWebhooks((tx, _emit, pub) =>
+        reverseSpendTx(tx, f.donor.id, 'claim', entitlement.id, 'admin', pub),
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    stripe.listPaymentRefunds.mockResolvedValueOnce([
+      {
+        id: 're_shared',
+        amount: 500,
+        status: 'pending',
+        payment_intent: f.donation.payment_intent,
+        metadata: {
+          payment_refund_id: record.id,
+          donation_id: f.donation.id,
+          claim_id: f.claim.id,
+        },
+      },
+    ]);
+    await retryPaymentRefund(record.id);
+    expect(
+      await prisma.rewardClaim.findUniqueOrThrow({ where: { id: entitlement.id } }),
+    ).toMatchObject({ amount_cents: 700, donation_id: null, status: 'PENDING', reversed_at: null });
+    expect(await prisma.reward.findUniqueOrThrow({ where: { id: digital.id } })).toMatchObject({
+      quantity_claimed: 1,
+    });
+    const funding = await prisma.$transaction((tx) => readRewardFundingTx(tx, entitlement));
+    expect(funding.source_cents.get(f.donation.id)).toBe(300);
+    expect(funding.source_cents.get(sourceB.id)).toBe(400);
+    await withWebhooks((tx, _emit, pub) =>
+      reverseSpendTx(tx, f.donor.id, 'claim', entitlement.id, 'admin', pub),
+    );
+    expect(await prisma.reward.findUniqueOrThrow({ where: { id: digital.id } })).toMatchObject({
+      quantity_claimed: 0,
+    });
+    expect(
+      await prisma.poolCredit.findMany({
+        where: { category: 'reward', donation: { donor_id: f.donor.id } },
+        orderBy: { amount_cents: 'asc' },
+      }),
+    ).toMatchObject([{ remaining_cents: 300 }, { remaining_cents: 400 }]);
   });
 
   it('Event end closes eligibility and Undo end reopens it without repair', async () => {
@@ -1088,6 +1411,27 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
       pledge_before_cents: 1000,
       pledge_after_cents: 700,
     });
+    if (!preview.eligible) throw new Error('Expected eligible preview');
+    expect(preview.pool_shrink.affected_targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'poll',
+          target_id: f.vote.poll_option_id,
+          label: 'Ended poll: A',
+          before_cents: 1000,
+          after_cents: 700,
+          ended: true,
+        }),
+        expect.objectContaining({
+          category: 'goal',
+          target_id: f.goal.id,
+          label: 'Completed goal',
+          before_cents: 1000,
+          after_cents: 700,
+          completed: true,
+        }),
+      ]),
+    );
     const result = await requestPaymentRefund(f.claim.id, 'admin-marker');
     expect(result).not.toBeNull();
     if (!result) throw new Error('No refund record');
