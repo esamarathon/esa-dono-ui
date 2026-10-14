@@ -4,7 +4,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 
 vi.mock('../../services/donation.js', () => ({
-  processDonation: vi.fn(),
+  intakeDonation: vi.fn(),
 }));
 
 vi.mock('../../services/auction.js', () => ({
@@ -16,7 +16,7 @@ vi.mock('../../lib/prisma.js', () => ({
   default: { $transaction: vi.fn((fn: (tx: unknown) => unknown) => fn({})) },
 }));
 
-import { processDonation } from '../../services/donation.js';
+import { intakeDonation as processDonation } from '../../services/donation.js';
 import { advanceCascadeTx, settleWinTx } from '../../services/auction.js';
 import webhookRouter from '../../routes/webhook.js';
 
@@ -93,8 +93,8 @@ describe('POST /api/webhooks/stripe', () => {
       externalId: 'cs_test_123',
       email: 'donor@example.com',
       donorName: 'Test Donor',
+      source: 'stripe',
       amountCents: 2500,
-      comment: null,
       pledgeToken: 'pledge-abc',
       shippingCents: 0,
     });
@@ -175,8 +175,8 @@ describe('POST /api/webhooks/stripe', () => {
       externalId: 'cs_test_123',
       email: 'donor@example.com',
       donorName: 'Test Donor',
+      source: 'stripe',
       amountCents: 3200,
-      comment: null,
       pledgeToken: 'pledge-abc',
       shippingCents: 700,
     });

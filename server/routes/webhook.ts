@@ -71,15 +71,14 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(200).json({ received: true, skipped: 'missing email or id' });
     }
 
-    // Delegate to shared donation processor. Comment is sourced from the resolved
-    // pledge (donor captured it in the cart), so none is passed here.
-    const { processDonation } = await import('../services/donation.js');
-    await processDonation({
+    // Intake owns donor accounting and pledge resolution/fulfillment.
+    const { intakeDonation } = await import('../services/donation.js');
+    await intakeDonation({
+      source: 'stripe',
       externalId,
       email,
       donorName,
       amountCents,
-      comment: null,
       pledgeToken,
       shippingCents,
     });

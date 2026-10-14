@@ -59,7 +59,7 @@ vi.mock('../../lib/prisma.js', () => ({
 }));
 
 vi.mock('../../services/donation.js', () => ({
-  processDonation: vi.fn(),
+  intakeDonation: vi.fn(),
 }));
 
 // The outbox runs the route's change against the mocked prisma client; emits are

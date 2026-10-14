@@ -8,7 +8,7 @@ import { assignDonationChannel } from '../services/routing.js';
 import { sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
-import { processDonation } from '../services/donation.js';
+import { intakeDonation } from '../services/donation.js';
 import {
   createReward,
   updateReward,
@@ -310,7 +310,8 @@ router.post('/simulate-donation', async (req, res) => {
       externalId = `sim-${crypto.randomUUID()}`;
     }
 
-    const result = await processDonation({
+    const result = await intakeDonation({
+      source: 'admin',
       externalId,
       email,
       donorName: donor_name || 'Anonymous',

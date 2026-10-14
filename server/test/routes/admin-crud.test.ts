@@ -4,6 +4,8 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
+import { createPledge } from '../../services/pledge.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
@@ -486,6 +488,49 @@ describe('Admin CRUD routes', () => {
       donorIds.push(donor!.id);
     });
 
+    it('preserves the staging pledge token, external id and complete intake response', async () => {
+      const email = `staging-${crypto.randomUUID()}@example.com`;
+      const externalId = `staging-${crypto.randomUUID()}`;
+      const channel = await createTestChannel(prisma);
+      const { pledge_token } = await createPledge({
+        email,
+        display_name: 'Staging Reader',
+        comment: 'Staging pledge',
+        items: [],
+        top_up_cents: 1000,
+        channel_id: channel.id,
+      });
+      try {
+        const res = await request(createApp())
+          .post('/api/admin/simulate-donation')
+          .set(AUTH)
+          .send({ email, amount_cents: 1000, external_id: externalId, pledge_token });
+        expect(res.status).toBe(200);
+        donorIds.push(res.body.donor.id);
+        expect(res.body).toEqual({
+          success: true,
+          token: expect.any(String),
+          donor: { id: expect.any(String), email, balance_remaining: 1000 },
+          pledge: { totalSpent: 0, skipped: 0, results: [] },
+          donation: { id: expect.any(String), channel_id: channel.id, event_id: channel.event_id },
+        });
+        expect(
+          await prisma.donation.findUnique({ where: { external_id: externalId } }),
+        ).toMatchObject({
+          id: res.body.donation.id,
+          donor_name: 'Staging Reader',
+          comment: 'Staging pledge',
+        });
+        expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+          status: 'FULFILLED',
+          fulfilled_by_donation_id: res.body.donation.id,
+        });
+      } finally {
+        await prisma.pendingPledge.delete({ where: { pledge_token } });
+        await prisma.channel.delete({ where: { id: channel.id } });
+      }
+    });
+
     it('rejects a missing email', async () => {
       const res = await request(createApp())
         .post('/api/admin/simulate-donation')
@@ -538,6 +583,9 @@ describe('Admin CRUD routes', () => {
         .send({ email, amount_cents: 1000, external_id: externalRef })
         .set(AUTH);
       expect(second.status).toBe(409);
+      expect(second.body).toEqual({
+        error: `A donation with external_id "${externalRef}" already exists`,
+      });
     });
 
     it('rejects an invalid occurred_at', async () => {
