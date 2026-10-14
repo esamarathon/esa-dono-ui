@@ -115,6 +115,15 @@ function mergeById<T extends { id: string }>(old: T[], fresh: T[]): T[] {
   ];
 }
 
+interface SuccessReceipt {
+  amountCents: number;
+  sessionEpoch: number;
+}
+interface PaymentSuccess {
+  receipt: SuccessReceipt;
+  acknowledged: boolean;
+}
+
 interface DraftContextValue {
   draft: DraftPledge | null;
   selections: DraftSelection[];
@@ -146,7 +155,8 @@ interface DraftContextValue {
   reviewReady: boolean;
   pending: Pledge | null;
   paymentChecking: boolean;
-  success: number | null;
+  success: PaymentSuccess | null;
+  acknowledgeSuccess: (receipt: SuccessReceipt) => void;
   defaultGoal: { id: string; title: string } | null;
   previewError: boolean;
   corrected: boolean;
@@ -185,7 +195,15 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
   const [externalRevision, setExternalRevision] = useState(0);
   const [pending, setPending] = useState<Pledge | null>(null);
   const [paymentChecking, setPaymentChecking] = useState(!!draft?.pendingToken);
-  const [success, setSuccess] = useState<number | null>(null);
+  const [success, setSuccess] = useState<PaymentSuccess | null>(null);
+  const acknowledgeSuccess = useCallback((receipt: SuccessReceipt) => {
+    // Receipt identity binds acknowledgement to the matched draft/token outcome.
+    setSuccess((latest) =>
+      latest?.receipt === receipt && receipt.sessionEpoch === epoch.current
+        ? { ...latest, acknowledged: true }
+        : latest,
+    );
+  }, []);
   const [error, setError] = useState('');
   const [notices, setNotices] = useState<string[]>([]);
   const [allRewards, setRewards] = useState<Reward[]>([]);
@@ -352,7 +370,13 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
       setPending(pledge);
       setPaymentChecking(false);
       if (pledge.payment_state === 'FULFILLED') {
-        setSuccess(pledge.format === 'POOLED' ? pledge.pledge_amount_cents : d.amountCents);
+        setSuccess({
+          receipt: {
+            amountCents: pledge.format === 'POOLED' ? pledge.pledge_amount_cents : d.amountCents,
+            sessionEpoch: epoch.current,
+          },
+          acknowledged: false,
+        });
         store(null);
         setPending(null);
       } else if (
@@ -1018,6 +1042,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
     pending,
     paymentChecking,
     success,
+    acknowledgeSuccess,
     defaultGoal,
     previewError,
     corrected,

@@ -35,7 +35,12 @@ export default function DonateFlow() {
     channels,
     selectedChannelId,
     refreshEditable,
+    success,
+    acknowledgeSuccess,
   } = flow;
+  const [confirmation, setConfirmation] = useState<NonNullable<typeof success>['receipt'] | null>(
+    null,
+  );
   const location = useLocation();
   const { eventSlug, channelSlug } = useParams<{ eventSlug?: string; channelSlug?: string }>();
   const [amount, setAmount] = useState(draft ? (draft.amountCents / 100).toFixed(2) : '10');
@@ -50,6 +55,13 @@ export default function DonateFlow() {
   const hasDraft = draft !== null;
   const lastStep = draft?.lastStep;
   const selectedTab = draft?.tab;
+
+  useEffect(() => {
+    if (success && !success.acknowledged && !loading && !linkError && !pendingToken) {
+      setConfirmation(success.receipt);
+      acknowledgeSuccess(success.receipt);
+    }
+  }, [success, acknowledgeSuccess, loading, linkError, pendingToken]);
 
   useEffect(() => {
     void refreshEditable();
@@ -260,9 +272,9 @@ export default function DonateFlow() {
   const confirm = (next: 'browse' | 'review') => flow.confirmAmount(cents, next);
   return (
     <div className="max-w-3xl mx-auto p-8">
-      {flow.success !== null && (
+      {confirmation && confirmation === success?.receipt && (
         <p role="status" className="font-data text-d-yellow mb-4">
-          Your {fmt(flow.success)} donation went through.
+          Your {fmt(confirmation.amountCents)} donation went through.
         </p>
       )}
       {linkWarning && (

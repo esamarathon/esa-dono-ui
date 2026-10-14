@@ -647,12 +647,15 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(reconcilePledge).mockResolvedValue(
       payment({ status: 'FULFILLED', payment_state: 'FULFILLED' }),
     );
-    const rendered = renderAt();
+    renderAt();
     expect(await screen.findByText('Your $25.00 donation went through.')).toBeInTheDocument();
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
     expect(localStorage.getItem('donor_session_active')).toBeNull();
-    rendered.unmount();
-    renderAt();
+    fireEvent.click(screen.getByRole('button', { name: '$5' }));
+    expect(screen.getByText('Your $25.00 donation went through.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'home' }));
+    expect(await screen.findByText('Home page')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'contribute' }));
     expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
     expect(screen.queryByText('Your $25.00 donation went through.')).not.toBeInTheDocument();
   });
