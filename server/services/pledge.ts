@@ -73,6 +73,9 @@ export function pledgeResponse(pledge: StoredPledge) {
     paymentState === 'OPEN' &&
     pledge.expires_at > new Date();
   const common = {
+    comment: pledge.comment,
+    display_name: pledge.display_name,
+    channel_id: pledge.channel_id,
     payment_state: paymentState,
     can_edit: pledge.format === 'POOLED' && paymentState === 'NON_PAYMENT',
     can_continue: canContinue,

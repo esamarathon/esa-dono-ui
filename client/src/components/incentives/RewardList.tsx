@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Card from '../Card';
 import Modal from '../Modal';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
-import { useCart } from '../../context/CartContext';
+import { useDraftPledge } from '../../context/DraftPledgeContext';
 import type { Reward } from '../../types';
 
 function fmt(cents: number) {
@@ -29,21 +29,15 @@ export default function RewardList() {
   const {
     rewards,
     loading,
-    cart,
-    addToCart,
-    removeFromCart,
+    selections: cart,
+    addSelection: addToCart,
+    removeSelection: removeFromCart,
     incrementRewardQuantity,
     decrementRewardQuantity,
-    markVisited,
-    staleRewardIds,
-  } = useCart();
+  } = useDraftPledge();
   const [claiming, setClaiming] = useState<Reward | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
-
-  useEffect(() => {
-    markVisited('rewards');
-  }, [markVisited]);
 
   if (loading) return <LoadingSpinner />;
 
@@ -88,12 +82,12 @@ export default function RewardList() {
     <div>
       <h2 className="font-display text-3xl uppercase text-off-white mb-2">rewards</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Add rewards to your cart. Each reward costs a fixed amount, applied when you check out.
+        Choose rewards from your reward Pool. Each reward costs a fixed amount.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {rewards.map((r) => {
           const soldOut = r.quantity_total !== null && r.quantity_claimed >= r.quantity_total;
-          const unavailable = staleRewardIds.has(r.id);
+          const unavailable = r.is_active === false;
           return (
             <Card key={r.id} className={soldOut || unavailable ? 'opacity-50' : ''}>
               {r.image_url && (
@@ -170,7 +164,7 @@ export default function RewardList() {
                     ) : (
                       <button
                         onClick={() => handleAddClick(r)}
-                        disabled={soldOut}
+                        disabled={soldOut || unavailable}
                         className="btrl-button text-sm"
                       >
                         {soldOut ? 'sold out' : 'add'}
@@ -190,7 +184,7 @@ export default function RewardList() {
       {claiming && (
         <Modal title={`add: ${claiming.title}`} onClose={() => setClaiming(null)}>
           <p className="font-body text-sm text-off-white/55 mb-3">
-            This will be added to your cart for{' '}
+            This will use your reward Pool for{' '}
             <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
           </p>
           {fieldsFor(claiming).map((f) => (
@@ -211,7 +205,7 @@ export default function RewardList() {
               cancel
             </button>
             <button onClick={handleModalSubmit} className="btrl-button">
-              add to cart
+              add selection
             </button>
           </div>
         </Modal>

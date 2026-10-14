@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { planPledge } from '@dono/shared';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -27,6 +28,10 @@ const fulfilledPledge = {
   total_cents: 1000,
   expires_at: '2099-01-01T00:00:00Z',
   items: [{ id: 'i1', kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }],
+  plan: planPledge({ pledge_amount_cents: 1000, selections: [], available_wallet_cents: null }),
+  comment: null,
+  display_name: null,
+  channel_id: null,
 };
 
 function renderWithToken(token: string) {

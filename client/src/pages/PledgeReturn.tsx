@@ -5,6 +5,8 @@ import { isSessionActive } from '../utils/authToken';
 import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
+import PledgeReview from '../components/PledgeReview';
+import { useOptionalDraftPledge } from '../context/DraftPledgeContext';
 import type { Pledge } from '../types';
 
 function fmt(cents: number) {
@@ -16,6 +18,8 @@ const POLL_MAX_ATTEMPTS = 15;
 
 export default function PledgeReturn() {
   const { token } = useParams();
+  const draftFlow = useOptionalDraftPledge();
+  const paymentObserver = draftFlow?.paymentObserver;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const isCancelReturn = searchParams.get('cancelled') === '1';
@@ -30,6 +34,7 @@ export default function PledgeReturn() {
       return;
     }
     track('pledge_return', { 'pledge.token': token });
+    const observe = paymentObserver?.(token);
 
     let cancelled = false;
     let first = true;
@@ -62,8 +67,9 @@ export default function PledgeReturn() {
         }
         if (cancelled) return;
         setPledge(data);
+        observe?.(data);
 
-        if (data.status === 'FULFILLED') {
+        if (data.payment_state === 'FULFILLED') {
           // Never auto-authenticate from a pledge return — that would let
           // anyone gain a session by paying to someone else's email (#48).
           // The magic link (emailed on every donation) is the only way to
@@ -101,7 +107,7 @@ export default function PledgeReturn() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [token, navigate, isCancelReturn]);
+  }, [token, navigate, isCancelReturn, paymentObserver]);
 
   if (error) {
     return (
@@ -121,7 +127,7 @@ export default function PledgeReturn() {
 
   if (!pledge) return <LoadingSpinner />;
 
-  const isFulfilled = pledge.status === 'FULFILLED';
+  const isFulfilled = pledge.payment_state === 'FULFILLED';
   const isExpired = pledge.payment_state === 'NON_PAYMENT';
   const creditOnly =
     pledge.payment_state === 'PAYMENT_REVIEW' || pledge.payment_state === 'LEGACY_PAID';
@@ -174,7 +180,17 @@ export default function PledgeReturn() {
           </p>
         </div>
 
-        {pledge.items.length > 0 && (
+        {pledge.format === 'POOLED' && (
+          <>
+            <PledgeReview plan={pledge.plan} previewError />
+            <p className="font-data text-sm mb-2">
+              Display name: {pledge.display_name || 'Anonymous'}
+            </p>
+            <p className="font-body text-sm mb-4">Message: {pledge.comment || '(none)'}</p>
+          </>
+        )}
+
+        {pledge.format === 'LEGACY' && pledge.items.length > 0 && (
           <div className="mb-4">
             <h3 className="font-data font-bold text-sm text-off-white mb-2 uppercase tracking-wider">
               items
@@ -203,6 +219,11 @@ export default function PledgeReturn() {
           <Link to="/wallet" className="btrl-button btrl-button-outline">
             my wallet
           </Link>
+          {!isFulfilled && !creditOnly && draftFlow?.draft && (
+            <Link to={draftFlow.draft.path} className="btrl-button btrl-button-outline">
+              resume donation
+            </Link>
+          )}
         </div>
       </Card>
     </div>

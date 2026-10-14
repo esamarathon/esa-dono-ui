@@ -6,6 +6,7 @@ import {
   type WalletDonor,
 } from '../services/pledge.js';
 import { cancelPledge, getPledge, reconcilePledge } from '../services/checkout.js';
+import { defaultGoalPreview } from '../services/defaultGoal.js';
 import { resolveDonorToken } from '../middleware/donorAuth.js';
 import { httpError } from '../lib/httpError.js';
 import prisma from '../lib/prisma.js';
@@ -120,6 +121,17 @@ async function actionError(req: Request, res: Response, error: unknown) {
   const pledge = status === 409 ? pledgeResponse(await getPledge(req.params.token!)) : undefined;
   res.status(status).json({ error: (error as Error).message, ...(pledge ? { pledge } : {}) });
 }
+
+/** Live explanatory preview only; never reserves funding or creates a pledge. */
+router.get('/default-goal/:channelId', async (req, res) => {
+  try {
+    res.json(await defaultGoalPreview(req.params.channelId));
+  } catch (error) {
+    res
+      .status((error as { status?: number }).status || 500)
+      .json({ error: (error as Error).message });
+  }
+});
 
 /** Historical pledges are readable only, with an explicit LEGACY discriminant. */
 router.get('/:token', async (req: Request, res: Response) => {
