@@ -1,7 +1,14 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
-import { sendError } from '../lib/httpError.js';
+import { handle, httpError, sendError } from '../lib/httpError.js';
+import {
+  assignUnusedTx,
+  listUnusedTx,
+  unusedCategory,
+  unusedTargetsTx,
+  undoUnusedTx,
+} from '../services/unusedPool.js';
 import { moderateCustomEntryTx } from '../services/reversal.js';
 import {
   createReward,
@@ -63,6 +70,59 @@ router.get('/stats', async (req, res) => {
 
 // Channels and Events (routes/identityRoutes.ts)
 mountIdentityRoutes(router);
+
+router.get(
+  '/unused-pool-money',
+  handle('[moderator/unused]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        listUnusedTx(tx, {
+          comments_only: req.query.comments_only !== 'false',
+          show_ended: req.query.show_ended === 'true',
+          channel_id: typeof req.query.channel_id === 'string' ? req.query.channel_id : undefined,
+        }),
+      ),
+    );
+  }),
+);
+router.get(
+  '/donations/:id/unused-pool-money/targets',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.query.category);
+    res.json(await prisma.$transaction((tx) => unusedTargetsTx(tx, req.params.id!, category)));
+  }),
+);
+router.post(
+  '/donations/:id/unused-pool-money',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.body?.category);
+    if (typeof req.body?.target_id !== 'string') throw httpError(400, 'target_id required');
+    res.json(
+      await withWebhooks((tx, _emit, publisher) =>
+        assignUnusedTx(
+          tx,
+          req.params.id!,
+          category,
+          req.body.target_id,
+          req.body.expected_amount_cents,
+          req.donor?.email || 'moderator',
+          publisher,
+        ),
+      ),
+    );
+  }),
+);
+router.post(
+  '/unused-pool-money/:category/:id/undo',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.params.category);
+    res.json(
+      await withWebhooks((tx, _emit, publisher) =>
+        undoUnusedTx(tx, category, req.params.id!, req.donor?.email || 'moderator', publisher),
+      ),
+    );
+  }),
+);
 
 // Polls CRUD
 router.get('/polls', async (req, res) => {

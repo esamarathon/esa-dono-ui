@@ -23,23 +23,23 @@ export function computePoolAccounting(input: PoolAccountingInput) {
     // A retained shipped claim can later be reversed after a Wallet refund.
     // Only a chargeback blocks that ordinary category-credit rule (ADR-0011 §5.3).
     const creditAvailable = pooled && ['COMPLETED', 'REFUNDED'].includes(input.status);
+    // Poll/goal raw grants survive end for Undo end, but stop reserving the
+    // assignment budget. Subtract live assignments BEFORE clamping at zero.
+    const reserved = active && input.event_ended && key !== 'reward' ? 0 : outstanding;
     const unused =
       active && key !== 'reward'
         ? Math.max(
             0,
-            input.pledge_amount_cents! -
-              live -
-              outstanding -
-              input.failed_payment_wallet_credit_cents,
+            input.pledge_amount_cents! - live - reserved - input.failed_payment_wallet_credit_cents,
           )
         : 0;
     return {
       live_cents: live,
       outstanding_credit_cents: outstanding,
       pool_credit_cents: creditAvailable && !input.event_ended ? outstanding : 0,
-      unused_cents: unused + (active && input.event_ended && key !== 'reward' ? outstanding : 0),
+      unused_cents: unused,
       // Expired reward credit remains reserved; ending an Event never mints Wallet credit.
-      used_cents: live + outstanding + unused,
+      used_cents: live + reserved + unused,
     };
   };
   return { reward: category('reward'), poll: category('poll'), goal: category('goal') };

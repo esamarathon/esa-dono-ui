@@ -196,11 +196,62 @@ export interface Event {
   name: string;
   slug: string;
   is_active: boolean;
+  ended_at: string | null;
+  ended_by: string | null;
+  end_undone_at: string | null;
+  end_undone_by: string | null;
   // Where donations that name no channel are routed. Required (and must be an
   // active channel of this event) before the event can be activated.
   primary_channel_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type UnusedCategory = 'poll' | 'goal';
+export interface UnusedAssignment {
+  id: string;
+  category: UnusedCategory;
+  label: string;
+  amount_cents: number;
+  allocated_at: string | null;
+  can_undo: boolean;
+}
+export interface UnusedDonation {
+  id: string;
+  donor_name: string | null;
+  comment: string | null;
+  created_at: string;
+  channel_id: string | null;
+  event: { id: string; name: string; ended_at: string | null } | null;
+  unused_cents: Record<UnusedCategory, number>;
+  assignments: UnusedAssignment[];
+}
+export interface UnusedPicker {
+  amount_cents: number;
+  targets: {
+    id: string;
+    label: string;
+    channel_id: string | null;
+    before_cents: number;
+    after_cents: number;
+    target_cents: number | null;
+  }[];
+}
+export interface EventEndPreview {
+  event_id: string;
+  slug: string;
+  action: 'END' | 'UNDO_END';
+  can_apply: boolean;
+  blockers: string[];
+  pool_credit_cents: Record<'reward' | 'poll' | 'goal', number>;
+  unshipped_physical_donations: number;
+  open_pledges: number;
+  requested_payment_refunds: number;
+  consuming_assignments: {
+    donation_id: string;
+    category: UnusedCategory;
+    assignment_ids: string[];
+  }[];
 }
 
 /** Public view of an active Event with its active Channels (#115). Used by the
