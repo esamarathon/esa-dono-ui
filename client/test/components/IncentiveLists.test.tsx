@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
   getRewards: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('../../src/lib/tracing', () => ({
   identifyDonor: vi.fn(),
 }));
 
-import { CartProvider } from '../../src/context/CartContext';
+import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPledgeContext';
 import PollList from '../../src/components/incentives/PollList';
 import GoalList from '../../src/components/incentives/GoalList';
 import RewardList from '../../src/components/incentives/RewardList';
@@ -62,6 +62,23 @@ const reward = {
 };
 
 function Wrapper({ children }: { children: React.ReactNode }) {
+  localStorage.setItem(
+    'donation_draft_v1',
+    JSON.stringify({
+      id: 'list-draft',
+      updatedAt: Date.now(),
+      amountCents: 1000,
+      selections: [],
+      channelId: null,
+      eventSlug: null,
+      path: '/donate',
+      comment: '',
+      displayName: '',
+      lastStep: 'browse',
+      tab: 'rewards',
+      pendingToken: null,
+    }),
+  );
   return <CartProvider>{children}</CartProvider>;
 }
 
@@ -110,7 +127,7 @@ describe('PollList', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
     // submit without entering a label
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
     expect(screen.getByText('Please enter your option')).toBeInTheDocument();
   });
 
@@ -128,7 +145,7 @@ describe('PollList', () => {
     // change amount to 0
     const amountInputs = screen.getAllByRole('spinbutton');
     fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
     expect(screen.getByText(/Minimum amount/)).toBeInTheDocument();
   });
 
@@ -155,7 +172,7 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My runner' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
     // modal closes after add
     expect(screen.queryByText('add your own option')).toBeNull();
@@ -172,7 +189,7 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My runner' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
     // Now in cart, showing the read-only summary with edit/remove.
     expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();

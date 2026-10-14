@@ -4,7 +4,7 @@ import ProgressBar from '../ProgressBar';
 import AddRemoveButton from '../AddRemoveButton';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
-import { useCart } from '../../context/CartContext';
+import { useDraftPledge } from '../../context/DraftPledgeContext';
 import { sanitizeMoneyInput } from '../../utils/money';
 import {
   CART_SYNC_DEBOUNCE_MS,
@@ -19,13 +19,16 @@ function fmt(cents: number) {
 }
 
 export default function GoalList() {
-  const { goals, loading, cart, addToCart, removeFromCart, markVisited, staleGoalIds } = useCart();
+  const {
+    goals,
+    loading,
+    selections: cart,
+    addSelection: addToCart,
+    removeSelection: removeFromCart,
+    plan,
+  } = useDraftPledge();
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
-
-  useEffect(() => {
-    markVisited('goals');
-  }, [markVisited]);
 
   // Debounce syncing an edited amount to an already-in-cart goal — see the
   // matching pattern in PollList for why.
@@ -40,7 +43,12 @@ export default function GoalList() {
 
   if (loading) return <LoadingSpinner />;
 
-  const getAmount = (goalId: string) => amounts[goalId] ?? DEFAULT_GOAL_AMOUNT;
+  const getAmount = (goalId: string) => {
+    const selected = cart.find((i) => i.kind === 'GOAL' && i.target_id === goalId);
+    return (
+      amounts[goalId] ?? (selected ? (selected.amount_cents / 100).toFixed(2) : DEFAULT_GOAL_AMOUNT)
+    );
+  };
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'GOAL' && i.target_id === id);
 
@@ -49,7 +57,10 @@ export default function GoalList() {
   const previewPctFor = (goal: Goal) => {
     const item = cart.find((i) => i.kind === 'GOAL' && i.target_id === goal.id);
     if (!item) return undefined;
-    return ((goal.current_cents + item.amount_cents) / goal.target_cents) * 100;
+    const index =
+      plan?.selections.findIndex((i) => i.kind === 'GOAL' && i.target_id === goal.id) ?? -1;
+    const auto = plan?.top_up_rows.find((r) => r.selection_index === index)?.amount_cents ?? 0;
+    return ((goal.current_cents + item.amount_cents + auto) / goal.target_cents) * 100;
   };
 
   const handleAdd = (goal: Goal) => {
@@ -110,10 +121,11 @@ export default function GoalList() {
     <div>
       <h2 className="font-display text-3xl uppercase text-off-white mb-2">support fund goals</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Add contributions to your cart. They're applied to fund goals when you check out.
+        Choose contributions from your goal Pool. Unused amounts top up your selections in
+        proportion.
       </p>
       {goals.map((g) => {
-        const unavailable = staleGoalIds.has(g.id);
+        const unavailable = g.is_active === false;
         return (
           <Card key={g.id} className={`mb-4 ${g.is_complete || unavailable ? 'opacity-50' : ''}`}>
             <div className="flex justify-between items-start mb-2">

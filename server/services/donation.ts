@@ -14,6 +14,7 @@ import {
 } from './spend.js';
 import { planPledge, type PledgePlan, type PledgeItemKind } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
+import { defaultGoal } from './defaultGoal.js';
 
 type Pledge = Prisma.PendingPledgeGetPayload<{ include: { items: true } }>;
 
@@ -476,42 +477,6 @@ async function fulfillPooledPledge(
   }
   await tx.pendingPledge.update({ where: { id: pledge.id }, data: { status: 'FULFILLED' } });
   return { totalSpent, skipped, results };
-}
-
-/** Resolve the live ordered lists, then closest own goals before shared goals. */
-async function defaultGoal(
-  tx: Prisma.TransactionClient,
-  channelId: string,
-): Promise<string | null> {
-  const channel = await tx.channel.findUniqueOrThrow({
-    where: { id: channelId },
-    include: { event: true },
-  });
-  for (const listChannel of new Set(
-    [channelId, channel.event.primary_channel_id].filter((id): id is string => id !== null),
-  )) {
-    const entries = await tx.channelDefaultGoal.findMany({
-      where: { channel_id: listChannel },
-      orderBy: { position: 'asc' },
-      include: { goal: true },
-    });
-    const entry = entries.find(
-      ({ goal }) =>
-        goal.is_active &&
-        !goal.is_complete &&
-        (goal.channel_id === null || goal.channel_id === channelId),
-    );
-    if (entry) return entry.goal_id;
-  }
-  for (const scope of [channelId, null]) {
-    const goals = await tx.fundGoal.findMany({
-      where: { channel_id: scope, is_active: true, is_complete: false },
-      orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    });
-    goals.sort((a, b) => a.target_cents - a.current_cents - (b.target_cents - b.current_cents));
-    if (goals[0]) return goals[0].id;
-  }
-  return null;
 }
 
 /** Legacy fulfillment keeps its historical one-dollar-once Wallet accounting. */

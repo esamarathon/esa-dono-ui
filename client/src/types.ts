@@ -331,8 +331,12 @@ export interface Campaign {
   fundraising_goal?: { value?: string };
 }
 
-/** An item in the donation cart (client-side only). */
-export interface CartItem {
+/** A browser-local donor selection. Live prices are revalidated before review. */
+export interface DraftSelection {
+  insertion_order?: number;
+  channel_id?: string | null;
+  unit_price_cents?: number | null;
+  reward_type?: string | null;
   kind: 'REWARD' | 'POLL_VOTE' | 'GOAL' | 'POLL_CUSTOM';
   target_id: string;
   amount_cents: number;
@@ -369,6 +373,9 @@ export type PledgePaymentState =
   | 'PAYMENT_REVIEW';
 
 interface PledgeBase {
+  comment: string | null;
+  display_name: string | null;
+  channel_id: string | null;
   payment_state: PledgePaymentState;
   can_edit: boolean;
   can_continue: boolean;

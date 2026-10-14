@@ -2,14 +2,13 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import Navbar from './components/Navbar';
 import GlobalProgressBar from './components/GlobalProgressBar';
-import CartDrawer from './components/CartDrawer';
 import FeedbackButton from './components/FeedbackButton';
 import BroadcastBanner from './components/BroadcastBanner';
-import { CartProvider } from './context/CartContext';
+import { DraftPledgeProvider } from './context/DraftPledgeContext';
 import { CampaignProvider } from './context/CampaignContext';
 import { track } from './lib/tracing';
 import Home from './pages/Home';
-import DonateFlow from './pages/DonateFlow';
+import DonateFlow, { LegacyIncentiveRedirect } from './pages/DonateFlow';
 import PledgeReturn from './pages/PledgeReturn';
 import MyWallet from './pages/MyWallet';
 import Help from './pages/Help';
@@ -93,11 +92,10 @@ export default function App() {
             <div className="min-h-screen flex flex-col">
               <BroadcastBanner />
               <CampaignProvider>
-                <CartProvider>
+                <DraftPledgeProvider>
                   <PageViewTracker />
                   <Navbar />
                   <GlobalProgressBar />
-                  <CartDrawer />
                   <FeedbackButton />
                   <div className="flex-1">
                     <Routes>
@@ -108,13 +106,13 @@ export default function App() {
                       <Route path="/pledge/:token" element={<PledgeReturn />} />
                       <Route path="/wallet" element={<MyWallet />} />
                       <Route path="/help" element={<Help />} />
-                      <Route path="/rewards" element={<DonateFlow />} />
-                      <Route path="/polls" element={<DonateFlow />} />
-                      <Route path="/goals" element={<DonateFlow />} />
+                      <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
+                      <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
+                      <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
                       <Route path="/auctions" element={<Auctions />} />
                     </Routes>
                   </div>
-                </CartProvider>
+                </DraftPledgeProvider>
               </CampaignProvider>
             </div>
           }
