@@ -56,7 +56,7 @@ describe('Admin CRUD routes', () => {
     expect(res.body).toHaveProperty('donors');
   });
 
-  it('GET /stats includes unallocated_credits_cents summed across all donors (#59)', async () => {
+  it('GET /stats includes available Wallet credit summed across all donors', async () => {
     const a = await prisma.donor.create({
       data: { email: `stats-a-${crypto.randomUUID()}@example.com`, balance_remaining: 1500 },
     });
@@ -68,8 +68,9 @@ describe('Admin CRUD routes', () => {
     const before = await request(createApp()).get('/api/admin/stats').set(AUTH);
     const after = await prisma.donor.aggregate({ _sum: { balance_remaining: true } });
 
-    expect(before.body.unallocated_credits_cents).toBe(after._sum.balance_remaining);
-    expect(before.body.unallocated_credits_cents).toBeGreaterThanOrEqual(4000);
+    expect(before.body.wallet_credit_cents.available).toBe(after._sum.balance_remaining);
+    expect(before.body.wallet_credit_cents.available).toBeGreaterThanOrEqual(4000);
+    expect(before.body).not.toHaveProperty('unallocated_credits_cents');
   });
 
   it('POST /donors/sweep-credits previews without writing when confirm is omitted (#60)', async () => {

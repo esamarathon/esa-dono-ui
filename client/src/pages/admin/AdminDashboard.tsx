@@ -27,8 +27,8 @@ export default function AdminDashboard() {
     { label: 'donors', value: stats.donors },
     { label: 'donations', value: stats.donations },
     { label: 'reward claims', value: stats.claims },
-    { label: 'pledges', value: stats.pledges },
-    { label: 'unallocated credits', value: fmt(stats.unallocated_credits_cents ?? 0) },
+    { label: 'open pledges', value: stats.pledges.open },
+    { label: 'Wallet credit available', value: fmt(stats.wallet_credit_cents.available) },
   ];
 
   return (
