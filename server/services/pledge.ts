@@ -1,15 +1,11 @@
 import crypto from 'crypto';
-import type { Prisma } from '@prisma/client';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { withSpan } from '../lib/tracing.js';
-import { claimRewardTx, votePollTx, contributeGoalTx, proposeCustomEntryTx } from './spend.js';
 import { checkBlockedWords } from './blockedWords.js';
 import { isStripeConfigured } from './stripe.js';
-import { sendMagicLink } from './email.js';
-import { withWebhooks } from './webhooks/outbox.js';
-import { resolveDonationRoute } from './routing.js';
-import { PLEDGE_TTL_MS, TOKEN_TTL_MS } from '../config.js';
+import { intakeDonation } from './donation.js';
+import { PLEDGE_TTL_MS } from '../config.js';
 
 const STRIPE_MIN_CHARGE_CENTS = 50;
 
@@ -289,138 +285,6 @@ async function createPledgeInner({
   };
 }
 
-/**
- * Fulfill a pledge inside an existing donation transaction.
- * Called from processDonation after the donor is upserted and balance credited.
- * Skips items that are no longer valid (sold out, ended, etc.) — those cents
- * remain as spendable balance_remaining.
- */
-export async function fulfillPledge(
-  tx: Prisma.TransactionClient,
-  pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
-  donorId: string,
-  /** The donation paying for the pledge: its reward claims are linked to it (PRD-0002 §T4). */
-  donationId: string | null = null,
-) {
-  return withSpan('pledge.fulfill', async () => {
-    return fulfillPledgeInner(tx, pledge, donorId, donationId);
-  });
-}
-
-async function fulfillPledgeInner(
-  tx: Prisma.TransactionClient,
-  pledge: Prisma.PendingPledgeGetPayload<{ include: { items: true } }>,
-  donorId: string,
-  donationId: string | null,
-) {
-  const results: Array<Record<string, unknown>> = [];
-  let totalSpent = 0;
-  let skipped = 0;
-
-  for (const item of pledge.items) {
-    try {
-      let result: { cost: number } | undefined;
-      if (item.kind === 'REWARD') {
-        const data = item.data ? JSON.parse(item.data) : {};
-        result = await claimRewardTx(tx, donorId, item.target_id, data, item.quantity, donationId);
-      } else if (item.kind === 'POLL_VOTE') {
-        result = await votePollTx(
-          tx,
-          donorId,
-          item.poll_id!,
-          item.target_id,
-          item.amount_cents,
-          donationId,
-        );
-      } else if (item.kind === 'GOAL') {
-        result = await contributeGoalTx(tx, donorId, item.target_id, item.amount_cents, donationId);
-      } else if (item.kind === 'POLL_CUSTOM') {
-        const data = item.data ? JSON.parse(item.data) : {};
-        result = await proposeCustomEntryTx(
-          tx,
-          donorId,
-          item.poll_id!,
-          data.label,
-          item.amount_cents,
-          donationId,
-        );
-      }
-      totalSpent += result!.cost;
-      results.push({ item_id: item.id, kind: item.kind, status: 'fulfilled', cost: result!.cost });
-    } catch (err) {
-      skipped++;
-      results.push({
-        item_id: item.id,
-        kind: item.kind,
-        status: 'skipped',
-        reason: (err as Error).message,
-      });
-    }
-  }
-
-  await tx.pendingPledge.update({
-    where: { id: pledge.id },
-    data: { status: 'FULFILLED' },
-  });
-
-  return { totalSpent, skipped, results };
-}
-
-/**
- * Resolve a pledge token to a pending pledge, or fall back to email-based lookup.
- * Returns the pledge or null.
- *
- * Pass the caller's transaction as `db` when calling inside one. With a single
- * SQLite connection (`lib/prisma.ts`), a query on the global client from inside a
- * transaction waits for that transaction and times out.
- */
-export async function resolvePledge(
-  {
-    pledgeToken,
-    email,
-    amountCents,
-  }: {
-    pledgeToken?: string | null;
-    email?: string | null;
-    amountCents: number;
-  },
-  db: Pick<Prisma.TransactionClient, 'pendingPledge'> = prisma,
-) {
-  if (pledgeToken) {
-    const pledge = await db.pendingPledge.findUnique({
-      where: { pledge_token: pledgeToken },
-      include: { items: true },
-    });
-    if (
-      pledge &&
-      pledge.status === 'OPEN' &&
-      pledge.total_cents <= amountCents + (pledge.wallet_discount_cents ?? 0) &&
-      new Date() < pledge.expires_at
-    ) {
-      return pledge;
-    }
-  }
-
-  // Fallback: email-based lookup for newest OPEN pledge within window
-  if (email) {
-    const cutoff = new Date(Date.now() - PLEDGE_TTL_MS);
-    const pledge = await db.pendingPledge.findFirst({
-      where: {
-        donor_email: email.trim().toLowerCase(),
-        status: 'OPEN',
-        total_cents: { lte: amountCents },
-        expires_at: { gt: new Date() },
-        created_at: { gte: cutoff },
-      },
-      orderBy: { created_at: 'desc' },
-      include: { items: true },
-    });
-    if (pledge) return pledge;
-  }
-
-  return null;
-}
-
 export interface WalletDonor {
   id: string;
   email: string;
@@ -499,41 +363,8 @@ export async function createCheckoutForPledge(
           include: { items: true },
         });
 
-        // Wallet fully covers the pledge, so no Stripe/webhook event ever
-        // fires and processDonation() is never reached. Create the Donation
-        // row here (external_id = wallet-<uuid>) so this shows up in the
-        // donor's history like any other donation (#43). amount_cents is the
-        // wallet spend that fulfilled the pledge (the full total).
-        const walletExternalId = `wallet-${crypto.randomUUID()}`;
-        await withWebhooks(async (tx, _emit, publisher) => {
-          // Same routing as every other donation: the pledge's Channel and its Event.
-          const route = await resolveDonationRoute(tx, { channelId: fullPledge.channel_id });
-          const created = await tx.donation.create({
-            data: {
-              external_id: walletExternalId,
-              donor_id: donor.id,
-              amount_cents: pledge.total_cents,
-              comment: fullPledge.comment ?? null,
-              donor_name: fullPledge.display_name ?? null,
-              channel_id: route.channelId,
-              event_id: route.eventId,
-            },
-          });
-          await fulfillPledge(tx, fullPledge, donor.id, created.id);
-          await tx.pendingPledge.update({
-            where: { pledge_token: pledgeToken },
-            data: {
-              wallet_discount_cents: pledge.total_cents,
-              status: 'FULFILLED',
-              fulfilled_by_donation_id: created.id,
-            },
-          });
-          await publisher.publish(created.id, null);
-        });
-
-        sendMagicLink(donor.email, donor.magic_token!).catch((err) =>
-          console.error('Email error:', err),
-        );
+        // No Stripe payment: intake records and fulfills against this identity.
+        await intakeDonation({ source: 'wallet', pledge: fullPledge, donor });
 
         const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
         return {
@@ -545,7 +376,7 @@ export async function createCheckoutForPledge(
     }
   }
 
-  // Store the discount on the pledge so resolvePledge can account for it later
+  // Store the discount so intake can account for it when payment completes
   if (walletDiscountCents > 0) {
     await prisma.pendingPledge.update({
       where: { pledge_token: pledgeToken },

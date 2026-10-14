@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
-import { createPledge, resolvePledge, createCheckoutForPledge } from '../../services/pledge.js';
-import { processDonation } from '../../services/donation.js';
+import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
+import { intakeDonation } from '../../services/donation.js';
 import { createTestChannel } from '../helpers/fixtures.js';
+
+vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 
 const prisma = new PrismaClient();
 
@@ -356,7 +359,7 @@ describe('Pledge Service', () => {
     });
   });
 
-  describe('resolvePledge', () => {
+  describe('pledge resolution through intake', () => {
     it('resolves by pledge token', async () => {
       const reward = await prisma.reward.create({
         data: { title: 'Test Reward', type: 'DIGITAL', cost_cents: 500, quantity_total: 10 },
@@ -367,15 +370,29 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const resolved = await resolvePledge({ pledgeToken: pledge_token, amountCents: 1000 });
-      expect(resolved).toBeTruthy();
-      expect(resolved!.pledge_token).toBe(pledge_token);
+      const result = await intakeDonation({
+        source: 'stripe',
+        externalId: `test-${crypto.randomUUID()}`,
+        email: 'resolve@example.com',
+        donorName: 'Reader',
+        pledgeToken: pledge_token,
+        amountCents: 1000,
+      });
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toMatchObject({ totalSpent: 500, skipped: 0 });
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: result.donation.id,
+      });
 
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: result.donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: result.donor.id } });
+      await prisma.donor.delete({ where: { id: result.donor.id } });
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
     });
 
-    it('returns null for insufficient amount', async () => {
+    it('leaves a pledge open for insufficient payment', async () => {
       const reward = await prisma.reward.create({
         data: { title: 'Test Reward', type: 'DIGITAL', cost_cents: 500, quantity_total: 10 },
       });
@@ -385,9 +402,23 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const resolved = await resolvePledge({ pledgeToken: pledge_token, amountCents: 200 });
-      expect(resolved).toBeNull();
+      const result = await intakeDonation({
+        source: 'stripe',
+        externalId: `test-${crypto.randomUUID()}`,
+        email: 'short@example.com',
+        donorName: 'Reader',
+        pledgeToken: pledge_token,
+        amountCents: 200,
+      });
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toBeNull();
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'OPEN',
+        fulfilled_by_donation_id: null,
+      });
 
+      await prisma.donation.deleteMany({ where: { donor_id: result.donor.id } });
+      await prisma.donor.delete({ where: { id: result.donor.id } });
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
     });
@@ -402,13 +433,23 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const resolved = await resolvePledge({
+      const result = await intakeDonation({
+        source: 'stripe',
+        externalId: `test-${crypto.randomUUID()}`,
+        donorName: 'Reader',
         email: 'fallback@example.com',
         amountCents: 1000,
       });
-      expect(resolved).toBeTruthy();
-      expect(resolved!.pledge_token).toBe(pledge_token);
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toMatchObject({ totalSpent: 500, skipped: 0 });
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: result.donation.id,
+      });
 
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: result.donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: result.donor.id } });
+      await prisma.donor.delete({ where: { id: result.donor.id } });
       await prisma.pendingPledge.delete({ where: { pledge_token } });
       await prisma.reward.delete({ where: { id: reward.id } });
     });
@@ -570,7 +611,7 @@ describe('Pledge Service', () => {
     });
   });
 
-  describe('fulfillPledge via processDonation', () => {
+  describe('pledge fulfillment through intake', () => {
     it('fulfills a reward pledge, credits remainder, and propagates the event to the donation', async () => {
       const reward = await prisma.reward.create({
         data: { title: 'Test Reward', type: 'DIGITAL', cost_cents: 500, quantity_total: 10 },
@@ -581,7 +622,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const result = await processDonation({
+      const result = await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'fulfill@example.com',
         donorName: 'Test',
@@ -620,7 +662,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      await processDonation({
+      await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'outbox-channel@example.com',
         donorName: 'Test',
@@ -657,7 +700,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const result = await processDonation({
+      const result = await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'fulfillqty@example.com',
         donorName: 'Test',
@@ -691,7 +735,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      await processDonation({
+      await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'fulfillnamed@example.com',
         donorName: 'Stripe Checkout Name',
@@ -727,7 +772,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const result = await processDonation({
+      const result = await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'writein-fulfill@example.com',
         donorName: 'Test',
@@ -780,7 +826,8 @@ describe('Pledge Service', () => {
         channel_id: channelId,
       });
 
-      const result = await processDonation({
+      const result = await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'writein-review@example.com',
         donorName: 'Test',
@@ -811,7 +858,8 @@ describe('Pledge Service', () => {
     });
 
     it('gracefully degrades when no pledge matches', async () => {
-      const result = await processDonation({
+      const result = await intakeDonation({
+        source: 'stripe',
         externalId: `test-${crypto.randomUUID()}`,
         email: 'nopledge@example.com',
         donorName: 'Test',
@@ -828,7 +876,8 @@ describe('Pledge Service', () => {
 
     it('handles duplicate donation idempotently', async () => {
       const externalId = `test-dup-${crypto.randomUUID()}`;
-      const result1 = await processDonation({
+      const result1 = await intakeDonation({
+        source: 'stripe',
         externalId,
         email: 'dup@example.com',
         donorName: 'Test',
@@ -836,7 +885,8 @@ describe('Pledge Service', () => {
       });
       expect((result1 as any).duplicate).toBeFalsy();
 
-      const result2 = await processDonation({
+      const result2 = await intakeDonation({
+        source: 'stripe',
         externalId,
         email: 'dup@example.com',
         donorName: 'Test',
