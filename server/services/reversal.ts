@@ -392,13 +392,13 @@ export async function previewDonationReversalTx(
   await assertNoRequestedRefundTx(tx, donationId);
   if (status === 'CHARGEBACK' && donation.amount_cents === 0)
     throw httpError(400, 'Cannot record a chargeback for zero money');
-  for (const allocation of donation.allocations.reward) {
+  const retained = donation.allocations.reward.filter((row) => row.status === 'FULFILLED');
+  const claims = donation.allocations.reward.filter((row) => row.status !== 'FULFILLED');
+  for (const allocation of claims) {
     const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
     for (const id of (await readRewardFundingTx(tx, claim)).donation_ids)
       await assertSpendSourceTx(tx, id);
   }
-  const retained = donation.allocations.reward.filter((row) => row.status === 'FULFILLED');
-  const claims = donation.allocations.reward.filter((row) => row.status !== 'FULFILLED');
   const cents = (rows: { amount_cents: number }[]) =>
     rows.reduce((sum, row) => sum + row.amount_cents, 0);
   const reversedCents =
@@ -458,7 +458,9 @@ export async function setDonationStatusTx(
     const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
     const funding = await readRewardFundingTx(tx, claim);
     for (const id of funding.donation_ids) {
-      await assertSpendSourceTx(tx, id);
+      // Retaining a fulfilled claim never changes another source's funding.
+      if (allocation.status !== 'FULFILLED' || !['REFUNDED', 'CHARGEBACK'].includes(status))
+        await assertSpendSourceTx(tx, id);
       affectedIds.add(id);
     }
   }

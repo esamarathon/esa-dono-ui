@@ -6,7 +6,11 @@ import donorRouter from '../../routes/donor.js';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
-import { applyPoolCreditTx, readPoolCreditEventTx } from '../../services/poolCredit.js';
+import {
+  applyPoolCreditTx,
+  readPoolCreditEventTx,
+  readPoolCreditSummaryTx,
+} from '../../services/poolCredit.js';
 import {
   reverseSpendTx,
   setClaimStatusTx,
@@ -609,6 +613,99 @@ it('retained whole claim uses source-local 600 max rule, then restores retained 
   f.request.idempotency_key = crypto.randomUUID();
   await f.apply();
 });
+it.each([
+  ['REFUNDED', 'CHARGEBACK'],
+  ['CHARGEBACK', 'CHARGEBACK'],
+  ['REFUNDED', 'REQUESTED'],
+  ['CHARGEBACK', 'REQUESTED'],
+] as const)(
+  'terminal action on A (%s) retains its fulfilled shared claim despite B (%s)',
+  async (status, otherStatus) => {
+    const f = await fixture();
+    // A retains 600 of its D1000; B funds the other 400 of ONE whole entitlement.
+    await prisma.donation.update({
+      where: { id: f.sources[0]!.donation.id },
+      data: { pledge_amount_cents: 1000, amount_cents: 1000 },
+    });
+    const result = await f.apply();
+    expect(result.claim_ids).toHaveLength(1);
+    await withWebhooks((tx, _emit, publisher) =>
+      setClaimStatusTx(tx, result.claim_ids[0]!, 'FULFILLED', publisher),
+    );
+    if (otherStatus === 'CHARGEBACK')
+      await withWebhooks((tx, _emit, publisher) =>
+        setDonationStatusTx(
+          tx,
+          f.sources[1]!.donation.id,
+          'CHARGEBACK',
+          undefined,
+          'admin',
+          publisher,
+        ),
+      );
+    else
+      await prisma.paymentRefund.create({
+        data: {
+          donation_id: f.sources[1]!.donation.id,
+          claim_id: result.claim_ids[0]!,
+          item_cents: 400,
+          created_by: 'admin',
+        },
+      });
+    expect(
+      await prisma.$transaction((tx) =>
+        previewDonationReversalTx(tx, f.sources[0]!.donation.id, status),
+      ),
+    ).toMatchObject({
+      wallet_adjustment_cents: status === 'REFUNDED' ? 400 : 0,
+      retained_claim_ids: result.claim_ids,
+      reversed_rows: { reward: 0 },
+    });
+    await withWebhooks((tx, _emit, publisher) =>
+      setDonationStatusTx(tx, f.sources[0]!.donation.id, status, undefined, 'admin', publisher),
+    );
+    const summary = await prisma.$transaction((tx) => readPoolCreditSummaryTx(tx, f.donor.id));
+    expect(summary.wallet_credit_cents).toBe(status === 'REFUNDED' ? 523 : 123);
+    const credits = await f.read();
+    expect(credits.available_cents.reward).toBe(0);
+    expect(credits.catalog.rewards.find((row) => row.id === f.reward.id)?.remaining).toBe(2);
+    expect(credits.history).toHaveLength(2);
+    for (const grant of credits.history) {
+      expect(grant.remaining_cents).toBe(0);
+      expect(grant.redemptions).toMatchObject([
+        { allocation_id: result.claim_ids[0], reversed: false },
+      ]);
+    }
+    const otherDonationStatus = otherStatus === 'CHARGEBACK' ? 'CHARGEBACK' : 'COMPLETED';
+    for (const [index, sourceStatus] of [status, otherDonationStatus].entries()) {
+      const accounting = await prisma.$transaction((tx) =>
+        readDonationAccountingTx(tx, f.sources[index]!.donation.id),
+      );
+      expect(accounting.status).toBe(sourceStatus);
+      expect(accounting.wallet_credit_granted_cents).toBe(
+        index === 0 && status === 'REFUNDED' ? 400 : 0,
+      );
+      expect(accounting.allocations.reward).toEqual([
+        expect.objectContaining({
+          id: result.claim_ids[0],
+          status: 'FULFILLED',
+          amount_cents: index === 0 ? 600 : 400,
+          entitlement_amount_cents: 1000,
+        }),
+      ]);
+    }
+    await expect(
+      withWebhooks((tx, _emit, publisher) =>
+        setClaimStatusTx(tx, result.claim_ids[0]!, 'PENDING', publisher),
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      withWebhooks((tx, _emit, publisher) =>
+        reverseSpendTx(tx, f.donor.id, 'claim', result.claim_ids[0]!, 'admin', publisher),
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  },
+);
 it.each(['REQUESTED', 'CHARGEBACK'])(
   'every funding source protects whole claim from status/reverse and terminal actions (%s)',
   async (status) => {
@@ -633,6 +730,11 @@ it.each(['REQUESTED', 'CHARGEBACK'])(
     await expect(
       withWebhooks((tx, _emit, publisher) =>
         reverseSpendTx(tx, f.donor.id, 'claim', result.claim_ids[0]!, 'admin', publisher),
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      prisma.$transaction((tx) =>
+        previewDonationReversalTx(tx, f.sources[0]!.donation.id, 'REFUNDED'),
       ),
     ).rejects.toMatchObject({ status: 409 });
     await expect(
