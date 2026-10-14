@@ -416,11 +416,23 @@ export interface AdminStats {
   donors: number;
   donations: number;
   claims: number;
-  pledges: number;
-  // Sum of Donor.balance_remaining across all donors (#59) — credited but
-  // not yet spent on a reward/poll/goal.
-  unallocated_credits_cents?: number;
-  channels?: { id: string; name: string; raised_cents: number; donations: number }[];
+  pledged_cents: number;
+  wallet_credit_cents: { available: number; held: number };
+  pledges: { open: number; overdue: number };
+  payment_refunds: { requested: number; failed: number };
+  channels: {
+    id: string;
+    name: string;
+    slug: string;
+    event_id: string;
+    raised_cents: number;
+    donations: number;
+    pledged_cents: number;
+    allocated_cents: { reward: number; poll: number; goal: number };
+    unused_pool_cents: { poll: number; goal: number };
+    pool_credit_cents: { reward: number; poll: number; goal: number };
+  }[];
+  shared: { allocated_cents: { reward: number; poll: number; goal: number } };
 }
 
 export interface BlockedWord {
@@ -697,4 +709,8 @@ export interface ModeratorStats {
   active_polls: number;
   total_rewards: number;
   total_goals: number;
+  unused_pool: {
+    with_comment: { donations: number; cents: { poll: number; goal: number } };
+    all: { donations: number; cents: { poll: number; goal: number } };
+  };
 }

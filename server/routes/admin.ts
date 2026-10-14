@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { countedDonation } from '../lib/donationTotals.js';
+import { readAccountingStatsTx } from '../services/accountingStats.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
 import { handle, sendError } from '../lib/httpError.js';
@@ -64,59 +64,9 @@ const router = Router();
 router.use(adminAuth);
 
 // Stats
-router.get('/stats', async (req, res) => {
-  const [
-    donorCount,
-    donationCount,
-    claimCount,
-    totalRaised,
-    pledgeCount,
-    channels,
-    unallocatedCredits,
-  ] = await Promise.all([
-    prisma.donor.count(),
-    prisma.donation.count(),
-    prisma.rewardClaim.count(),
-    // Money totals: completed and wallet-refunded, not chargebacks (lib/donationTotals.ts).
-    prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
-    prisma.pendingPledge.count(),
-    prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
-    // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
-    // on a reward/poll/goal — i.e. the platform's total outstanding
-    // liability to donors, not visible anywhere except by summing every
-    // donor individually.
-    prisma.donor.aggregate({ _sum: { balance_remaining: true } }),
-  ]);
-
-  const perChannel = await Promise.all(
-    channels.map(async (channel) => {
-      const [sum, count] = await Promise.all([
-        prisma.donation.aggregate({
-          where: { channel_id: channel.id, ...countedDonation },
-          _sum: { amount_cents: true },
-        }),
-        prisma.donation.count({ where: { channel_id: channel.id } }),
-      ]);
-      return {
-        id: channel.id,
-        name: channel.name,
-        slug: channel.slug,
-        event_id: channel.event_id,
-        raised_cents: sum._sum.amount_cents ?? 0,
-        donations: count,
-      };
-    }),
-  );
-
-  res.json({
-    donors: donorCount,
-    donations: donationCount,
-    claims: claimCount,
-    pledges: pledgeCount,
-    total_raised_cents: totalRaised._sum.amount_cents ?? 0,
-    unallocated_credits_cents: unallocatedCredits._sum.balance_remaining ?? 0,
-    channels: perChannel,
-  });
+router.get('/stats', async (_req, res) => {
+  const stats = await prisma.$transaction((tx) => readAccountingStatsTx(tx));
+  res.json(stats.admin);
 });
 
 // Channels and Events (routes/identityRoutes.ts)
