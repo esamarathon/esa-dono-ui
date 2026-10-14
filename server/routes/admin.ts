@@ -149,8 +149,8 @@ router.patch('/donations/:id/status', async (req, res) => {
   }
 
   try {
-    const updated = await withWebhooks((tx, _emit, tiltify) =>
-      setDonationStatusTx(tx, req.params.id, status, reason, 'admin', tiltify),
+    const updated = await withWebhooks((tx, _emit, publisher) =>
+      setDonationStatusTx(tx, req.params.id, status, reason, 'admin', publisher),
     );
     res.json(updated);
   } catch (e) {

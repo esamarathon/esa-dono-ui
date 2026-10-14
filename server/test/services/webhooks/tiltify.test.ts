@@ -391,6 +391,14 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     expect((await messages(nativeDest, nativeBefore)).map((m) => m.message_type)).toEqual([
       'donation.moderated',
     ]);
+    const repeatedAfter = await lastSeq(nativeDest);
+    await request(app)
+      .patch(`/api/moderator/donations/${donationId}`)
+      .set({ Authorization: 'Bearer key_admin_test-admin-key' })
+      .send({ moderated: true })
+      .expect(200);
+    expect(await messages(nativeDest, repeatedAfter)).toEqual([]);
+    expect(await messages(tiltifyDest, before)).toEqual([]);
   });
 
   it('a refund publishes nothing; a chargeback publishes lower totals (§T7, lib/donationTotals.ts)', async () => {
@@ -404,7 +412,20 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       amount_cents: 2500,
       channel_id: channelId,
     });
+    const zero = await donate({
+      email: `zero-${rand()}@example.com`,
+      amount_cents: 100,
+      channel_id: channelId,
+    });
+    // Intake still requires positive money until the wallet-only slice ships.
+    await prisma.donation.update({ where: { id: zero }, data: { amount_cents: 0 } });
     const beforeAll = await lastSeq(tiltifyDest);
+    await request(createApp())
+      .patch(`/api/admin/donations/${zero}/status`)
+      .set(AUTH)
+      .send({ status: 'CHARGEBACK' })
+      .expect(200);
+    expect(await messages(tiltifyDest, beforeAll)).toEqual([]);
 
     // A refund goes to the donor's wallet: the charity keeps the money, no total moves.
     await request(createApp())
@@ -538,11 +559,56 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       ).id,
     );
     const before = await lastSeq(tiltifyDest);
-    await donate({ email, amount_cents: pledge.total_cents, pledge_token: pledge.pledge_token });
+    const donationId = await donate({
+      email,
+      amount_cents: pledge.total_cents,
+      pledge_token: pledge.pledge_token,
+    });
     const d = nth(await messages(tiltifyDest, before), 0).body;
     expect(d.poll_votes).toEqual([]);
     expect(d.poll_id).toBeNull();
     expect(d.poll_option_id).toBeNull();
+
+    const entry = await prisma.pollCustomEntry.findFirstOrThrow({ where: { poll_id: poll.id } });
+    const option = await prisma.pollOption.findUniqueOrThrow({
+      where: { custom_entry_id: entry.id },
+    });
+    const { default: moderatorRouter } = await import('../../../routes/moderator.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/moderator', moderatorRouter);
+    const approvedAfter = await lastSeq(tiltifyDest);
+    const nativeAfter = await lastSeq(nativeDest);
+    await request(app)
+      .patch(`/api/moderator/polls/custom-entries/${entry.id}`)
+      .set(AUTH)
+      .send({ status: 'APPROVED' })
+      .expect(200);
+    const approved = await messages(tiltifyDest, approvedAfter);
+    expect(approved).toHaveLength(1);
+    expect(nth(approved, 0)).toEqual({
+      message_type: 'tiltify.donation',
+      routing_key: `${channelSlug}.donation`,
+      body: {
+        ...d,
+        id: donationId,
+        poll_id: poll.id,
+        poll_option_id: option.id,
+        poll_votes: [{ poll_id: poll.id, poll_option_id: option.id }],
+      },
+    });
+    expect(await messages(nativeDest, nativeAfter)).toEqual([]);
+
+    const twiceAfter = await lastSeq(tiltifyDest);
+    await request(app)
+      .patch(`/api/moderator/polls/custom-entries/${entry.id}`)
+      .set(AUTH)
+      .send({ status: 'APPROVED' })
+      .expect(400);
+    expect(await messages(tiltifyDest, twiceAfter)).toEqual([]);
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+      total_votes_cents: 300,
+    });
   });
 
   it('an unassigned donation publishes nothing until it is assigned (§E6)', async () => {
@@ -558,6 +624,18 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
         event_id: orphanEvent.id,
       });
       expect(await messages(tiltifyDest, before)).toHaveLength(0);
+      const nativeBefore = await lastSeq(nativeDest);
+      const { default: moderatorRouter } = await import('../../../routes/moderator.js');
+      const app = express();
+      app.use(express.json());
+      app.use('/api/moderator', moderatorRouter);
+      await request(app)
+        .patch(`/api/moderator/donations/${donationId}`)
+        .set(AUTH)
+        .send({ moderated: true })
+        .expect(200);
+      expect(await messages(nativeDest, nativeBefore)).toEqual([]);
+      expect(await messages(tiltifyDest, before)).toEqual([]);
 
       const res = await request(createApp())
         .patch(`/api/admin/donations/${donationId}/channel`)
