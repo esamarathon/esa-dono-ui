@@ -1,7 +1,90 @@
 import type { Prisma } from '@prisma/client';
-import { MIN_SPEND_CENTS, type ClaimData } from '@dono/shared';
+import { MIN_SPEND_CENTS, type ClaimData, type PoolCategory } from '@dono/shared';
+import { httpError } from '../lib/httpError.js';
 
 type Tx = Prisma.TransactionClient;
+
+/** Pool fulfillment draws from this donation, never from the available Wallet. */
+export interface PoolSpend {
+  mode: 'pool';
+  source: 'donor' | 'auto';
+  /** Portion of a donor-directed line that came from automatic redistribution. */
+  auto_cents?: number;
+  unit_price_cents?: number;
+  confirmed_reward_type?: string;
+}
+
+function allocationRows(cents: number, pool?: PoolSpend) {
+  const auto = pool?.auto_cents ?? 0;
+  if (!Number.isInteger(auto) || auto < 0 || auto > cents)
+    throw httpError(400, 'Invalid auto allocation');
+  return [
+    ...(cents > auto ? [{ amount_cents: cents - auto, source: pool?.source ?? 'donor' }] : []),
+    ...(auto > 0 ? [{ amount_cents: auto, source: 'auto' }] : []),
+  ];
+}
+
+async function fundSpend(
+  tx: Tx,
+  donorId: string,
+  donationId: string | null,
+  category: PoolCategory,
+  cents: number,
+  incentiveChannel: string | null,
+  pool?: PoolSpend,
+) {
+  if (!pool) {
+    const donor = await tx.donor.findUnique({ where: { id: donorId } });
+    if (!donor || donor.balance_remaining < cents) throw httpError(400, 'Insufficient balance');
+    await tx.donor.update({
+      where: { id: donorId },
+      data: { balance_remaining: { decrement: cents } },
+    });
+    return;
+  }
+  if (!donationId) throw httpError(400, 'Pool spend requires a source donation');
+  const donation = await tx.donation.findUnique({ where: { id: donationId } });
+  if (
+    !donation ||
+    donation.pledge_amount_cents === null ||
+    donation.donor_id !== donorId ||
+    donation.status !== 'COMPLETED'
+  ) {
+    throw httpError(400, 'Invalid Pool source donation');
+  }
+  if (incentiveChannel && incentiveChannel !== donation.channel_id)
+    throw httpError(400, 'Incentive belongs to another Channel');
+  const where = { donation_id: donationId, reversed_at: null };
+  const used =
+    category === 'reward'
+      ? await tx.rewardClaim.aggregate({
+          where: { ...where, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+          _sum: { amount_cents: true },
+        })
+      : category === 'poll'
+        ? await tx.pollVote.aggregate({ where, _sum: { amount_cents: true } })
+        : await tx.fundContribution.aggregate({ where, _sum: { amount_cents: true } });
+  const reserved = await tx.poolCredit.aggregate({
+    where: { donation_id: donationId, category },
+    _sum: { remaining_cents: true },
+  });
+  if (
+    (used._sum.amount_cents ?? 0) +
+      (reserved._sum.remaining_cents ?? 0) +
+      donation.failed_payment_wallet_credit_cents +
+      cents >
+    donation.pledge_amount_cents
+  ) {
+    throw httpError(400, 'Pool budget exceeded or reserved');
+  }
+}
+
+function validateCents(cents: number, pool?: PoolSpend) {
+  const minimum = pool ? 1 : MIN_SPEND_CENTS;
+  if (!Number.isSafeInteger(cents) || cents < minimum)
+    throw httpError(400, `amount_cents (min ${minimum}) required`);
+  allocationRows(cents, pool);
+}
 
 export async function claimRewardTx(
   tx: Tx,
@@ -9,44 +92,62 @@ export async function claimRewardTx(
   rewardId: string,
   claimData?: ClaimData | null,
   quantity = 1,
-  /** The donation whose pledge this claim fulfils (PRD-0002 §T4); null for a wallet claim. */
   donationId: string | null = null,
+  pool?: PoolSpend,
 ) {
-  if (!Number.isInteger(quantity) || quantity < 1) {
-    throw Object.assign(new Error('quantity must be a positive integer'), { status: 400 });
-  }
-
+  if (!Number.isInteger(quantity) || quantity < 1)
+    throw httpError(400, 'quantity must be a positive integer');
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
-  if (!reward || !reward.is_active)
-    throw Object.assign(new Error('Reward not found'), { status: 404 });
-  if (
-    reward.quantity_total !== null &&
-    reward.quantity_claimed + quantity > reward.quantity_total
-  ) {
-    throw Object.assign(new Error('Reward sold out'), { status: 400 });
+  if (!reward || !reward.is_active) throw httpError(404, 'Reward not found');
+  if (reward.quantity_total !== null && reward.quantity_claimed + quantity > reward.quantity_total)
+    throw httpError(400, 'Reward sold out');
+  const unitPrice = pool ? pool.unit_price_cents : reward.cost_cents;
+  if (!Number.isSafeInteger(unitPrice) || unitPrice! < (pool ? 1 : 0))
+    throw httpError(400, 'Confirmed reward price required');
+  if (pool && (pool.source !== 'donor' || pool.confirmed_reward_type !== reward.type))
+    throw httpError(400, 'Reward type changed after confirmation');
+  const totalCost = unitPrice! * quantity;
+  if (pool) validateCents(totalCost, pool);
+  if (pool && pool.confirmed_reward_type === 'PHYSICAL') {
+    const donation = donationId
+      ? await tx.donation.findUnique({ where: { id: donationId } })
+      : null;
+    const confirmed = donationId
+      ? await tx.pendingPledge.findUnique({
+          where: { fulfilled_by_donation_id: donationId },
+          select: {
+            new_money_cents: true,
+            items: { where: { confirmed_reward_type: 'PHYSICAL' }, select: { target_id: true } },
+          },
+        })
+      : null;
+    // Classify prior claims by CONFIRMED types, not a catalog type that may have
+    // changed since payment. An unlinked Pool source conservatively counts all claims.
+    const physical = await tx.rewardClaim.aggregate({
+      where: {
+        donation_id: donationId,
+        reversed_at: null,
+        status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+        ...(confirmed ? { reward_id: { in: confirmed.items.map((item) => item.target_id) } } : {}),
+      },
+      _sum: { amount_cents: true },
+    });
+    if (
+      !donation ||
+      totalCost + (physical._sum.amount_cents ?? 0) >
+        Math.min(donation.amount_cents, confirmed?.new_money_cents ?? donation.amount_cents)
+    )
+      throw httpError(400, 'Physical rewards exceed confirmed new money');
   }
-
-  const totalCost = reward.cost_cents * quantity;
-  const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < totalCost) {
-    throw Object.assign(new Error('Insufficient balance'), { status: 400 });
-  }
-
-  const data = claimData || {};
-
-  await tx.donor.update({
-    where: { id: donorId },
-    data: { balance_remaining: { decrement: totalCost } },
-  });
-  // One RewardClaim row per unit — claim_data (e.g. a shoutout message) is
-  // shared across all units in this line item; quantity > 1 is only offered
-  // client-side for fieldless reward types where that's a non-issue.
+  await fundSpend(tx, donorId, donationId, 'reward', totalCost, reward.channel_id, pool);
+  // One row per unit; price is the confirmed allocation, never the live price.
   await tx.rewardClaim.createMany({
     data: Array.from({ length: quantity }, () => ({
       reward_id: reward.id,
       donor_id: donorId,
-      claim_data: JSON.stringify(data),
+      claim_data: JSON.stringify(claimData || {}),
       status: 'PENDING',
+      amount_cents: unitPrice!,
       donation_id: donationId,
     })),
   });
@@ -54,7 +155,6 @@ export async function claimRewardTx(
     where: { id: reward.id },
     data: { quantity_claimed: { increment: quantity } },
   });
-
   return { cost: totalCost };
 }
 
@@ -64,44 +164,28 @@ export async function votePollTx(
   pollId: string,
   pollOptionId: string,
   cents: number,
-  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
   donationId: string | null = null,
+  pool?: PoolSpend,
 ) {
-  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
-    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
-      status: 400,
-    });
-  }
-
+  validateCents(cents, pool);
   const poll = await tx.poll.findUnique({ where: { id: pollId } });
-  if (!poll || !poll.is_active)
-    throw Object.assign(new Error('Poll not found or inactive'), { status: 404 });
-  if (poll.ends_at && new Date() > poll.ends_at) {
-    throw Object.assign(new Error('Poll has ended'), { status: 400 });
-  }
-
+  if (!poll || !poll.is_active) throw httpError(404, 'Poll not found or inactive');
+  if (poll.ends_at && new Date() >= poll.ends_at) throw httpError(400, 'Poll has ended');
   const option = await tx.pollOption.findUnique({ where: { id: pollOptionId } });
-  if (!option || option.poll_id !== poll.id)
-    throw Object.assign(new Error('Option not found'), { status: 404 });
-
-  const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < cents) {
-    throw Object.assign(new Error('Insufficient balance'), { status: 400 });
-  }
-
-  await tx.donor.update({
-    where: { id: donorId },
-    data: { balance_remaining: { decrement: cents } },
-  });
-  await tx.pollVote.create({
-    data: {
+  if (!option || option.poll_id !== poll.id) throw httpError(404, 'Option not found');
+  if (option.status === 'REJECTED') throw httpError(400, 'Option was rejected');
+  await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
+  await tx.pollVote.createMany({
+    data: allocationRows(cents, pool).map((row) => ({
+      ...row,
       poll_id: poll.id,
       poll_option_id: pollOptionId,
       donor_id: donorId,
-      amount_cents: cents,
       donation_id: donationId,
-    },
+    })),
   });
+  // Pending write-ins reserve their intended share but do not enter public tallies.
+  if (option.status === 'PENDING_APPROVAL') return { cost: cents };
   await tx.pollOption.update({
     where: { id: pollOptionId },
     data: { votes_cents: { increment: cents } },
@@ -110,91 +194,43 @@ export async function votePollTx(
     where: { id: poll.id },
     data: { total_votes_cents: { increment: cents } },
   });
-
   return { cost: cents };
 }
 
-/**
- * Check text against the global blocked-words dictionary, scoped to the
- * given transaction client (so it reads a consistent snapshot alongside
- * the rest of a proposeCustomEntryTx call).
- */
 async function checkBlockedWordsTx(tx: Tx, text: string): Promise<string | null> {
   const blockedWords = await tx.blockedWord.findMany();
-  if (blockedWords.length === 0) return null;
-  const words = text.toLowerCase().match(/\b\w+\b/g) || [];
-  const lowerBlocked = new Set(blockedWords.map((w) => w.word.toLowerCase()));
-  for (const word of words) {
-    if (lowerBlocked.has(word)) {
-      return `Entry contains blocked word: "${word}"`;
-    }
+  const words = new Set(text.toLowerCase().match(/\b\w+\b/g) || []);
+  for (const blocked of blockedWords) {
+    if (words.has(blocked.word.toLowerCase()))
+      return `Entry contains blocked word: "${blocked.word}"`;
   }
   return null;
 }
 
-/**
- * Propose a funded custom poll write-in (Model B: spend-immediately-and-reverse).
- *
- * Commits the donor's funds at proposal time by creating a PollOption +
- * PollCustomEntry + PollVote atomically, and decrementing balance_remaining.
- * If the poll's auto_approve is true, the option goes live immediately
- * (votes_cents credited, poll total updated). Otherwise the option is
- * created with status PENDING_APPROVAL and excluded from public tallies
- * until a moderator approves it (server/routes/moderator.ts) or rejects it
- * (funds reversed via BalanceAdjustment, same machinery as vote reversal).
- */
+/** A funded write-in reserves funds now; approval alone moves them into tallies. */
 export async function proposeCustomEntryTx(
   tx: Tx,
   donorId: string,
   pollId: string,
   label: string,
   cents: number,
-  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
   donationId: string | null = null,
+  pool?: PoolSpend,
 ) {
-  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
-    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
-      status: 400,
-    });
-  }
-
+  validateCents(cents, pool);
   const trimmed = (label || '').trim();
-  if (!trimmed) {
-    throw Object.assign(new Error('label is required'), { status: 400 });
-  }
-
+  if (!trimmed) throw httpError(400, 'label is required');
   const poll = await tx.poll.findUnique({ where: { id: pollId } });
-  if (!poll || !poll.is_active)
-    throw Object.assign(new Error('Poll not found or inactive'), { status: 404 });
-  if (!poll.allow_custom_entries)
-    throw Object.assign(new Error('This poll does not allow custom entries'), { status: 400 });
-  if (poll.ends_at && new Date() > poll.ends_at) {
-    throw Object.assign(new Error('Poll has ended'), { status: 400 });
-  }
-  if (poll.max_entry_chars && trimmed.length > poll.max_entry_chars) {
-    throw Object.assign(new Error(`Entry exceeds maximum of ${poll.max_entry_chars} characters`), {
-      status: 400,
-    });
-  }
-
+  if (!poll || !poll.is_active) throw httpError(404, 'Poll not found or inactive');
+  if (!poll.allow_custom_entries) throw httpError(400, 'This poll does not allow custom entries');
+  if (poll.ends_at && new Date() >= poll.ends_at) throw httpError(400, 'Poll has ended');
+  if (poll.max_entry_chars && trimmed.length > poll.max_entry_chars)
+    throw httpError(400, `Entry exceeds maximum of ${poll.max_entry_chars} characters`);
   const blockedError = await checkBlockedWordsTx(tx, trimmed);
-  if (blockedError) {
-    throw Object.assign(new Error(blockedError), { status: 400 });
-  }
-
-  const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < cents) {
-    throw Object.assign(new Error('Insufficient balance'), { status: 400 });
-  }
-
+  if (blockedError) throw httpError(400, blockedError);
+  await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
   const autoApprove = poll.auto_approve;
   const optionStatus = autoApprove ? 'ACTIVE' : 'PENDING_APPROVAL';
-
-  await tx.donor.update({
-    where: { id: donorId },
-    data: { balance_remaining: { decrement: cents } },
-  });
-
   const entry = await tx.pollCustomEntry.create({
     data: {
       poll_id: poll.id,
@@ -203,7 +239,6 @@ export async function proposeCustomEntryTx(
       status: autoApprove ? 'APPROVED' : 'PENDING',
     },
   });
-
   const option = await tx.pollOption.create({
     data: {
       poll_id: poll.id,
@@ -213,24 +248,20 @@ export async function proposeCustomEntryTx(
       custom_entry_id: entry.id,
     },
   });
-
-  await tx.pollVote.create({
-    data: {
+  await tx.pollVote.createMany({
+    data: allocationRows(cents, pool).map((row) => ({
+      ...row,
       poll_id: poll.id,
       poll_option_id: option.id,
       donor_id: donorId,
-      amount_cents: cents,
       donation_id: donationId,
-    },
+    })),
   });
-
-  if (autoApprove) {
+  if (autoApprove)
     await tx.poll.update({
       where: { id: poll.id },
       data: { total_votes_cents: { increment: cents } },
     });
-  }
-
   return { cost: cents, option, entry, status: optionStatus };
 }
 
@@ -239,39 +270,28 @@ export async function contributeGoalTx(
   donorId: string,
   goalId: string,
   cents: number,
-  /** The donation whose pledge this fulfils (PRD-0002 §T4); null for a wallet spend. */
   donationId: string | null = null,
+  pool?: PoolSpend,
 ) {
-  if (!Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
-    throw Object.assign(new Error(`amount_cents (min ${MIN_SPEND_CENTS}) required`), {
-      status: 400,
-    });
-  }
-
+  validateCents(cents, pool);
   const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
-  if (!goal || !goal.is_active || goal.is_complete) {
-    throw Object.assign(new Error('Goal not found, inactive, or complete'), { status: 404 });
-  }
-
-  const donor = await tx.donor.findUnique({ where: { id: donorId } });
-  if (!donor || donor.balance_remaining < cents) {
-    throw Object.assign(new Error('Insufficient balance'), { status: 400 });
-  }
-
-  const newTotal = goal.current_cents + cents;
-  const isComplete = newTotal >= goal.target_cents;
-
-  await tx.donor.update({
-    where: { id: donorId },
-    data: { balance_remaining: { decrement: cents } },
-  });
-  await tx.fundContribution.create({
-    data: { goal_id: goal.id, donor_id: donorId, amount_cents: cents, donation_id: donationId },
+  if (!goal || !goal.is_active || goal.is_complete)
+    throw httpError(404, 'Goal not found, inactive, or complete');
+  await fundSpend(tx, donorId, donationId, 'goal', cents, goal.channel_id, pool);
+  await tx.fundContribution.createMany({
+    data: allocationRows(cents, pool).map((row) => ({
+      ...row,
+      goal_id: goal.id,
+      donor_id: donorId,
+      donation_id: donationId,
+    })),
   });
   await tx.fundGoal.update({
     where: { id: goal.id },
-    data: { current_cents: { increment: cents }, is_complete: isComplete },
+    data: {
+      current_cents: { increment: cents },
+      is_complete: goal.current_cents + cents >= goal.target_cents,
+    },
   });
-
   return { cost: cents };
 }

@@ -1,3 +1,5 @@
+import type { PledgePlan } from '@dono/shared';
+
 // Shared client-side domain types. These describe the JSON shapes returned by
 // the server API as consumed by the React pages. Fields are intentionally
 // limited to what the UI actually reads.
@@ -182,6 +184,8 @@ export interface Channel {
   slug: string;
   event_id: string;
   is_active: boolean;
+  /** Ordered own/shared goal ids. Ineligible entries are preserved. */
+  default_goals?: string[];
 }
 
 /** A charity Event (a marathon, or a one-day stream event) that groups
@@ -298,20 +302,36 @@ export interface PledgeItem {
   poll_id?: string | null;
   data?: string | null;
   quantity?: number;
+  source?: 'donor' | 'auto';
+  unit_price_cents?: number | null;
+  confirmed_reward_type?: string | null;
 }
 
-export interface PledgeResult {
-  total_cents: number;
-  donate_url?: string | null;
-  wallet_discount_cents?: number;
-}
-
-export interface Pledge {
+interface PledgeBase {
+  pledge_token: string;
   status: string;
-  total_cents: number;
-  top_up_cents?: number;
   expires_at: string;
   items: PledgeItem[];
+}
+export interface PooledPledge extends PledgeBase {
+  format: 'POOLED';
+  draft_id: string;
+  pledge_amount_cents: number;
+  wallet_applied_cents: number;
+  new_money_cents: number;
+  requires_shipping: boolean;
+  plan: PledgePlan;
+}
+export interface LegacyPledge extends PledgeBase {
+  format: 'LEGACY';
+  total_cents: number;
+  top_up_cents: number;
+}
+/** Legacy pledges can only be read; new POST responses never contain old totals. */
+export type Pledge = PooledPledge | LegacyPledge;
+export interface PledgeResult extends PooledPledge {
+  donate_url: string | null;
+  has_checkout: boolean;
 }
 
 // ─── Admin/moderator shapes ───

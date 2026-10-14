@@ -80,6 +80,68 @@ describe('Channels', () => {
     });
   });
 
+  it.each(['admin', 'moderator'])(
+    '%s sets an ordered own/shared Default goal list and preserves ineligible entries',
+    async (role) => {
+      const own = await createTestChannel(prisma);
+      createdChannelIds.push(own.id);
+      const other = await createTestChannel(prisma);
+      createdChannelIds.push(other.id);
+      const inactive = await prisma.fundGoal.create({
+        data: { title: 'Inactive own', target_cents: 100, channel_id: own.id, is_active: false },
+      });
+      const shared = await prisma.fundGoal.create({
+        data: { title: 'Completed shared', target_cents: 100, is_complete: true },
+      });
+      const foreign = await prisma.fundGoal.create({
+        data: { title: 'Foreign', target_cents: 100, channel_id: other.id },
+      });
+      const path = `/api/${role}/channels/${own.id}`;
+      const auth = { Authorization: 'Bearer key_admin_test-admin-key' };
+      try {
+        const updated = await request(createApp())
+          .put(path)
+          .set(auth)
+          .send({ default_goals: [shared.id, inactive.id] });
+        expect(updated.status).toBe(200);
+        expect(updated.body.default_goals).toEqual([shared.id, inactive.id]);
+        const listed = await request(createApp()).get(`/api/${role}/channels`).set(auth);
+        expect(
+          listed.body.find((entry: { id: string }) => entry.id === own.id).default_goals,
+        ).toEqual([shared.id, inactive.id]);
+        const rejected = await request(createApp())
+          .put(path)
+          .set(auth)
+          .send({ name: 'Must roll back', default_goals: [foreign.id] });
+        expect(rejected.status).toBe(400);
+        expect(await prisma.channel.findUnique({ where: { id: own.id } })).toMatchObject({
+          name: own.name,
+        });
+        expect(
+          (await request(createApp()).put(path).set(auth).send({ name: own.name })).body
+            .default_goals,
+        ).toEqual([shared.id, inactive.id]);
+        expect(
+          (
+            await request(createApp())
+              .put(path)
+              .set(auth)
+              .send({ default_goals: [shared.id, shared.id] })
+          ).status,
+        ).toBe(400);
+        expect(
+          (await request(createApp()).put(path).set(auth).send({ default_goals: [] })).body
+            .default_goals,
+        ).toEqual([]);
+      } finally {
+        await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: own.id } });
+        await prisma.fundGoal.deleteMany({
+          where: { id: { in: [inactive.id, shared.id, foreign.id] } },
+        });
+      }
+    },
+  );
+
   describe('Admin channels CRUD', () => {
     const auth = { Authorization: 'Bearer key_admin_test-admin-key' };
 

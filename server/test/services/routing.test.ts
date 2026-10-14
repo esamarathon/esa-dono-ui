@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import webhookRouter from '../../routes/webhook.js';
 import adminRouter from '../../routes/admin.js';
 import { createTestChannel } from '../helpers/fixtures.js';
-import { createPledge } from '../../services/pledge.js';
+import { createLegacyPledge as createPledge } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 

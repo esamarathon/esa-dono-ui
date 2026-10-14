@@ -1,288 +1,302 @@
 import crypto from 'crypto';
-import { MIN_SPEND_CENTS } from '@dono/shared';
+import { isDeepStrictEqual } from 'node:util';
+import type { Prisma } from '@prisma/client';
+import {
+  MIN_SPEND_CENTS,
+  planPledge,
+  type PledgePlan,
+  type PledgeItemKind,
+  type PledgeSelection,
+} from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { withSpan } from '../lib/tracing.js';
-import { checkBlockedWords } from './blockedWords.js';
+import { httpError } from '../lib/httpError.js';
 import { isStripeConfigured } from './stripe.js';
 import { intakeDonation } from './donation.js';
 import { PLEDGE_TTL_MS } from '../config.js';
 
-const STRIPE_MIN_CHARGE_CENTS = 50;
-
-interface PledgeItemInput {
-  kind: string;
+export interface PledgeItemInput {
+  kind: PledgeItemKind;
   target_id: string;
   amount_cents?: number;
   poll_id?: string | null;
   data?: unknown;
   quantity?: number;
+  /** Array position is the default; clients may keep order after removing a row. */
+  insertion_order?: number;
 }
 
-interface CreatePledgeInput {
+export interface CreatePledgeInput {
   email?: string | null;
   comment?: string | null;
   display_name?: string | null;
   items: PledgeItemInput[];
-  top_up_cents?: number;
-  channel_id?: string | null;
+  pledge_amount_cents: number;
+  draft_id: string;
+  plan: PledgePlan;
+  channel_id: string;
+  /** Trusted session identity, resolved BEFORE planning. Never looked up by email. */
+  walletDonorId?: string | null;
+  /** Rejected even when an amount is supplied, to fail closed for old clients. */
+  top_up_cents?: unknown;
 }
 
-const COMMENT_MAX_LENGTH = 500;
-const DISPLAY_NAME_MAX_LENGTH = 60;
+type StoredPledge = Prisma.PendingPledgeGetPayload<{ include: { items: true } }>;
+
+/** Public read shape: old amounts exist ONLY on the LEGACY variant. No session secrets. */
+export function pledgeResponse(pledge: StoredPledge) {
+  const common = {
+    pledge_token: pledge.pledge_token,
+    status: pledge.status,
+    expires_at: pledge.expires_at,
+    items: pledge.items.map((item) => ({
+      kind: item.kind,
+      target_id: item.target_id,
+      poll_id: item.poll_id,
+      amount_cents: item.amount_cents,
+      quantity: item.quantity,
+      data: item.data,
+      source: item.source,
+      unit_price_cents: item.unit_price_cents,
+      confirmed_reward_type: item.confirmed_reward_type,
+    })),
+  };
+  if (pledge.format === 'LEGACY') {
+    return {
+      ...common,
+      format: 'LEGACY' as const,
+      total_cents: pledge.total_cents,
+      top_up_cents: pledge.top_up_cents,
+    };
+  }
+  return {
+    ...common,
+    format: 'POOLED' as const,
+    draft_id: pledge.draft_id!,
+    pledge_amount_cents: pledge.pledge_amount_cents!,
+    plan: JSON.parse(pledge.confirmed_plan!) as PledgePlan,
+    new_money_cents: pledge.new_money_cents!,
+    wallet_applied_cents: pledge.held_wallet_cents,
+    requires_shipping: pledge.requires_shipping,
+  };
+}
+
+async function cleanText(tx: Prisma.TransactionClient, value: unknown, label: string, max: number) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw httpError(400, `${label} must be text`);
+  const text = value.trim();
+  if (text.length > max) throw httpError(400, `${label} exceeds maximum of ${max} characters`);
+  const words = new Set(text.toLowerCase().match(/\b\w+\b/g) ?? []);
+  for (const blocked of await tx.blockedWord.findMany()) {
+    if (words.has(blocked.word.toLowerCase())) {
+      throw httpError(400, `Entry contains blocked word: "${blocked.word}"`);
+    }
+  }
+  return text || null;
+}
 
 /**
- * Create a pending pledge from cart items.
- * Validates each item against live state, computes total, persists.
- * Returns { pledge_token, total_cents, donate_url }.
- *
- * Every pledge is routed to exactly one channel: `channel_id` is required and
- * must reference an active Channel. Each cart item's underlying incentive
- * must either be shared (its own `channel_id` is null) or belong to the same
- * channel as the pledge — incentives cannot be mixed across channels in a
- * single transaction. This is what lets the amount be routed to the correct
- * channel overlay.
+ * Validate live review inputs and atomically store the immutable plan + initial
+ * Wallet hold. Existing drafts resolve first: their own held funding is never
+ * compared with a fresh balance. Checkout reconciliation belongs to slice 3.
  */
-export async function createPledge({
-  email,
-  comment,
-  display_name,
-  items,
-  top_up_cents,
-  channel_id,
-}: CreatePledgeInput) {
+export async function createPledge(input: CreatePledgeInput) {
   return withSpan('pledge.create', async () => {
-    return createPledgeInner({ email, comment, display_name, items, top_up_cents, channel_id });
-  });
-}
-
-async function createPledgeInner({
-  email,
-  comment,
-  display_name,
-  items,
-  top_up_cents,
-  channel_id,
-}: CreatePledgeInput) {
-  if (!items || !Array.isArray(items)) {
-    throw Object.assign(new Error('At least one item required'), { status: 400 });
-  }
-
-  const topUp = top_up_cents ?? 0;
-  if (!Number.isInteger(topUp) || topUp < 0) {
-    throw Object.assign(new Error('top_up_cents must be a non-negative integer'), { status: 400 });
-  }
-
-  if (items.length === 0 && topUp === 0) {
-    throw Object.assign(new Error('At least one item or an additional donation is required'), {
-      status: 400,
-    });
-  }
-
-  if (!channel_id || typeof channel_id !== 'string') {
-    throw Object.assign(new Error('channel_id is required'), { status: 400 });
-  }
-  const channel = await prisma.channel.findUnique({ where: { id: channel_id } });
-  if (!channel || !channel.is_active) {
-    throw Object.assign(new Error('Channel not found or inactive'), { status: 404 });
-  }
-
-  let commentValue: string | null = null;
-  if (comment != null && comment.trim().length > 0) {
-    commentValue = comment.trim();
-    if (commentValue.length > COMMENT_MAX_LENGTH) {
-      throw Object.assign(
-        new Error(`Comment exceeds maximum of ${COMMENT_MAX_LENGTH} characters`),
-        { status: 400 },
-      );
+    if (input.pledge_amount_cents === undefined || input.top_up_cents !== undefined) {
+      throw httpError(400, 'The donate page was updated. Reload to continue.');
     }
-    const blockedError = await checkBlockedWords(commentValue);
-    if (blockedError) {
-      throw Object.assign(new Error(blockedError), { status: 400 });
+    if (
+      typeof input.draft_id !== 'string' ||
+      !input.draft_id.trim() ||
+      input.draft_id.length > 128
+    ) {
+      throw httpError(400, 'draft_id is required (maximum 128 characters)');
     }
-  }
-
-  // Donor-facing display name (#54) — carried through to the fulfilled
-  // Donation's donor_name. Optional: falls back to the existing sources
-  // (Stripe customer_details.name, or null for a wallet-covered checkout
-  // that never had a name to draw from at all).
-  let displayNameValue: string | null = null;
-  if (display_name != null && display_name.trim().length > 0) {
-    displayNameValue = display_name.trim();
-    if (displayNameValue.length > DISPLAY_NAME_MAX_LENGTH) {
-      throw Object.assign(
-        new Error(`Display name exceeds maximum of ${DISPLAY_NAME_MAX_LENGTH} characters`),
-        { status: 400 },
-      );
-    }
-    const blockedError = await checkBlockedWords(displayNameValue);
-    if (blockedError) {
-      throw Object.assign(new Error(blockedError), { status: 400 });
-    }
-  }
-
-  // Validate all items against live data
-  let totalCents = 0;
-  let requiresShipping = false;
-
-  // An incentive with a null channel_id is "shared" and may be added to any
-  // channel's cart. An incentive tied to a specific channel may only be added
-  // when it matches the pledge's channel — incentives cannot be mixed across
-  // channels in a single transaction.
-  const assertChannelMatch = (incentiveChannelId: string | null, label: string) => {
-    if (incentiveChannelId && incentiveChannelId !== channel_id) {
-      throw Object.assign(
-        new Error(`${label} belongs to a different channel and cannot be added to this cart`),
-        { status: 400 },
-      );
-    }
-  };
-
-  for (const item of items) {
-    const { kind, target_id, amount_cents, poll_id } = item;
-
-    if (!['REWARD', 'POLL_VOTE', 'GOAL', 'POLL_CUSTOM'].includes(kind)) {
-      throw Object.assign(new Error(`Invalid item kind: ${kind}`), { status: 400 });
-    }
-
-    if (kind === 'REWARD') {
-      const quantity = item.quantity ?? 1;
-      if (!Number.isInteger(quantity) || quantity < 1) {
-        throw Object.assign(new Error('REWARD quantity must be a positive integer'), {
-          status: 400,
-        });
+    const pledge = await prisma.$transaction(async (tx) => {
+      // Take SQLite's write lock before any read, so competing draft/Wallet
+      // attempts serialize instead of both trying to upgrade a read lock.
+      await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE draft_id = ${input.draft_id}`;
+      const existing = await tx.pendingPledge.findFirst({
+        where: { draft_id: input.draft_id, status: { in: ['OPEN', 'FULFILLED'] } },
+        orderBy: { created_at: 'desc' },
+        include: { items: true },
+      });
+      if (existing) {
+        if (existing.wallet_donor_id && existing.wallet_donor_id !== input.walletDonorId) {
+          throw httpError(403, 'This pledge belongs to another donor session');
+        }
+        return existing;
       }
-      const reward = await prisma.reward.findUnique({ where: { id: target_id } });
-      if (!reward || !reward.is_active) {
-        throw Object.assign(new Error(`Reward not found: ${target_id}`), { status: 404 });
-      }
-      assertChannelMatch(reward.channel_id, `Reward "${reward.title}"`);
+      if (!Array.isArray(input.items)) throw httpError(400, 'items must be an array');
       if (
-        reward.quantity_total !== null &&
-        reward.quantity_claimed + quantity > reward.quantity_total
+        !Number.isInteger(input.pledge_amount_cents) ||
+        input.pledge_amount_cents < MIN_SPEND_CENTS ||
+        input.pledge_amount_cents > 2147483647
       ) {
-        throw Object.assign(new Error(`Reward sold out: ${reward.title}`), { status: 400 });
+        throw httpError(400, 'pledge_amount_cents must be integer cents of at least 100');
       }
-      if (reward.type === 'PHYSICAL') {
-        requiresShipping = true;
-      }
-      totalCents += reward.cost_cents * quantity;
-    } else if (kind === 'POLL_VOTE') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
-        throw Object.assign(new Error(`POLL_VOTE amount_cents (min ${MIN_SPEND_CENTS}) required`), {
-          status: 400,
-        });
-      }
-      if (!poll_id) {
-        throw Object.assign(new Error('POLL_VOTE requires poll_id'), { status: 400 });
-      }
-      const poll = await prisma.poll.findUnique({ where: { id: poll_id } });
-      if (!poll || !poll.is_active) {
-        throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
-      }
-      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
-      if (poll.ends_at && new Date() > poll.ends_at) {
-        throw Object.assign(new Error(`Poll has ended: ${poll.title}`), { status: 400 });
-      }
-      const option = await prisma.pollOption.findUnique({ where: { id: target_id } });
-      if (!option || option.poll_id !== poll_id) {
-        throw Object.assign(new Error(`Option not found: ${target_id}`), { status: 404 });
-      }
-      totalCents += amount_cents!;
-    } else if (kind === 'GOAL') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
-        throw Object.assign(new Error(`GOAL amount_cents (min ${MIN_SPEND_CENTS}) required`), {
-          status: 400,
-        });
-      }
-      const goal = await prisma.fundGoal.findUnique({ where: { id: target_id } });
-      if (!goal || !goal.is_active || goal.is_complete) {
-        throw Object.assign(new Error(`Goal not found, inactive, or complete: ${target_id}`), {
-          status: 404,
-        });
-      }
-      assertChannelMatch(goal.channel_id, `Goal "${goal.title}"`);
-      totalCents += amount_cents!;
-    } else if (kind === 'POLL_CUSTOM') {
-      if (!Number.isInteger(amount_cents) || amount_cents! < MIN_SPEND_CENTS) {
-        throw Object.assign(
-          new Error(`POLL_CUSTOM amount_cents (min ${MIN_SPEND_CENTS}) required`),
-          {
-            status: 400,
-          },
-        );
-      }
-      if (!poll_id) {
-        throw Object.assign(new Error('POLL_CUSTOM requires poll_id'), { status: 400 });
-      }
-      const label =
-        typeof item.data === 'object' && item.data
-          ? (item.data as { label?: unknown }).label
-          : null;
-      const trimmed = typeof label === 'string' ? label.trim() : '';
-      if (!trimmed) {
-        throw Object.assign(new Error('POLL_CUSTOM requires a label'), { status: 400 });
-      }
-      const poll = await prisma.poll.findUnique({ where: { id: poll_id } });
-      if (!poll || !poll.is_active) {
-        throw Object.assign(new Error(`Poll not found or inactive: ${poll_id}`), { status: 404 });
-      }
-      assertChannelMatch(poll.channel_id, `Poll "${poll.title}"`);
-      if (!poll.allow_custom_entries) {
-        throw Object.assign(new Error(`Poll does not allow custom entries: ${poll.title}`), {
-          status: 400,
-        });
-      }
-      if (poll.ends_at && new Date() > poll.ends_at) {
-        throw Object.assign(new Error(`Poll has ended: ${poll.title}`), { status: 400 });
-      }
-      if (poll.max_entry_chars && trimmed.length > poll.max_entry_chars) {
-        throw Object.assign(
-          new Error(`Entry exceeds maximum of ${poll.max_entry_chars} characters`),
-          { status: 400 },
-        );
-      }
-      const blockedError = await checkBlockedWords(trimmed);
-      if (blockedError) {
-        throw Object.assign(new Error(blockedError), { status: 400 });
-      }
-      totalCents += amount_cents!;
-    }
-  }
-
-  const pledgeToken = crypto.randomBytes(24).toString('hex');
-  const expiresAt = new Date(Date.now() + PLEDGE_TTL_MS);
-
-  const pledge = await prisma.pendingPledge.create({
-    data: {
-      pledge_token: pledgeToken,
-      donor_email: email || null,
-      comment: commentValue,
-      display_name: displayNameValue,
-      total_cents: totalCents + topUp,
-      top_up_cents: topUp,
-      requires_shipping: requiresShipping,
-      status: 'OPEN',
-      expires_at: expiresAt,
-      channel_id,
-      items: {
-        create: items.map((item) => ({
+      if (!input.channel_id || typeof input.channel_id !== 'string')
+        throw httpError(400, 'channel_id is required');
+      const channel = await tx.channel.findUnique({ where: { id: input.channel_id } });
+      if (!channel || !channel.is_active) throw httpError(404, 'Channel not found or inactive');
+      const donor = input.walletDonorId
+        ? await tx.donor.findUnique({ where: { id: input.walletDonorId } })
+        : null;
+      if (input.walletDonorId && (!donor || donor.is_frozen))
+        throw httpError(403, 'Donor unavailable');
+      const comment = await cleanText(tx, input.comment, 'Comment', 500);
+      const displayName = await cleanText(tx, input.display_name, 'Display name', 60);
+      const selections: PledgeSelection[] = [];
+      const correctedItems: PledgeItemInput[] = [];
+      const quantities = new Map<string, number>();
+      const channelMatches = (id: string | null) => id === null || id === channel.id;
+      for (const [index, item] of input.items.entries()) {
+        if (!item || !['REWARD', 'POLL_VOTE', 'GOAL', 'POLL_CUSTOM'].includes(item.kind)) {
+          throw httpError(400, 'Invalid item kind');
+        }
+        if (typeof item.target_id !== 'string') throw httpError(400, 'target_id is required');
+        let selection: PledgeSelection = {
           kind: item.kind,
           target_id: item.target_id,
-          poll_id: item.poll_id || null,
-          amount_cents: item.amount_cents || 0,
-          quantity: item.kind === 'REWARD' ? (item.quantity ?? 1) : 1,
-          data: item.data ? JSON.stringify(item.data) : null,
-        })),
-      },
-    },
-    include: { items: true },
+          poll_id: item.poll_id,
+          amount_cents: item.amount_cents ?? 0,
+          insertion_order: item.insertion_order ?? index,
+        };
+        let corrected = item;
+        if (item.kind === 'REWARD') {
+          const requested = item.quantity ?? 1;
+          if (!Number.isInteger(requested) || requested < 1)
+            throw httpError(400, 'REWARD quantity must be a positive integer');
+          const reward = await tx.reward.findUnique({ where: { id: item.target_id } });
+          if (!reward || !reward.is_active || !channelMatches(reward.channel_id)) continue;
+          const already = quantities.get(reward.id) ?? 0;
+          const quantity =
+            reward.quantity_total === null
+              ? requested
+              : Math.min(
+                  requested,
+                  Math.max(0, reward.quantity_total - reward.quantity_claimed - already),
+                );
+          if (quantity === 0) continue;
+          quantities.set(reward.id, already + quantity);
+          selection = {
+            ...selection,
+            quantity,
+            unit_price_cents: reward.cost_cents,
+            reward_type: reward.type,
+            amount_cents: reward.cost_cents * quantity,
+          };
+          corrected = { ...item, quantity, amount_cents: selection.amount_cents };
+        } else if (item.kind === 'GOAL') {
+          const goal = await tx.fundGoal.findUnique({ where: { id: item.target_id } });
+          if (!goal || !goal.is_active || goal.is_complete || !channelMatches(goal.channel_id))
+            continue;
+        } else {
+          if (!item.poll_id) throw httpError(400, `${item.kind} requires poll_id`);
+          const poll = await tx.poll.findUnique({ where: { id: item.poll_id } });
+          if (
+            !poll ||
+            !poll.is_active ||
+            !channelMatches(poll.channel_id) ||
+            (poll.ends_at && poll.ends_at <= new Date())
+          )
+            continue;
+          if (item.kind === 'POLL_VOTE') {
+            const option = await tx.pollOption.findUnique({ where: { id: item.target_id } });
+            if (!option || option.poll_id !== poll.id || option.status === 'REJECTED') continue;
+          } else {
+            if (!poll.allow_custom_entries) continue;
+            const data =
+              typeof item.data === 'object' && item.data ? (item.data as { label?: unknown }) : {};
+            const label = await cleanText(
+              tx,
+              data.label,
+              'Entry',
+              poll.max_entry_chars ?? 2147483647,
+            );
+            if (!label) throw httpError(400, 'POLL_CUSTOM requires a label');
+            corrected = { ...item, data: { label } };
+          }
+        }
+        selections.push({ ...selection, data: corrected.data ?? null });
+        correctedItems.push({ ...corrected, insertion_order: selection.insertion_order });
+      }
+      let plan: PledgePlan;
+      try {
+        plan = planPledge({
+          pledge_amount_cents: input.pledge_amount_cents,
+          selections,
+          available_wallet_cents: donor?.balance_remaining ?? null,
+        });
+      } catch (error) {
+        throw httpError(400, (error as Error).message);
+      }
+      if (Object.values(plan.overage_cents).some((cents) => cents > 0)) {
+        throw Object.assign(httpError(400, 'Selections exceed the pledge amount in a Pool'), {
+          plan,
+          items: correctedItems,
+        });
+      }
+      if (!input.plan) throw httpError(400, 'The client-shown plan is required');
+      if (!isDeepStrictEqual(input.plan, plan)) {
+        throw Object.assign(
+          httpError(409, 'The pledge plan changed. Confirm the corrected review.'),
+          { plan, items: correctedItems },
+        );
+      }
+      if (plan.wallet_applied_cents > 0) {
+        await tx.donor.update({
+          where: { id: donor!.id },
+          data: {
+            balance_remaining: { decrement: plan.wallet_applied_cents },
+            balance_held_cents: { increment: plan.wallet_applied_cents },
+          },
+        });
+      }
+      const rows = plan.selections.map((selection) => ({
+        kind: selection.kind,
+        target_id: selection.target_id,
+        poll_id: selection.poll_id,
+        amount_cents: selection.amount_cents,
+        quantity: selection.quantity,
+        unit_price_cents: selection.unit_price_cents,
+        confirmed_reward_type: selection.reward_type,
+        source: 'donor',
+        data: selection.data === null ? null : JSON.stringify(selection.data),
+      }));
+      return tx.pendingPledge.create({
+        data: {
+          pledge_token: crypto.randomBytes(24).toString('hex'),
+          format: 'POOLED',
+          draft_id: input.draft_id,
+          pledge_amount_cents: plan.pledge_amount_cents,
+          confirmed_plan: JSON.stringify(plan),
+          new_money_cents: plan.new_money_cents,
+          held_wallet_cents: plan.wallet_applied_cents,
+          wallet_donor_id: donor?.id ?? null,
+          wallet_hold_status: plan.wallet_applied_cents > 0 ? 'HELD' : 'NONE',
+          donor_email: donor?.email ?? input.email ?? null,
+          comment,
+          display_name: displayName,
+          requires_shipping: plan.requires_shipping,
+          channel_id: channel.id,
+          expires_at: new Date(Date.now() + PLEDGE_TTL_MS),
+          items: {
+            create: [
+              ...rows,
+              ...plan.top_up_rows.map((topUp) => ({
+                ...rows[topUp.selection_index]!,
+                source: 'auto',
+                amount_cents: topUp.amount_cents,
+              })),
+            ],
+          },
+        },
+        include: { items: true },
+      });
+    });
+    return pledgeResponse(pledge);
   });
-
-  return {
-    pledge_token: pledge.pledge_token,
-    total_cents: pledge.total_cents,
-    expires_at: pledge.expires_at,
-  };
 }
 
 export interface WalletDonor {
@@ -292,27 +306,7 @@ export interface WalletDonor {
   magic_token: string | null;
 }
 
-/**
- * Create a Stripe Checkout Session for a pledge and return the checkout URL.
- * Requires STRIPE_SECRET_KEY. Falls back to a null URL if Stripe is not configured.
- *
- * When an authenticated donor is provided (resolved from a valid magic token),
- * their wallet balance is applied as a discount to the Stripe charge,
- * recorded as wallet_discount_cents on the pledge. The discount only ever
- * offsets the incentive items — the additional contribution (top_up_cents) is
- * always charged as real money. If the wallet balance covers the entire
- * pledge (possible only when there is no additional contribution), the pledge
- * is fulfilled directly without Stripe —
- * unless the pledge requires shipping (contains a PHYSICAL reward), in which
- * case Stripe Checkout is always used to collect a shipping address and charge
- * shipping.
- *
- * @param pledgeToken The pledge token to create a checkout for
- * @param donor       Authenticated donor (from magic token validation). If
- *                     not provided, wallet discount is skipped.
- * @param email       Unauthenticated email for Stripe customer_email pre-fill.
- *                     Not used for wallet discount.
- */
+/** Use confirmed funding only. No fresh Wallet discount at checkout. */
 export async function createCheckoutForPledge(
   pledgeToken: string,
   donor?: WalletDonor | null,
@@ -320,104 +314,39 @@ export async function createCheckoutForPledge(
 ) {
   const pledge = await prisma.pendingPledge.findUnique({
     where: { pledge_token: pledgeToken },
-    select: {
-      id: true,
-      total_cents: true,
-      top_up_cents: true,
-      donor_email: true,
-      comment: true,
-      requires_shipping: true,
-    },
+    include: { items: true },
   });
-  if (!pledge) {
-    throw Object.assign(new Error('Pledge not found'), { status: 404 });
+  if (!pledge) throw httpError(404, 'Pledge not found');
+  if (pledge.format !== 'POOLED') throw httpError(409, 'Legacy pledges are read-only');
+  if (pledge.wallet_donor_id && pledge.wallet_donor_id !== donor?.id)
+    throw httpError(403, 'This pledge belongs to another donor session');
+  if (pledge.checkout_session_id || pledge.status !== 'OPEN') {
+    return { donate_url: pledge.checkout_url, checkout_session_id: pledge.checkout_session_id };
   }
-
-  const stripeEmail = (email || pledge.donor_email || '').trim().toLowerCase();
-
-  let walletDiscountCents = 0;
-  if (donor && donor.balance_remaining > 0) {
-    // The additional contribution (top_up_cents) always comes from real
-    // money: the donor's wallet balance only offsets the incentive items,
-    // never the additional contribution itself.
-    const walletCoverableCents = pledge.total_cents - pledge.top_up_cents;
-    walletDiscountCents = Math.min(donor.balance_remaining, walletCoverableCents);
-
-    const projectedCharge = pledge.total_cents - walletDiscountCents;
-    if (projectedCharge > 0 && projectedCharge < STRIPE_MIN_CHARGE_CENTS) {
-      walletDiscountCents = Math.max(0, pledge.total_cents - STRIPE_MIN_CHARGE_CENTS);
-      walletDiscountCents = Math.min(walletDiscountCents, walletCoverableCents);
-    }
-
-    // Wallet covers everything — fulfill directly, no Stripe charge. Physical
-    // pledges always skip this branch so a shipping address is collected (and
-    // shipping charged) via Stripe Checkout. In that case, keep the line item
-    // at Stripe's minimum charge so the session is valid (shipping is added on
-    // top by Stripe).
-    if (walletDiscountCents >= pledge.total_cents) {
-      if (pledge.requires_shipping) {
-        walletDiscountCents = Math.max(0, pledge.total_cents - STRIPE_MIN_CHARGE_CENTS);
-      } else {
-        const fullPledge = await prisma.pendingPledge.findUniqueOrThrow({
-          where: { pledge_token: pledgeToken },
-          include: { items: true },
-        });
-
-        // No Stripe payment: intake records and fulfills against this identity.
-        await intakeDonation({ source: 'wallet', pledge: fullPledge, donor });
-
-        const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
-        return {
-          donate_url: `${baseUrl}/wallet?token=${donor.magic_token}`,
-          checkout_session_id: null,
-          wallet_discount_cents: pledge.total_cents,
-        };
-      }
-    }
+  if (pledge.new_money_cents === 0) {
+    if (!donor) throw httpError(403, 'Wallet funding requires a donor session');
+    await intakeDonation({ source: 'wallet', pledge, donor });
+    const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
+    return { donate_url: `${baseUrl}/pledge/${pledgeToken}`, checkout_session_id: null };
   }
-
-  // Store the discount so intake can account for it when payment completes
-  if (walletDiscountCents > 0) {
-    await prisma.pendingPledge.update({
-      where: { pledge_token: pledgeToken },
-      data: { wallet_discount_cents: walletDiscountCents },
-    });
-  }
-
   if (!isStripeConfigured()) {
-    if (pledge.requires_shipping) {
-      throw Object.assign(
-        new Error('Physical rewards require Stripe checkout to collect a shipping address'),
-        { status: 503 },
+    if (pledge.requires_shipping)
+      throw httpError(
+        503,
+        'Physical rewards require Stripe checkout to collect a shipping address',
       );
-    }
-    return {
-      donate_url: null,
-      checkout_session_id: null,
-      wallet_discount_cents: walletDiscountCents,
-    };
+    return { donate_url: null, checkout_session_id: null };
   }
-
-  const checkoutAmount = pledge.total_cents - walletDiscountCents;
   const { createCheckoutSession } = await import('./stripe.js');
   const session = await createCheckoutSession({
     pledgeToken,
-    amountCents: checkoutAmount,
-    email: stripeEmail,
+    amountCents: pledge.new_money_cents!,
+    email: (pledge.donor_email || email || '').trim().toLowerCase(),
     requiresShipping: pledge.requires_shipping,
   });
-
   await prisma.pendingPledge.update({
-    where: { pledge_token: pledgeToken },
-    data: {
-      checkout_session_id: session.id,
-      checkout_url: session.url,
-    },
+    where: { id: pledge.id },
+    data: { checkout_session_id: session.id, checkout_url: session.url },
   });
-
-  return {
-    donate_url: session.url,
-    checkout_session_id: session.id,
-    wallet_discount_cents: walletDiscountCents,
-  };
+  return { donate_url: session.url, checkout_session_id: session.id };
 }
