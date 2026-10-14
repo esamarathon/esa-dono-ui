@@ -35,6 +35,16 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
   -d '{"email":"test@example.com","amount_cents":2500,"external_id":"hekathon-12345","occurred_at":"2026-01-15T12:00:00.000Z"}'
 ```
 
+Without a pledge token this is a **legacy/admin donation**: the amount is new money
+and becomes available Wallet credit; it does not create Pools. To fulfill a pooled
+pledge through this testing boundary, first confirm `/api/pledge` with
+`pledge_amount_cents`, `draft_id`, `plan` from `@dono/shared` `planPledge`, `channel_id`
+and `items`, then pass its token and **confirmed new money** to `simulate-donation`.
+A Stripe webhook receives gross `amount_total` plus `amount_shipping`; intake records
+the shipping separately. Wallet-only pooled pledges add $0 money, consume their held
+funding and create no new Wallet credit. Incentive allocations can exceed the money
+amount across independent categories; never sum them as money.
+
 Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet).
 
 ## Option D — Seeded platform simulator (bulk, reproducible)
@@ -57,7 +67,18 @@ Key flags: `--seed` (int or string; the repro handle), `--events`/`--duration` (
 
 Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl` (observed server responses, keyed by `seq`), and `manifest.json` (seed, simVersion, args, git SHA) under `--out`.
 
-**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards remain excluded from pledges because the simulator does not complete Stripe payments. Wallet sufficiency is not guaranteed: underfunded carts and rejected spends remain useful outcomes.
+**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards remain excluded from pledges because the simulator does not complete Stripe payments. Wallet sufficiency is not guaranteed: cash-funded pending pledges and rejected spends remain useful outcomes.
+
+**Pooled executor (#185):** it reads the actual `/api/donor` Wallet balance and live reward
+prices/types, computes the same pure shared plan as the server, and posts amount, plan
+and a stable run/donor/sequence draft id. An explicit `params.pledgeAmountCents` sets D;
+older logs without it use the smallest independent Pools that fit their selections,
+not the old cart sum. An empty selection set is a valid message-only pledge. Acceptance
+is checked by `GET /api/pledge/:token` (`POOLED` + `FULFILLED`), never by obsolete
+`total_cents`/discount fields or a zero-charge estimate. A 409 is logged for correction,
+not silently reconfirmed. The simulator does not complete Stripe or release Wallet
+holds; an OPEN pledge keeps held funding until checkout reconciliation proves non-payment.
+Do not run this intermediate branch against a deployment; #186/#187/#194 complete the release.
 
 `--traffic phased` (default) adds seeded quiet/normal/busy periods; `--traffic steady` retains constant-rate exponential delays. The phases are normalized to preserve the expected mean waiting time specified by `--rate`. Execution remains serial, so HTTP latency adds to run duration. Changing traffic mode does not change the non-timing decisions.
 

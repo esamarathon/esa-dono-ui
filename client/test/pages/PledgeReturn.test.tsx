@@ -15,6 +15,7 @@ vi.mock('../../src/lib/tracing', () => ({ track: mocks.track }));
 import PledgeReturn from '../../src/pages/PledgeReturn';
 
 const fulfilledPledge = {
+  format: 'LEGACY',
   status: 'FULFILLED',
   total_cents: 1000,
   expires_at: '2099-01-01T00:00:00Z',
@@ -55,7 +56,8 @@ describe('PledgeReturn', () => {
 
     expect(await screen.findByText(/Your pledge has been fulfilled/)).toBeInTheDocument();
     expect(screen.getByText('Reward')).toBeInTheDocument();
-    expect(screen.getAllByText('$10.00')).toHaveLength(2);
+    expect(screen.getAllByText('$10.00')).toHaveLength(1);
+    expect(screen.getByText('—')).toBeInTheDocument();
     expect(screen.queryByText('wallet page')).not.toBeInTheDocument();
   });
 

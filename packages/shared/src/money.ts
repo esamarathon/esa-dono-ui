@@ -20,11 +20,11 @@ export function amountToCents(amount: string | number): Cents {
 }
 
 /**
- * Minimum spend enforced everywhere a donor commits balance to something
- * (poll vote, custom poll write-in, goal contribution). Single source of
- * truth for both server-side validation (services/spend.ts,
- * services/pledge.ts, routes/admin.ts) and client-side form validation —
- * change it once here to raise or lower the site-wide minimum.
+ * Minimum donor selection in a new pledge, and direct legacy poll/goal spend.
+ * Automatic allocations may be smaller; the pledge planner enforces this on
+ * donor selections before their proportional top-up. Moderator assignments and
+ * Pool credit spends also allow any positive integer cents (PRD-0003 §P3).
+ * Shared by server validation and client form validation.
  */
 export const MIN_SPEND_CENTS = 100;
 

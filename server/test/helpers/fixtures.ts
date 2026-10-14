@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
+import prisma from '../../lib/prisma.js';
 
 /**
  * The migration's default Event. CI and the container test build their database
@@ -7,6 +8,52 @@ import crypto from 'crypto';
  * `ensureDefaultEvent` creates it when needed.
  */
 export const DEFAULT_EVENT_ID = '00000000-0000-4000-8000-000000000001';
+
+/** Historical cart fixture: POST /pledge no longer creates this shape. */
+export async function createLegacyPledge(input: {
+  email?: string;
+  display_name?: string;
+  comment?: string;
+  channel_id: string;
+  top_up_cents?: number;
+  items: Array<{
+    kind: string;
+    target_id: string;
+    amount_cents?: number;
+    quantity?: number;
+    poll_id?: string;
+    data?: unknown;
+  }>;
+}) {
+  let total = input.top_up_cents ?? 0;
+  for (const item of input.items) {
+    total +=
+      item.kind === 'REWARD'
+        ? (await prisma.reward.findUniqueOrThrow({ where: { id: item.target_id } })).cost_cents *
+          (item.quantity ?? 1)
+        : (item.amount_cents ?? 0);
+  }
+  return prisma.pendingPledge.create({
+    data: {
+      format: 'LEGACY',
+      pledge_token: crypto.randomUUID(),
+      expires_at: new Date(Date.now() + 7200000),
+      donor_email: input.email,
+      comment: input.comment,
+      display_name: input.display_name,
+      channel_id: input.channel_id,
+      total_cents: total,
+      top_up_cents: input.top_up_cents ?? 0,
+      items: {
+        create: input.items.map((item) => ({
+          ...item,
+          amount_cents: item.amount_cents ?? 0,
+          data: item.data ? JSON.stringify(item.data) : null,
+        })),
+      },
+    },
+  });
+}
 
 export async function ensureDefaultEvent(prisma: PrismaClient) {
   return prisma.event.upsert({

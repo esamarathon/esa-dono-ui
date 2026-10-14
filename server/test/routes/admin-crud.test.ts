@@ -4,7 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
-import { createPledge } from '../../services/pledge.js';
+import { createLegacyPledge as createPledge } from '../helpers/fixtures.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();

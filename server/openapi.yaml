@@ -45,12 +45,13 @@ info:
     `/api/moderator/channels`; per-channel raised totals are admin-only
     (`GET /api/admin/stats`).
 
-    ## Wallet Discount
+    ## Wallet funding and Pools
 
-    When `POST /api/pledge` receives a valid donor session (authenticated donor),
-    the donor's `balance_remaining` is applied as a discount on the Stripe
-    checkout amount. If the wallet covers the entire pledge total, the pledge
-    is fulfilled directly without a Stripe charge. See the pledge endpoint for details.
+    `POST /api/pledge` confirms a pledge amount and a shared deterministic plan.
+    A valid donor session can fund it with available Wallet credit, held atomically
+    at confirmation. Physical rewards require new money. A Wallet-only pledge
+    adds zero money; shipping is a separate fee. Each incentive category has its
+    own Pool equal to the pledge amount; incentive totals are not money totals.
 
     ## Money
 
@@ -885,25 +886,26 @@ paths:
   /pledge:
     post:
       tags: [Pledge]
-      summary: Create a pending pledge (smart cart)
+      summary: Confirm an amount-first pooled pledge
       description: |
-        Creates a pending pledge from cart items and (when Stripe is configured)
-        a Stripe Checkout Session. When the request carries a valid donor
-        session (cookie or Bearer token), the donor's wallet balance is applied
-        as a discount. Anonymous requests are allowed.
+        Each reward, poll and goal Pool independently equals pledge_amount_cents.
+        Anonymous requests are allowed. A valid donor session is resolved before
+        planning; email alone never authorizes Wallet credit. Physical reward
+        prices are funded by new money and shipping is a separate fee outside
+        every Pool and money total. Positive Stripe charges are at least 50 cents.
 
-        **Channels:** every pledge is routed to exactly one channel via the
-        required `channel_id` (used to route the donation to the correct
-        overlay). Each cart item's underlying reward/poll/goal must either be
-        shared (its own `channel_id` is null) or match the pledge's
-        `channel_id` — incentives cannot be mixed across channels in a single
-        transaction.
+        The client sends the exact plan returned by @dono/shared planPledge.
+        A new attempt validates live Channel, stock, prices, eligibility and text.
+        Category overage returns 400. A changed plan returns 409 with the corrected
+        plan and items, creating neither a pledge nor a Wallet hold. Confirmed
+        prices, types, auto rows and initial Wallet hold are stored atomically.
+        Retrying an existing draft returns its immutable plan, including its own
+        held funding, before comparison. Full payment reconciliation is slice 3.
 
-        **Wallet discount flow:**
-        - Donor session present & valid → donor's `balance_remaining` deducted from Stripe charge
-        - Wallet ≥ pledge total → pledge fulfilled immediately, redirected to wallet
-        - Wallet < pledge total → Stripe charges only `total - discount` (min 50 cents)
-        - No donor session → no discount applied
+        Missing pledge_amount_cents or any top_up_cents returns 400 with
+        "The donate page was updated. Reload to continue."
+        Live removed/closed/foreign selections and reduced stock are returned for
+        corrected review; no automatic increase to the pledge amount occurs.
       security: [{}, { DonorSession: [] }, { DonorBearer: [] }]
       requestBody:
         required: true
@@ -911,8 +913,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [items, channel_id]
+              required: [items, channel_id, pledge_amount_cents, draft_id, plan]
               properties:
+                pledge_amount_cents: { type: integer, minimum: 100, maximum: 2147483647 }
+                draft_id: { type: string, minLength: 1, maxLength: 128 }
+                plan: { $ref: '#/components/schemas/PledgePlan' }
                 email:
                   type: string
                   format: email
@@ -927,13 +932,9 @@ paths:
                 channel_id:
                   type: string
                   description: Required. The channel this donation is routed to.
-                top_up_cents:
-                  type: integer
-                  minimum: 0
-                  description: Optional additional donation beyond cart items (credited as wallet balance)
                 items:
                   type: array
-                  minItems: 1
+                  minItems: 0
                   items:
                     type: object
                     required: [kind, target_id]
@@ -955,24 +956,42 @@ paths:
                         minimum: 1
                         default: 1
                         description: REWARD only — number of units of this reward to claim. amount_cents should be cost_cents * quantity (the line total, not the unit price). Ignored for other kinds.
+                      insertion_order:
+                        type: integer
+                        minimum: 0
+                        description: Tie order for largest remainders; defaults to array position.
                       data:
                         description: Claim data for REWARD, { label } for POLL_CUSTOM
       responses:
         '200':
-          description: Pledge created
+          description: Confirmed pooled pledge (or the existing draft's immutable pledge)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/PooledPledge' }
+                  - type: object
+                    required: [donate_url, has_checkout]
+                    properties:
+                      donate_url: { type: string, nullable: true }
+                      has_checkout: { type: boolean }
+        '400':
+          description: Obsolete donate contract, missing draft/plan, invalid cents/text or category overage
+        '403':
+          description: The existing pledge's Wallet funding belongs to another donor session
+        '404':
+          description: Channel not found or inactive
+        '409':
+          description: Confirm the corrected review; no pledge or Wallet hold was created
           content:
             application/json:
               schema:
                 type: object
+                required: [error, plan, items]
                 properties:
-                  pledge_token: { type: string }
-                  total_cents: { type: integer }
-                  expires_at: { type: string, format: date-time }
-                  donate_url: { type: string, nullable: true }
-                  has_checkout: { type: boolean }
-                  wallet_discount_cents: { type: integer, default: 0 }
-        '400':
-          description: Validation error (invalid items, blocked words, empty cart)
+                  error: { type: string }
+                  plan: { $ref: '#/components/schemas/PledgePlan' }
+                  items: { type: array, items: { type: object } }
 
   /pledge/{token}:
     get:
@@ -985,28 +1004,15 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Pledge details
+          description: Immutable pledge details; LEGACY is read-only. Never exposes donor email or session tokens.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  pledge_token: { type: string }
-                  total_cents: { type: integer }
-                  top_up_cents: { type: integer }
-                  status:
-                    type: string
-                    enum: [OPEN, FULFILLED, EXPIRED, CANCELLED]
-                  donor_email: { type: string, nullable: true }
-                  expires_at: { type: string, format: date-time }
-                  items:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        kind: { type: string }
-                        target_id: { type: string }
-                        amount_cents: { type: integer }
+                oneOf:
+                  - { $ref: '#/components/schemas/PooledPledge' }
+                  - { $ref: '#/components/schemas/LegacyPledge' }
+                discriminator:
+                  propertyName: format
         '404':
           description: Pledge not found
 
@@ -1123,6 +1129,9 @@ paths:
       description: |
         A Channel's `slug` cannot change while it is active, and the primary
         Channel of an active Event cannot be deactivated or moved to another Event.
+        default_goals replaces the ordered own/shared goal-id list; another
+        Channel's goal is rejected with 400. Ineligible entries are preserved.
+        Channel list/update responses include the ordered default_goals ids.
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -1141,6 +1150,7 @@ paths:
                   description: Only accepted while the Channel is inactive.
                 event_id: { type: string }
                 is_active: { type: boolean }
+                default_goals: { $ref: '#/components/schemas/DefaultGoals' }
       responses:
         '200':
           description: Channel updated
@@ -2882,6 +2892,9 @@ paths:
       description: |
         A Channel's `slug` cannot change while it is active, and the primary
         Channel of an active Event cannot be deactivated or moved to another Event.
+        default_goals replaces the ordered own/shared goal-id list; another
+        Channel's goal is rejected with 400. Ineligible entries are preserved.
+        Channel list/update responses include the ordered default_goals ids.
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
         - name: id
@@ -2900,6 +2913,7 @@ paths:
                   description: Only accepted while the Channel is inactive.
                 event_id: { type: string }
                 is_active: { type: boolean }
+                default_goals: { $ref: '#/components/schemas/DefaultGoals' }
       responses:
         '200':
           description: Channel updated
@@ -3546,6 +3560,131 @@ components:
       scheme: bearer
       description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
+    PoolAmounts:
+      type: object
+      required: [reward, poll, goal]
+      additionalProperties: false
+      properties:
+        reward: { type: integer, minimum: 0 }
+        poll: { type: integer, minimum: 0 }
+        goal: { type: integer, minimum: 0 }
+    PlannedSelection:
+      type: object
+      required:
+        [
+          kind,
+          target_id,
+          poll_id,
+          amount_cents,
+          insertion_order,
+          quantity,
+          unit_price_cents,
+          reward_type,
+          data,
+        ]
+      properties:
+        kind: { type: string, enum: [REWARD, POLL_VOTE, POLL_CUSTOM, GOAL] }
+        target_id: { type: string }
+        poll_id: { type: string, nullable: true }
+        amount_cents: { type: integer, minimum: 100 }
+        insertion_order: { type: integer, minimum: 0 }
+        quantity: { type: integer, minimum: 1 }
+        unit_price_cents: { type: integer, minimum: 1, nullable: true }
+        reward_type: { type: string, nullable: true, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+        data:
+          {
+            nullable: true,
+            description: Opaque claim/write-in data; validated by the server,
+            not the pure planner,
+          }
+    PledgePlan:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          pledge_amount_cents,
+          selections,
+          usage_cents,
+          overage_cents,
+          top_up_rows,
+          wallet_applied_cents,
+          new_money_cents,
+          requires_shipping,
+        ]
+      properties:
+        pledge_amount_cents: { type: integer, minimum: 100 }
+        selections: { type: array, items: { $ref: '#/components/schemas/PlannedSelection' } }
+        usage_cents: { $ref: '#/components/schemas/PoolAmounts' }
+        overage_cents: { $ref: '#/components/schemas/PoolAmounts' }
+        top_up_rows:
+          type: array
+          description: Flat poll/goal proportional auto amounts, largest remainder, insertion-order ties. No reward top-up.
+          items:
+            type: object
+            required: [selection_index, amount_cents]
+            properties:
+              selection_index: { type: integer, minimum: 0 }
+              amount_cents: { type: integer, minimum: 1 }
+        wallet_applied_cents: { type: integer, minimum: 0 }
+        new_money_cents: { type: integer, minimum: 0 }
+        requires_shipping: { type: boolean }
+    PledgeReadBase:
+      type: object
+      required: [format, pledge_token, status, expires_at, items]
+      properties:
+        pledge_token: { type: string }
+        status: { type: string, enum: [OPEN, FULFILLED, EXPIRED, CANCELLED] }
+        expires_at: { type: string, format: date-time }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [REWARD, POLL_VOTE, POLL_CUSTOM, GOAL] }
+              target_id: { type: string }
+              poll_id: { type: string, nullable: true }
+              amount_cents: { type: integer }
+              quantity: { type: integer }
+              source: { type: string, enum: [donor, auto] }
+              unit_price_cents: { type: integer, nullable: true }
+              confirmed_reward_type: { type: string, nullable: true }
+              data: { type: string, nullable: true, description: JSON string }
+    PooledPledge:
+      allOf:
+        - { $ref: '#/components/schemas/PledgeReadBase' }
+        - type: object
+          required:
+            [
+              draft_id,
+              pledge_amount_cents,
+              wallet_applied_cents,
+              new_money_cents,
+              requires_shipping,
+              plan,
+            ]
+          properties:
+            format: { type: string, enum: [POOLED] }
+            draft_id: { type: string }
+            pledge_amount_cents: { type: integer }
+            wallet_applied_cents: { type: integer }
+            new_money_cents: { type: integer }
+            requires_shipping: { type: boolean }
+            plan: { $ref: '#/components/schemas/PledgePlan' }
+    LegacyPledge:
+      description: Historical read-only pledge; no new pledge amount or Pools.
+      allOf:
+        - { $ref: '#/components/schemas/PledgeReadBase' }
+        - type: object
+          required: [total_cents, top_up_cents]
+          properties:
+            format: { type: string, enum: [LEGACY] }
+            total_cents: { type: integer }
+            top_up_cents: { type: integer }
+    DefaultGoals:
+      type: array
+      uniqueItems: true
+      description: Ordered own/shared goal ids. Inactive/completed entries are preserved; another Channel's goal returns 400.
+      items: { type: string }
     TiltifyAmount:
       type: object
       properties:

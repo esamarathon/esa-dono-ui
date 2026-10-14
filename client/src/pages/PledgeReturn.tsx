@@ -133,7 +133,9 @@ export default function PledgeReturn() {
 
         <div className="btrl-panel p-4 mb-4">
           <p className="font-data text-sm text-off-white/55 mb-1">pledge total</p>
-          <p className="font-display text-3xl text-d-yellow">{fmt(pledge.total_cents)}</p>
+          <p className="font-display text-3xl text-d-yellow">
+            {pledge.format === 'POOLED' ? fmt(pledge.pledge_amount_cents) : '—'}
+          </p>
         </div>
 
         {pledge.items.length > 0 && (

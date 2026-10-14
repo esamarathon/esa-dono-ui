@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import adminRouter from '../../../routes/admin.js';
-import { createPledge } from '../../../services/pledge.js';
+import { createLegacyPledge as createPledge } from '../../helpers/fixtures.js';
+import { createPledge as createPooledPledge } from '../../../services/pledge.js';
+import { planPledge } from '@dono/shared';
+
+vi.mock('../../../services/email.js', () => ({
+  sendMagicLink: vi.fn().mockResolvedValue(undefined),
+}));
 
 /**
  * Golden contract tests for the Tiltify format (PRD-0002 §T, #116). The shapes here
@@ -202,6 +208,72 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     });
     return { donationId, reward, poll, goal, total: pledge.total_cents };
   }
+
+  it('keeps pooled incentive amounts separate from money and combines donor/auto provenance on the existing wire', async () => {
+    const reward = await prisma.reward.create({
+      data: { title: 'Pooled', type: 'DIGITAL', cost_cents: 1000 },
+    });
+    ids.rewards.push(reward.id);
+    const poll = await prisma.poll.create({
+      data: { title: 'Pooled poll', options: { create: [{ label: 'A' }] } },
+      include: { options: true },
+    });
+    ids.polls.push(poll.id);
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'Pooled goal', target_cents: 10000 },
+    });
+    ids.goals.push(goal.id);
+    const items = [
+      {
+        kind: 'REWARD' as const,
+        target_id: reward.id,
+        unit_price_cents: 1000,
+        reward_type: 'DIGITAL',
+        amount_cents: 1000,
+        insertion_order: 0,
+      },
+      {
+        kind: 'POLL_VOTE' as const,
+        target_id: poll.options[0]!.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        insertion_order: 1,
+      },
+      { kind: 'GOAL' as const, target_id: goal.id, amount_cents: 100, insertion_order: 2 },
+    ];
+    const pledge = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channelId,
+      items,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        selections: items,
+        available_wallet_cents: null,
+      }),
+    });
+    ids.pledges.push(
+      (
+        await prisma.pendingPledge.findUniqueOrThrow({
+          where: { pledge_token: pledge.pledge_token },
+        })
+      ).id,
+    );
+    const before = await lastSeq(tiltifyDest);
+    await donate({
+      email: `pooled-${rand()}@example.com`,
+      amount_cents: 1000,
+      pledge_token: pledge.pledge_token,
+    });
+    const d = nth(await messages(tiltifyDest, before), 0).body;
+    expect(d.amount).toEqual({ currency: 'USD', value: '10.00', value_cents: 1000 });
+    expect(d.reward_claims).toHaveLength(1);
+    expect(d.poll_votes).toEqual([{ poll_id: poll.id, poll_option_id: poll.options[0]!.id }]);
+    expect(d.target_contributions).toEqual([
+      { target_id: goal.id, amount: { currency: 'USD', value: '10.00' } },
+    ]);
+    expect(JSON.stringify(d)).not.toContain('source');
+  });
 
   it('rejects TILTIFY on an HTTP Destination (§T1)', async () => {
     const res = await request(createApp()).post('/api/admin/destinations').set(AUTH).send({

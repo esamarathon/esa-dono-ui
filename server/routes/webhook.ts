@@ -27,6 +27,7 @@ router.post('/', async (req: Request, res: Response) => {
       | {
           id?: string;
           amount_total?: number | null;
+          payment_intent?: string | { id: string } | null;
           customer_details?: { email?: string | null; name?: string | null } | null;
           customer_email?: string | null;
           metadata?: Record<string, string> | null;
@@ -81,6 +82,10 @@ router.post('/', async (req: Request, res: Response) => {
       amountCents,
       pledgeToken,
       shippingCents,
+      paymentIntent:
+        typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : session.payment_intent?.id,
     });
 
     res.status(200).json({ received: true });

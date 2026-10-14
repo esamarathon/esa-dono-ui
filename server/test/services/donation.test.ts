@@ -3,12 +3,13 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import prisma from '../../lib/prisma.js';
 import { intakeDonation } from '../../services/donation.js';
-import { createPledge } from '../../services/pledge.js';
+import { createPledge as createPooledPledge } from '../../services/pledge.js';
+import { planPledge } from '@dono/shared';
 import { sendMagicLink } from '../../services/email.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { drainDestination } from '../../services/webhooks/dispatcher.js';
+import { createTestChannel, createLegacyPledge as createPledge } from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 
 const emails: string[] = [];
 const channels: string[] = [];
@@ -17,6 +18,8 @@ const pledges: string[] = [];
 const polls: string[] = [];
 const goals: string[] = [];
 const destinations: string[] = [];
+const events: string[] = [];
+const blockedWords: string[] = [];
 
 async function deliveryDestinations() {
   const native = await prisma.webhookDestination.create({
@@ -30,17 +33,30 @@ async function deliveryDestinations() {
 }
 
 async function deliveries(destinationId: string) {
+  // Intake promises immutable queued messages, not transport-attempt timestamps.
+  // Keep the dispatcher real; its independent retries may update mutable fields.
   return prisma.webhookDelivery.findMany({
     where: { destination_id: destinationId },
     orderBy: { seq: 'asc' },
+    select: {
+      id: true,
+      seq: true,
+      message_id: true,
+      message_type: true,
+      payload: true,
+      routing_key: true,
+    },
   });
 }
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(async () => {
+  await Promise.all(destinations.map(drainDestination));
   const donors = await prisma.donor.findMany({ where: { email: { in: emails } } });
   const donorIds = donors.map((donor) => donor.id);
   await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS intake_reject_delivery');
+  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS pooled_reject_vote');
+  await prisma.blockedWord.deleteMany({ where: { id: { in: blockedWords } } });
   await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinations } } });
   await prisma.webhookDestinationSeq.deleteMany({
     where: { destination_id: { in: destinations } },
@@ -48,21 +64,708 @@ afterEach(async () => {
   await prisma.webhookDestination.deleteMany({ where: { id: { in: destinations } } });
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
+  await prisma.pollOption.deleteMany({ where: { custom_entry: { donor_id: { in: donorIds } } } });
+  await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.fundContribution.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.pendingPledge.deleteMany({ where: { pledge_token: { in: pledges } } });
   await prisma.donation.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.donor.deleteMany({ where: { id: { in: donorIds } } });
+  await prisma.event.updateMany({
+    where: { id: { in: events } },
+    data: { primary_channel_id: null },
+  });
   await prisma.channel.deleteMany({ where: { id: { in: channels } } });
+  await prisma.event.deleteMany({ where: { id: { in: events } } });
   await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
   await prisma.poll.deleteMany({ where: { id: { in: polls } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goals } } });
   emails.length = channels.length = rewards.length = pledges.length = 0;
-  polls.length = goals.length = destinations.length = 0;
+  polls.length = goals.length = destinations.length = events.length = blockedWords.length = 0;
 });
 afterAll(() => prisma.$disconnect());
 afterEach(() => vi.unstubAllEnvs());
 
 describe('Donation intake on SQLite', () => {
+  it.each(['own-list', 'primary-list', 'closest-own', 'closest-shared', 'none'] as const)(
+    'routes an unselected goal Pool through %s, never defaults polls, and permits overshoot',
+    async (stage) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      emails.push(email);
+      const event = await prisma.event.create({
+        data: { name: 'Fallback', slug: `fallback-${crypto.randomUUID()}` },
+      });
+      events.push(event.id);
+      const channel = await createTestChannel(prisma, { event_id: event.id });
+      channels.push(channel.id);
+      const primary = await createTestChannel(prisma, { event_id: event.id });
+      channels.push(primary.id);
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: primary.id },
+      });
+      const inactive = await prisma.fundGoal.create({
+        data: {
+          title: 'Preserved inactive',
+          target_cents: 100,
+          is_active: false,
+          channel_id: channel.id,
+        },
+      });
+      goals.push(inactive.id);
+      const own = await prisma.fundGoal.create({
+        data: {
+          title: 'Own',
+          target_cents: 200,
+          channel_id: channel.id,
+          is_active: stage !== 'closest-shared' && stage !== 'none',
+        },
+      });
+      goals.push(own.id);
+      const shared = await prisma.fundGoal.create({
+        data: { title: 'Closer shared', target_cents: 100, is_active: stage !== 'none' },
+      });
+      goals.push(shared.id);
+      const foreign = await prisma.fundGoal.create({
+        data: { title: 'Primary own (ineligible)', target_cents: 1, channel_id: primary.id },
+      });
+      goals.push(foreign.id);
+      await prisma.channelDefaultGoal.create({
+        data: { channel_id: channel.id, goal_id: inactive.id, position: 0 },
+      });
+      if (stage === 'own-list')
+        await prisma.channelDefaultGoal.create({
+          data: { channel_id: channel.id, goal_id: own.id, position: 1 },
+        });
+      await prisma.channelDefaultGoal.create({
+        data: { channel_id: primary.id, goal_id: foreign.id, position: 0 },
+      });
+      if (stage === 'primary-list')
+        await prisma.channelDefaultGoal.create({
+          data: { channel_id: primary.id, goal_id: shared.id, position: 1 },
+        });
+      const { pledge_token } = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        channel_id: channel.id,
+        items: [],
+        plan: planPledge({
+          pledge_amount_cents: 1000,
+          available_wallet_cents: null,
+          selections: [],
+        }),
+      });
+      pledges.push(pledge_token);
+      const result = await intakeDonation({
+        source: 'admin',
+        externalId: crypto.randomUUID(),
+        email,
+        donorName: 'Reader',
+        amountCents: 1000,
+        pledgeToken: pledge_token,
+      });
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      const rows = await prisma.fundContribution.findMany({
+        where: { donation_id: result.donation.id },
+      });
+      if (stage === 'none') expect(rows).toEqual([]);
+      else {
+        expect(rows).toMatchObject([
+          {
+            amount_cents: 1000,
+            source: 'auto',
+            goal_id: stage === 'primary-list' || stage === 'closest-shared' ? shared.id : own.id,
+          },
+        ]);
+        expect(await prisma.fundGoal.findUnique({ where: { id: rows[0]!.goal_id } })).toMatchObject(
+          { current_cents: 1000, is_complete: true },
+        );
+      }
+      expect(await prisma.pollVote.count({ where: { donation_id: result.donation.id } })).toBe(0);
+      expect(await prisma.donor.findUnique({ where: { id: result.donor.id } })).toMatchObject({
+        balance_remaining: 0,
+      });
+      expect(
+        await prisma.channelDefaultGoal.findMany({ where: { channel_id: channel.id } }),
+      ).toContainEqual(expect.objectContaining({ goal_id: inactive.id }));
+    },
+  );
+  it.each([
+    { change: 'label limit', remaining: true },
+    { change: 'label limit', remaining: false },
+    { change: 'blocked word', remaining: true },
+    { change: 'blocked word', remaining: false },
+  ])(
+    'a live $change change redistributes or reserves the full poll Pool (other selection: $remaining)',
+    async ({ change, remaining }) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      emails.push(email);
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const custom = await prisma.poll.create({
+        data: { title: 'Write-in', allow_custom_entries: true, max_entry_chars: 60 },
+      });
+      const active = await prisma.poll.create({
+        data: { title: 'Other choice', options: { create: [{ label: 'A' }] } },
+        include: { options: true },
+      });
+      polls.push(custom.id, active.id);
+      const word = `word${crypto.randomUUID().replaceAll('-', '')}`;
+      const selections = [
+        {
+          kind: 'POLL_CUSTOM' as const,
+          target_id: custom.id,
+          poll_id: custom.id,
+          amount_cents: 100,
+          insertion_order: 0,
+          data: { label: `Original ${word.toUpperCase()}` },
+        },
+        ...(remaining
+          ? [
+              {
+                kind: 'POLL_VOTE' as const,
+                target_id: active.options[0]!.id,
+                poll_id: active.id,
+                amount_cents: 200,
+                insertion_order: 1,
+              },
+            ]
+          : []),
+      ];
+      const { pledge_token } = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        channel_id: channel.id,
+        items: selections,
+        plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+      });
+      pledges.push(pledge_token);
+      if (change === 'label limit')
+        await prisma.poll.update({ where: { id: custom.id }, data: { max_entry_chars: 3 } });
+      else {
+        const blocked = await prisma.blockedWord.create({ data: { word } });
+        blockedWords.push(blocked.id);
+      }
+      const { native, tiltify } = await deliveryDestinations();
+      const facts = {
+        source: 'stripe' as const,
+        externalId: crypto.randomUUID(),
+        email,
+        donorName: 'Reader',
+        amountCents: 1000,
+        pledgeToken: pledge_token,
+      };
+      const result = await intakeDonation(facts);
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toMatchObject({ totalSpent: remaining ? 1000 : 0, skipped: 1 });
+      expect(result.donation).toMatchObject({
+        amount_cents: 1000,
+        pledge_amount_cents: 1000,
+        wallet_credit_granted_cents: 0,
+      });
+      expect(
+        await prisma.pollVote.findMany({
+          where: { donation_id: result.donation.id },
+          orderBy: { amount_cents: 'asc' },
+        }),
+      ).toMatchObject(
+        remaining
+          ? [
+              { poll_id: active.id, amount_cents: 200, source: 'donor' },
+              { poll_id: active.id, amount_cents: 800, source: 'auto' },
+            ]
+          : [],
+      );
+      expect(await prisma.poolCredit.count({ where: { donation_id: result.donation.id } })).toBe(0);
+      expect(await prisma.pollCustomEntry.count({ where: { poll_id: custom.id } })).toBe(0);
+      expect(await prisma.poll.findUnique({ where: { id: active.id } })).toMatchObject({
+        total_votes_cents: remaining ? 1000 : 0,
+      });
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'FULFILLED',
+        fulfilled_by_donation_id: result.donation.id,
+      });
+      expect(await intakeDonation(facts)).toEqual({ duplicate: true });
+      expect(await prisma.donor.findUnique({ where: { id: result.donor.id } })).toMatchObject({
+        total_donated: 1000,
+        balance_remaining: 0,
+      });
+      expect(await prisma.donation.count({ where: { donor_id: result.donor.id } })).toBe(1);
+      expect(await deliveries(native.id)).toHaveLength(1);
+      const queued = await deliveries(tiltify.id);
+      expect(queued.map((row) => row.message_type)).toEqual([
+        'tiltify.donation',
+        'tiltify.fact.updated',
+        'tiltify.fact.updated',
+      ]);
+      expect(JSON.parse(queued[0]!.payload).poll_votes).toEqual(
+        remaining ? [{ poll_id: active.id, poll_option_id: active.options[0]!.id }] : [],
+      );
+      expect(sendMagicLink).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('redistributes freed poll/goal funding across the remaining choices, including a pending write-in', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const custom = await prisma.poll.create({
+      data: { title: 'Pending', allow_custom_entries: true, auto_approve: false },
+    });
+    polls.push(custom.id);
+    const active = await prisma.poll.create({
+      data: { title: 'Open', options: { create: [{ label: 'A' }] } },
+      include: { options: true },
+    });
+    polls.push(active.id);
+    const ended = await prisma.poll.create({
+      data: { title: 'Ending', options: { create: [{ label: 'B' }] } },
+      include: { options: true },
+    });
+    polls.push(ended.id);
+    const a = await prisma.fundGoal.create({
+      data: { title: 'A', channel_id: channel.id, target_cents: 10000 },
+    });
+    goals.push(a.id);
+    const b = await prisma.fundGoal.create({
+      data: { title: 'B', channel_id: channel.id, target_cents: 10000 },
+    });
+    goals.push(b.id);
+    const c = await prisma.fundGoal.create({
+      data: { title: 'C', channel_id: channel.id, target_cents: 10000 },
+    });
+    goals.push(c.id);
+    const selections = [
+      {
+        kind: 'POLL_CUSTOM' as const,
+        target_id: custom.id,
+        poll_id: custom.id,
+        amount_cents: 100,
+        insertion_order: 0,
+        data: { label: 'Write me in' },
+      },
+      {
+        kind: 'POLL_VOTE' as const,
+        target_id: active.options[0]!.id,
+        poll_id: active.id,
+        amount_cents: 200,
+        insertion_order: 1,
+      },
+      {
+        kind: 'POLL_VOTE' as const,
+        target_id: ended.options[0]!.id,
+        poll_id: ended.id,
+        amount_cents: 300,
+        insertion_order: 2,
+      },
+      { kind: 'GOAL' as const, target_id: a.id, amount_cents: 100, insertion_order: 3 },
+      { kind: 'GOAL' as const, target_id: b.id, amount_cents: 200, insertion_order: 4 },
+      { kind: 'GOAL' as const, target_id: c.id, amount_cents: 300, insertion_order: 5 },
+    ];
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channel.id,
+      items: selections,
+      plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+    });
+    pledges.push(pledge_token);
+    await prisma.poll.update({
+      where: { id: ended.id },
+      data: { ends_at: new Date('2000-01-01') },
+    });
+    await prisma.fundGoal.update({ where: { id: c.id }, data: { is_complete: true } });
+    const result = await intakeDonation({
+      source: 'stripe',
+      externalId: crypto.randomUUID(),
+      email,
+      donorName: 'Reader',
+      amountCents: 1000,
+      pledgeToken: pledge_token,
+    });
+    if ('duplicate' in result) throw new Error('Unexpected duplicate');
+    expect(result.pledge).toMatchObject({ totalSpent: 2000, skipped: 2 });
+    const votes = await prisma.pollVote.findMany({
+      where: { donation_id: result.donation.id },
+      orderBy: { amount_cents: 'asc' },
+    });
+    expect(votes).toMatchObject([
+      { poll_id: custom.id, amount_cents: 100, source: 'donor' },
+      { poll_id: active.id, amount_cents: 200, source: 'donor' },
+      { poll_id: custom.id, amount_cents: 233, source: 'auto' },
+      { poll_id: active.id, amount_cents: 467, source: 'auto' },
+    ]);
+    expect(await prisma.pollOption.findFirst({ where: { poll_id: custom.id } })).toMatchObject({
+      status: 'PENDING_APPROVAL',
+      votes_cents: 0,
+    });
+    expect(await prisma.poll.findUnique({ where: { id: active.id } })).toMatchObject({
+      total_votes_cents: 667,
+    });
+    expect(await prisma.fundGoal.findUnique({ where: { id: a.id } })).toMatchObject({
+      current_cents: 333,
+    });
+    expect(await prisma.fundGoal.findUnique({ where: { id: b.id } })).toMatchObject({
+      current_cents: 667,
+    });
+  });
+
+  it('fulfills independent $10 Pools with $6 new money, separate $2 shipping and zero Wallet credit', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const donor = await prisma.donor.create({
+      data: { email, balance_remaining: 400, total_donated: 400, magic_token: crypto.randomUUID() },
+    });
+    const reward = await prisma.reward.create({
+      data: { title: 'Locked physical', type: 'PHYSICAL', cost_cents: 600 },
+    });
+    rewards.push(reward.id);
+    const poll = await prisma.poll.create({
+      data: { title: 'Poll', options: { create: [{ label: 'A' }] } },
+      include: { options: true },
+    });
+    polls.push(poll.id);
+    const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 5000 } });
+    goals.push(goal.id);
+    const plan = planPledge({
+      pledge_amount_cents: 1000,
+      available_wallet_cents: 400,
+      selections: [
+        {
+          kind: 'REWARD',
+          target_id: reward.id,
+          amount_cents: 600,
+          unit_price_cents: 600,
+          reward_type: 'PHYSICAL',
+          insertion_order: 0,
+        },
+        {
+          kind: 'POLL_VOTE',
+          target_id: poll.options[0]!.id,
+          poll_id: poll.id,
+          amount_cents: 100,
+          insertion_order: 1,
+        },
+        { kind: 'GOAL', target_id: goal.id, amount_cents: 300, insertion_order: 2 },
+      ],
+    });
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channel.id,
+      walletDonorId: donor.id,
+      plan,
+      items: plan.selections,
+    });
+    pledges.push(pledge_token);
+    await prisma.reward.update({ where: { id: reward.id }, data: { cost_cents: 2000 } });
+    const result = await intakeDonation({
+      source: 'stripe',
+      externalId: crypto.randomUUID(),
+      email,
+      donorName: 'Reader',
+      amountCents: 800,
+      shippingCents: 200,
+      pledgeToken: pledge_token,
+    });
+    if ('duplicate' in result) throw new Error('Unexpected duplicate');
+    expect(result.donation).toMatchObject({
+      amount_cents: 600,
+      pledge_amount_cents: 1000,
+      wallet_applied_cents: 400,
+      shipping_cents: 200,
+      wallet_credit_granted_cents: 0,
+    });
+    expect(result.pledge).toMatchObject({ totalSpent: 2600, skipped: 0 });
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      total_donated: 1000,
+      balance_remaining: 0,
+      balance_held_cents: 0,
+    });
+    expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+      wallet_hold_status: 'CONSUMED',
+      held_wallet_cents: 400,
+    });
+    expect(
+      await prisma.rewardClaim.findMany({ where: { donation_id: result.donation.id } }),
+    ).toMatchObject([{ amount_cents: 600, donor_id: donor.id }]);
+    expect(
+      await prisma.pollVote.findMany({
+        where: { donation_id: result.donation.id },
+        orderBy: { amount_cents: 'asc' },
+      }),
+    ).toMatchObject([
+      { amount_cents: 100, source: 'donor' },
+      { amount_cents: 900, source: 'auto' },
+    ]);
+    expect(
+      await prisma.fundContribution.findMany({
+        where: { donation_id: result.donation.id },
+        orderBy: { amount_cents: 'asc' },
+      }),
+    ).toMatchObject([
+      { amount_cents: 300, source: 'donor' },
+      { amount_cents: 700, source: 'auto' },
+    ]);
+  });
+  it.each(['allocation', 'outbox'] as const)(
+    'rolls pooled money, claims, votes, stock, consumed hold and mail back on a late %s failure',
+    async (failure) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      emails.push(email);
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const donor = await prisma.donor.create({
+        data: {
+          email,
+          balance_remaining: 400,
+          total_donated: 400,
+          magic_token: crypto.randomUUID(),
+        },
+      });
+      const reward = await prisma.reward.create({
+        data: { title: 'Rollback', cost_cents: 500, type: 'DIGITAL' },
+      });
+      rewards.push(reward.id);
+      const poll = await prisma.poll.create({
+        data: { title: 'Rollback poll', options: { create: [{ label: 'A' }] } },
+        include: { options: true },
+      });
+      polls.push(poll.id);
+      const selections = [
+        {
+          kind: 'REWARD' as const,
+          target_id: reward.id,
+          amount_cents: 500,
+          unit_price_cents: 500,
+          reward_type: 'DIGITAL',
+          insertion_order: 0,
+        },
+        {
+          kind: 'POLL_VOTE' as const,
+          target_id: poll.options[0]!.id,
+          poll_id: poll.id,
+          amount_cents: 100,
+          insertion_order: 1,
+        },
+      ];
+      const { pledge_token } = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        items: selections,
+        channel_id: channel.id,
+        walletDonorId: donor.id,
+        plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: 400 }),
+      });
+      pledges.push(pledge_token);
+      const { native, tiltify } = await deliveryDestinations();
+      if (failure === 'allocation')
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER pooled_reject_vote BEFORE INSERT ON PollVote BEGIN SELECT RAISE(ABORT, 'late vote failure'); END`,
+        );
+      else
+        await prisma.$executeRawUnsafe(
+          `CREATE TRIGGER intake_reject_delivery BEFORE INSERT ON WebhookDelivery WHEN NEW.event_type = 'tiltify.fact.updated' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
+        );
+      await expect(
+        intakeDonation({
+          source: 'stripe',
+          email,
+          donorName: 'Reader',
+          amountCents: 600,
+          externalId: crypto.randomUUID(),
+          pledgeToken: pledge_token,
+        }),
+      ).rejects.toThrow();
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        total_donated: 400,
+        balance_remaining: 0,
+        balance_held_cents: 400,
+      });
+      expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+        status: 'OPEN',
+        wallet_hold_status: 'HELD',
+        fulfilled_by_donation_id: null,
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.pollVote.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 0,
+      });
+      expect(await deliveries(native.id)).toEqual([]);
+      expect(await deliveries(tiltify.id)).toEqual([]);
+      expect(sendMagicLink).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['sold-out', 'type-change'] as const)(
+    'skips an incompatible pooled reward at payment (%s) without repricing or Wallet credit',
+    async (change) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      emails.push(email);
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const donor = await prisma.donor.create({
+        data: {
+          email,
+          balance_remaining: 400,
+          total_donated: 400,
+          magic_token: crypto.randomUUID(),
+        },
+      });
+      const reward = await prisma.reward.create({
+        data: { title: 'Confirmed physical', type: 'PHYSICAL', cost_cents: 600, quantity_total: 1 },
+      });
+      rewards.push(reward.id);
+      const selections = [
+        {
+          kind: 'REWARD' as const,
+          target_id: reward.id,
+          amount_cents: 600,
+          unit_price_cents: 600,
+          reward_type: 'PHYSICAL',
+          insertion_order: 0,
+        },
+      ];
+      const { pledge_token } = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        items: selections,
+        channel_id: channel.id,
+        walletDonorId: donor.id,
+        plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: 400 }),
+      });
+      pledges.push(pledge_token);
+      await prisma.reward.update({
+        where: { id: reward.id },
+        data: change === 'sold-out' ? { quantity_claimed: 1 } : { type: 'DIGITAL' },
+      });
+      const result = await intakeDonation({
+        source: 'stripe',
+        externalId: crypto.randomUUID(),
+        email,
+        donorName: 'Reader',
+        amountCents: 600,
+        pledgeToken: pledge_token,
+      });
+      if ('duplicate' in result) throw new Error('Unexpected duplicate');
+      expect(result.pledge).toMatchObject({ skipped: 1 });
+      expect(await prisma.rewardClaim.count({ where: { donation_id: result.donation.id } })).toBe(
+        0,
+      );
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        total_donated: 1000,
+        balance_remaining: 0,
+        balance_held_cents: 0,
+      });
+      expect(
+        await prisma.pledgeItem.findFirst({ where: { pledge: { pledge_token }, kind: 'REWARD' } }),
+      ).toMatchObject({ unit_price_cents: 600, confirmed_reward_type: 'PHYSICAL' });
+    },
+  );
+
+  it('round-trips opaque falsy selection data without diverging from the confirmed plan', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'Opaque data', target_cents: 5000 },
+    });
+    goals.push(goal.id);
+    const items = [
+      {
+        kind: 'GOAL' as const,
+        target_id: goal.id,
+        amount_cents: 100,
+        insertion_order: 0,
+        data: false,
+      },
+    ];
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channel.id,
+      items,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        selections: items,
+        available_wallet_cents: null,
+      }),
+    });
+    pledges.push(pledge_token);
+    const result = await intakeDonation({
+      source: 'admin',
+      externalId: crypto.randomUUID(),
+      email,
+      donorName: 'Reader',
+      amountCents: 1000,
+      pledgeToken: pledge_token,
+    });
+    if ('duplicate' in result) throw new Error('Unexpected duplicate');
+    expect(result.pledge).toMatchObject({ totalSpent: 1000, skipped: 0 });
+  });
+
+  it('records Wallet-only pooled pledges as zero money and consumes their hold at most once', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const donor = await prisma.donor.create({
+      data: {
+        email,
+        balance_remaining: 1000,
+        total_donated: 1000,
+        magic_token: crypto.randomUUID(),
+      },
+    });
+    const reward = await prisma.reward.create({
+      data: { title: 'Wallet digital', type: 'DIGITAL', cost_cents: 1000 },
+    });
+    rewards.push(reward.id);
+    const selections = [
+      {
+        kind: 'REWARD' as const,
+        target_id: reward.id,
+        amount_cents: 1000,
+        unit_price_cents: 1000,
+        reward_type: 'DIGITAL',
+        insertion_order: 0,
+      },
+    ];
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      items: selections,
+      channel_id: channel.id,
+      walletDonorId: donor.id,
+      plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: 1000 }),
+    });
+    pledges.push(pledge_token);
+    const pledge = await prisma.pendingPledge.findUniqueOrThrow({
+      where: { pledge_token },
+      include: { items: true },
+    });
+    const results = await Promise.all([
+      intakeDonation({ source: 'wallet', pledge, donor }),
+      intakeDonation({ source: 'wallet', pledge, donor }),
+    ]);
+    expect(results.filter((result) => 'duplicate' in result)).toHaveLength(1);
+    expect(await prisma.donation.findMany({ where: { donor_id: donor.id } })).toMatchObject([
+      { amount_cents: 0, pledge_amount_cents: 1000, wallet_applied_cents: 1000, shipping_cents: 0 },
+    ]);
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      total_donated: 1000,
+      balance_remaining: 0,
+      balance_held_cents: 0,
+    });
+    expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(1);
+    expect(sendMagicLink).toHaveBeenCalledTimes(1);
+  });
+
   it('records a wallet-only pledge against the signed-in donor without crediting money again', async () => {
     const email = `${crypto.randomUUID()}@example.com`;
     emails.push(email);
@@ -140,11 +843,11 @@ describe('Donation intake on SQLite', () => {
   });
 
   it.each([
-    { source: 'stripe', amount: 3200, shipping: 700, totalAfterRepeat: 3700 },
-    { source: 'admin', amount: 2500, shipping: 0, totalAfterRepeat: 3000 },
+    { source: 'stripe', amount: 3200, money: 2500, shipping: 700, totalAfterRepeat: 3000 },
+    { source: 'admin', amount: 2500, money: 2500, shipping: 0, totalAfterRepeat: 3000 },
   ] as const)(
     '$source records money, allocations, stable identity and deliveries',
-    async ({ source, amount, shipping, totalAfterRepeat }) => {
+    async ({ source, amount, money, shipping, totalAfterRepeat }) => {
       const email = `${crypto.randomUUID()}@example.com`;
       emails.push(email);
       vi.stubEnv('MODERATOR_EMAILS', email);
@@ -196,14 +899,14 @@ describe('Donation intake on SQLite', () => {
       if ('duplicate' in result) throw new Error('Unexpected duplicate');
       expect(result.donor).toMatchObject({
         email,
-        total_donated: amount,
+        total_donated: money,
         balance_remaining: 2500,
         role: 'USER',
       });
       expect(result.token).toMatch(/^[a-f0-9]{64}$/);
       expect(result.pledge).toMatchObject({ totalSpent: 1500, skipped: 0 });
       expect(await prisma.donor.findUnique({ where: { id: result.donor.id } })).toMatchObject({
-        total_donated: amount,
+        total_donated: money,
         balance_remaining: 1000,
         role: 'USER',
         email_verified: false,
@@ -212,7 +915,8 @@ describe('Donation intake on SQLite', () => {
         where: { id: result.donation.id },
       });
       expect(donation).toMatchObject({
-        amount_cents: amount,
+        amount_cents: money,
+        shipping_cents: shipping,
         donor_id: result.donor.id,
         channel_id: channel.id,
         event_id: channel.event_id,
@@ -241,7 +945,7 @@ describe('Donation intake on SQLite', () => {
       expect(nativeRows).toHaveLength(1);
       expect(JSON.parse(nativeRows[0]!.payload).data).toMatchObject({
         donation_id: donation.id,
-        amount_cents: amount,
+        amount_cents: money,
         channel_id: channel.id,
         donor_name: 'Pledge Reader',
       });
@@ -253,7 +957,7 @@ describe('Donation intake on SQLite', () => {
       ]);
       expect(JSON.parse(tiltifyRows[0]!.payload)).toMatchObject({
         id: donation.id,
-        amount: { value_cents: amount },
+        amount: { value_cents: money },
         reward_claims: [{ reward_id: reward.id }, { reward_id: reward.id }],
         poll_votes: [{ poll_id: poll.id, poll_option_id: poll.options[0]!.id }],
         target_contributions: [{ target_id: goal.id, amount: { value: '2.00' } }],

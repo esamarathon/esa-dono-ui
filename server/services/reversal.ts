@@ -56,44 +56,50 @@ export async function moderateCustomEntryTx(
   if (entry.status !== 'PENDING') throw httpError(400, 'Only pending entries can be moderated');
   const option = await tx.pollOption.findUnique({ where: { custom_entry_id: entry.id } });
   if (!option) throw httpError(404, 'Associated poll option not found');
-  const vote = await tx.pollVote.findFirst({
+  const votes = await tx.pollVote.findMany({
     where: { poll_option_id: option.id, reversed_at: null },
     orderBy: { created_at: 'desc' },
   });
-  if (!vote) throw httpError(404, 'Associated funding vote not found');
+  if (!votes.length) throw httpError(404, 'Associated funding vote not found');
   if (option.status !== 'PENDING_APPROVAL') {
     throw httpError(400, 'Only pending entries can be moderated');
   }
 
-  const before =
-    status === 'APPROVED' && vote.donation_id ? await publisher.snapshot(vote.donation_id) : null;
+  const donationIds = [
+    ...new Set(votes.flatMap((vote) => (vote.donation_id ? [vote.donation_id] : []))),
+  ];
+  const before = await publisher.snapshot(donationIds);
   if (status === 'APPROVED') {
+    const cents = votes.reduce((sum, vote) => sum + vote.amount_cents, 0);
     await tx.pollOption.update({
       where: { id: option.id },
-      data: { status: 'ACTIVE', votes_cents: { increment: vote.amount_cents } },
+      data: { status: 'ACTIVE', votes_cents: { increment: cents } },
     });
     await tx.poll.update({
       where: { id: entry.poll_id },
-      data: { total_votes_cents: { increment: vote.amount_cents } },
+      data: { total_votes_cents: { increment: cents } },
     });
   } else {
-    await adjustWalletTx(
-      tx,
-      vote.donor_id,
-      vote.amount_cents,
-      'REFUND',
-      'Rejected custom poll entry',
-      actor,
-      vote.id,
-    );
-    await tx.pollVote.update({
-      where: { id: vote.id },
-      data: { reversed_at: new Date(), reversed_by: actor },
-    });
+    // Preserve the current per-row Wallet refund rule until pooled reversals ship.
+    for (const vote of votes) {
+      await adjustWalletTx(
+        tx,
+        vote.donor_id,
+        vote.amount_cents,
+        'REFUND',
+        'Rejected custom poll entry',
+        actor,
+        vote.id,
+      );
+      await tx.pollVote.update({
+        where: { id: vote.id },
+        data: { reversed_at: new Date(), reversed_by: actor },
+      });
+    }
     await tx.pollOption.update({ where: { id: option.id }, data: { status: 'REJECTED' } });
   }
   const updated = await tx.pollCustomEntry.update({ where: { id: entry.id }, data: { status } });
-  if (before && vote.donation_id) await publisher.publish(vote.donation_id, before);
+  await publisher.publish(donationIds, before);
   return updated;
 }
 
