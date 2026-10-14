@@ -52,8 +52,8 @@ vi.mock('../../lib/prisma.js', () => ({
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
     },
-    $transaction: vi.fn((ops: any[]) =>
-      Promise.all(ops.map((o) => (typeof o === 'function' ? o() : o))),
+    $transaction: vi.fn(async (ops: any) =>
+      typeof ops === 'function' ? ops(px) : Promise.all(ops),
     ),
   },
 }));
@@ -105,6 +105,16 @@ vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
 
 import prisma from '../../lib/prisma.js';
 import adminRouter from '../../routes/admin.js';
+import * as reversal from '../../services/reversal.js';
+
+vi.mock('../../services/reversal.js', () => ({
+  adjustWalletCreditTx: vi.fn(),
+  refundGoalContributions: vi.fn(),
+  refundPollOptionVotes: vi.fn(),
+  reverseSpendTx: vi.fn(),
+  setDonationStatusTx: vi.fn(),
+  sweepWalletCreditsTx: vi.fn(),
+}));
 
 // Loose alias for configuring the mocked Prisma client with partial fixtures.
 const px = prisma as unknown as Record<string, any>;
@@ -272,175 +282,135 @@ describe('Admin donor management', () => {
     expect(px.donor.update).not.toHaveBeenCalled();
   });
 
-  it('POST /donors/:id/adjust-balance adjusts balance', async () => {
-    px.donor.findUnique.mockResolvedValue({
-      id: 'd1',
+  it('POST /donors/:id/adjust-balance preserves the response shape', async () => {
+    vi.mocked(reversal.adjustWalletCreditTx).mockResolvedValue({
+      success: true,
       email: 'a@b.com',
-      balance_remaining: 500,
+      balance_before: 500,
+      balance_after: 1500,
+      adjustment: 1000,
     });
-    px.donor.update.mockResolvedValue({ id: 'd1' });
-    px.balanceAdjustment.create.mockResolvedValue({});
-
     const res = await request(createApp())
       .post('/api/admin/donors/d1/adjust-balance')
       .send({ amount_cents: 1000, type: 'MANUAL', reason: 'test' })
       .set(auth);
-
     expect(res.status).toBe(200);
-    expect(res.body.balance_before).toBe(500);
-    expect(res.body.balance_after).toBe(1500);
+    expect(res.body).toEqual({
+      success: true,
+      email: 'a@b.com',
+      balance_before: 500,
+      balance_after: 1500,
+      adjustment: 1000,
+    });
   });
 
-  it('POST /donors/:id/adjust-balance rejects negative result', async () => {
-    px.donor.findUnique.mockResolvedValue({
-      id: 'd1',
-      email: 'a@b.com',
-      balance_remaining: 50,
-    });
-
+  it.each([
+    [{ amount_cents: 0, type: 'MANUAL' }, 'amount_cents must be a non-zero integer'],
+    [{ amount_cents: 100, type: 'UNKNOWN' }, 'Invalid adjustment type'],
+  ])('POST /donors/:id/adjust-balance validates input', async (body, error) => {
     const res = await request(createApp())
       .post('/api/admin/donors/d1/adjust-balance')
-      .send({ amount_cents: -100, type: 'MANUAL' })
+      .send(body)
       .set(auth);
-
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain('negative');
+    expect(res.body).toEqual({ error });
   });
 
-  it('POST /donors/:id/reverse-spend reverses a reward claim', async () => {
-    px.donor.findUnique.mockResolvedValue({ id: 'd1', email: 'a@b.com', balance_remaining: 0 });
-    px.rewardClaim.findUnique.mockResolvedValue({
-      id: 'c1',
-      donor_id: 'd1',
-      reward_id: 'r1',
-      status: 'PENDING',
-      reward: { cost_cents: 500, id: 'r1' },
-    });
-    px.reward.findUnique.mockResolvedValue({ id: 'r1' });
-    px.rewardClaim.update = vi.fn().mockResolvedValue({});
-    px.reward.update = vi.fn().mockResolvedValue({});
-    px.balanceAdjustment.create.mockResolvedValue({});
+  it.each(['claim', 'vote', 'contribution'])(
+    'POST /donors/:id/reverse-spend returns success for %s',
+    async (spend_type) => {
+      vi.mocked(reversal.reverseSpendTx).mockResolvedValue();
+      const res = await request(createApp())
+        .post('/api/admin/donors/d1/reverse-spend')
+        .send({ spend_type, spend_id: 's1' })
+        .set(auth);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ success: true });
+    },
+  );
 
-    // Override $transaction to actually call each op
-    px.$transaction.mockImplementation((ops: any) => Promise.all(ops));
-
+  it('POST /donors/:id/reverse-spend requires a target', async () => {
     const res = await request(createApp())
       .post('/api/admin/donors/d1/reverse-spend')
-      .send({ spend_type: 'claim', spend_id: 'c1' })
+      .send({})
       .set(auth);
-
-    expect(res.status).toBe(200);
-    expect(prisma.balanceAdjustment.create).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'spend_type and spend_id required' });
   });
 
-  it('POST /polls/options/:id/refund refunds all unreversed votes atomically', async () => {
-    px.pollOption.findUnique.mockResolvedValue({ id: 'o1', poll_id: 'p1', status: 'ACTIVE' });
-    px.pollVote.findMany.mockResolvedValue([
-      { id: 'v1', donor_id: 'd1', amount_cents: 250, created_at: new Date() },
-      { id: 'v2', donor_id: 'd2', amount_cents: 500, created_at: new Date() },
-    ]);
-    px.donor.findUnique
-      .mockResolvedValueOnce({ id: 'd1', balance_remaining: 100 })
-      .mockResolvedValueOnce({ id: 'd2', balance_remaining: 200 });
-    px.donor.update.mockResolvedValue({});
-    px.pollVote.update.mockResolvedValue({});
-    px.pollOption.update.mockResolvedValue({});
-    px.poll.update.mockResolvedValue({});
-    px.balanceAdjustment.create.mockResolvedValue({});
-    px.$transaction.mockImplementation(async (callback: any) => callback(px));
-
-    const res = await request(createApp()).post('/api/admin/polls/options/o1/refund').set(auth);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, refunded_count: 2, refunded_cents: 750 });
-    expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(2);
-    expect(prisma.pollOption.update).toHaveBeenCalledWith({
-      where: { id: 'o1' },
-      data: { votes_cents: { decrement: 750 } },
-    });
+  it.each([
+    [
+      '/donors/d1/adjust-balance',
+      reversal.adjustWalletCreditTx,
+      { amount_cents: -100, type: 'MANUAL' },
+      400,
+      'Adjustment would result in negative balance',
+    ],
+    [
+      '/donors/d1/reverse-spend',
+      reversal.reverseSpendTx,
+      { spend_type: 'claim', spend_id: 'c1' },
+      400,
+      'Claim already reversed',
+    ],
+    [
+      '/donors/d1/reverse-spend',
+      reversal.reverseSpendTx,
+      { spend_type: 'vote', spend_id: 'v1' },
+      404,
+      'Vote not found',
+    ],
+    ['/polls/options/o1/refund', reversal.refundPollOptionVotes, {}, 404, 'Poll option not found'],
+    ['/goals/g1/refund', reversal.refundGoalContributions, {}, 404, 'Goal not found'],
+  ])('maps Reversal errors for %s', async (path, action, body, status, error) => {
+    vi.mocked(action).mockRejectedValueOnce(Object.assign(new Error(error), { status }));
+    const res = await request(createApp())
+      .post('/api/admin' + path)
+      .send(body)
+      .set(auth);
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual({ error });
   });
 
-  it('POST /goals/:id/refund refunds all unreversed contributions atomically', async () => {
-    px.fundGoal.findUnique.mockResolvedValue({
-      id: 'g1',
-      current_cents: 900,
-      target_cents: 1000,
-    });
-    px.fundContribution.findMany.mockResolvedValue([
-      { id: 'c1', donor_id: 'd1', amount_cents: 300, created_at: new Date() },
-      { id: 'c2', donor_id: 'd1', amount_cents: 200, created_at: new Date() },
-    ]);
-    px.donor.findUnique
-      .mockResolvedValueOnce({ id: 'd1', balance_remaining: 100 })
-      .mockResolvedValueOnce({ id: 'd1', balance_remaining: 400 });
-    px.donor.update.mockResolvedValue({});
-    px.fundContribution.update.mockResolvedValue({});
-    px.fundGoal.update.mockResolvedValue({});
-    px.balanceAdjustment.create.mockResolvedValue({});
-    px.$transaction.mockImplementation(async (callback: any) => callback(px));
-
-    const res = await request(createApp()).post('/api/admin/goals/g1/refund').set(auth);
-
+  it.each([
+    ['/polls/options/o1/refund', reversal.refundPollOptionVotes],
+    ['/goals/g1/refund', reversal.refundGoalContributions],
+  ])('preserves the refund summary for %s', async (path, action) => {
+    vi.mocked(action).mockResolvedValueOnce({ refunded_count: 2, refunded_cents: 750 });
+    const res = await request(createApp())
+      .post('/api/admin' + path)
+      .set(auth);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, refunded_count: 2, refunded_cents: 500 });
-    expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(2);
-    expect(prisma.fundGoal.update).toHaveBeenCalledWith({
-      where: { id: 'g1' },
-      data: { current_cents: { decrement: 500 }, is_complete: false },
-    });
+    expect(res.body).toEqual({ success: true, refunded_count: 2, refunded_cents: 750 });
   });
 
-  it('DELETE /polls/options/:id refunds allocated funds and preserves the option record', async () => {
-    px.pollOption.findUnique.mockResolvedValue({ id: 'o1', poll_id: 'p1', status: 'ACTIVE' });
-    px.pollVote.findMany.mockResolvedValue([
-      { id: 'v1', donor_id: 'd1', amount_cents: 400, created_at: new Date() },
-    ]);
-    px.donor.findUnique.mockResolvedValue({ id: 'd1', balance_remaining: 100 });
-    px.donor.update.mockResolvedValue({});
-    px.pollVote.update.mockResolvedValue({});
-    px.pollOption.update.mockResolvedValue({});
-    px.poll.update.mockResolvedValue({});
-    px.balanceAdjustment.create.mockResolvedValue({});
-    px.$transaction.mockImplementation(async (callback: any) => callback(px));
-
+  it('DELETE /polls/options/:id preserves the refund summary and rejects the option', async () => {
+    vi.mocked(reversal.refundPollOptionVotes).mockResolvedValueOnce({
+      refunded_count: 1,
+      refunded_cents: 400,
+    });
     const res = await request(createApp()).delete('/api/admin/polls/options/o1').set(auth);
-
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, refunded_count: 1, refunded_cents: 400 });
+    expect(res.body).toEqual({ success: true, refunded_count: 1, refunded_cents: 400 });
     expect(prisma.pollOption.update).toHaveBeenCalledWith({
       where: { id: 'o1' },
       data: { status: 'REJECTED' },
     });
-    expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(1);
   });
 
-  it('DELETE /goals/:id refunds allocated funds and deactivates the goal', async () => {
-    px.fundGoal.findUnique.mockResolvedValue({
-      id: 'g1',
-      title: 'Goal',
-      is_active: true,
-      current_cents: 400,
-      target_cents: 1000,
+  it('DELETE /goals/:id preserves the refund summary and deactivates the goal', async () => {
+    px.fundGoal.findUnique.mockResolvedValue({ id: 'g1', title: 'Goal', is_active: true });
+    vi.mocked(reversal.refundGoalContributions).mockResolvedValueOnce({
+      refunded_count: 1,
+      refunded_cents: 400,
     });
-    px.fundContribution.findMany.mockResolvedValue([
-      { id: 'c1', donor_id: 'd1', amount_cents: 400, created_at: new Date() },
-    ]);
-    px.donor.findUnique.mockResolvedValue({ id: 'd1', balance_remaining: 100 });
-    px.donor.update.mockResolvedValue({});
-    px.fundContribution.update.mockResolvedValue({});
-    px.fundGoal.update.mockResolvedValue({});
-    px.balanceAdjustment.create.mockResolvedValue({});
-    px.$transaction.mockImplementation(async (callback: any) => callback(px));
-
     const res = await request(createApp()).delete('/api/admin/goals/g1').set(auth);
-
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, refunded_count: 1, refunded_cents: 400 });
+    expect(res.body).toEqual({ success: true, refunded_count: 1, refunded_cents: 400 });
     expect(prisma.fundGoal.update).toHaveBeenCalledWith({
       where: { id: 'g1' },
       data: { is_active: false },
     });
-    expect(prisma.balanceAdjustment.create).toHaveBeenCalledTimes(1);
     expect(outbox.emit.mock.calls.map((c) => c[0])).toEqual(['incentive.disabled']);
   });
 

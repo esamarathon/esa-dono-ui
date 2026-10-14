@@ -2,14 +2,21 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { countedDonation, countsTowardTotals } from '../lib/donationTotals.js';
+import { countedDonation } from '../lib/donationTotals.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
-import { httpError, sendError } from '../lib/httpError.js';
+import { sendError } from '../lib/httpError.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { processDonation } from '../services/donation.js';
-import { refundGoalContributions, refundPollOptionVotes } from '../services/refund.js';
+import {
+  adjustWalletCreditTx,
+  refundGoalContributions,
+  refundPollOptionVotes,
+  reverseSpendTx,
+  setDonationStatusTx,
+  sweepWalletCreditsTx,
+} from '../services/reversal.js';
 import {
   closeAuctionTx,
   cancelAuctionTx,
@@ -142,61 +149,9 @@ router.patch('/donations/:id/status', async (req, res) => {
   }
 
   try {
-    // One transaction, reading inside it: the checks, the balance clawback, the
-    // status and the totals messages see one state (a double submit cannot claw
-    // back twice).
-    const updated = await withWebhooks(async (tx, _emit, tiltify) => {
-      const donation = await tx.donation.findUnique({
-        where: { id: req.params.id },
-        include: { donor: true },
-      });
-      if (!donation) throw httpError(404, 'Donation not found');
-      if (donation.refund_id) {
-        throw httpError(400, 'Donation is refunded/charged back and cannot change status');
-      }
-      if (donation.status === status) {
-        throw httpError(400, 'Donation already has this status');
-      }
-
-      let refundId: string | undefined;
-      if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-        // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
-        // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
-        // Donation.status value.
-        const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
-        const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
-        await tx.donor.update({
-          where: { id: donation.donor_id },
-          data: { balance_remaining: { decrement: clawback } },
-        });
-        const adjustment = await tx.balanceAdjustment.create({
-          data: {
-            donor_id: donation.donor_id,
-            amount_cents: -clawback,
-            balance_after_cents: donation.donor.balance_remaining - clawback,
-            type: adjustmentType,
-            reason: reason || `Donation ${status.toLowerCase()}`,
-            reference_id: donation.id,
-            created_by: 'admin',
-          },
-        });
-        refundId = adjustment.id;
-      }
-      const row = await tx.donation.update({
-        where: { id: donation.id },
-        data: { status, ...(refundId ? { refund_id: refundId } : {}) },
-        include: {
-          donor: { select: { email: true } },
-          channel: { select: { id: true, name: true, slug: true, event_id: true } },
-        },
-      });
-      // Publish the totals only when they move (PRD-0002 §T7): a chargeback lowers
-      // them; a refund goes to the donor's wallet and does not (lib/donationTotals.ts).
-      if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
-        await tiltify.totals(row.channel_id);
-      }
-      return row;
-    });
+    const updated = await withWebhooks((tx, _emit, tiltify) =>
+      setDonationStatusTx(tx, req.params.id, status, reason, 'admin', tiltify),
+    );
     res.json(updated);
   } catch (e) {
     sendError(res, e, '[admin/donations/status]');
@@ -572,38 +527,14 @@ router.post('/donors/:id/adjust-balance', async (req, res) => {
   if (!['REFUND', 'FREEZE_ZERO', 'MANUAL', 'CHARGEBACK'].includes(type)) {
     return res.status(400).json({ error: 'Invalid adjustment type' });
   }
-  const donor = await prisma.donor.findUnique({ where: { id: req.params.id } });
-  if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-  const balanceAfter = donor.balance_remaining + cents;
-  if (balanceAfter < 0) {
-    return res.status(400).json({ error: 'Adjustment would result in negative balance' });
+  try {
+    const result = await prisma.$transaction((tx) =>
+      adjustWalletCreditTx(tx, req.params.id, cents, type, reason, 'admin'),
+    );
+    res.json(result);
+  } catch (e) {
+    sendError(res, e, '[admin/adjust-balance]');
   }
-
-  await prisma.$transaction([
-    prisma.donor.update({
-      where: { id: donor.id },
-      data: { balance_remaining: { increment: cents } },
-    }),
-    prisma.balanceAdjustment.create({
-      data: {
-        donor_id: donor.id,
-        amount_cents: cents,
-        balance_after_cents: balanceAfter,
-        type,
-        reason: reason || null,
-        created_by: 'admin',
-      },
-    }),
-  ]);
-
-  res.json({
-    success: true,
-    email: donor.email,
-    balance_before: donor.balance_remaining,
-    balance_after: balanceAfter,
-    adjustment: cents,
-  });
 });
 
 /**
@@ -643,59 +574,14 @@ router.post('/donors/sweep-credits', async (req, res) => {
     where.balance_remaining.lte = max;
   }
 
-  const donors = await prisma.donor.findMany({
-    where,
-    select: {
-      id: true,
-      balance_remaining: true,
-      donations: {
-        orderBy: { created_at: 'desc' },
-        take: 1,
-        select: { donor_name: true },
-      },
-    },
-  });
-
-  const totalCents = donors.reduce((sum, d) => sum + d.balance_remaining, 0);
-
-  if (confirm !== true) {
-    return res.json({
-      preview: true,
-      donor_count: donors.length,
-      total_cents: totalCents,
-      sample: donors.slice(0, 10).map((d) => ({
-        id: d.id,
-        balance_remaining: d.balance_remaining,
-        donor_name: d.donations[0]?.donor_name ?? null,
-      })),
-    });
-  }
-
-  if (donors.length > 0) {
-    await prisma.$transaction(
-      donors.flatMap((d) => {
-        const displayName = d.donations[0]?.donor_name || 'Anonymous';
-        return [
-          prisma.donor.update({
-            where: { id: d.id },
-            data: { balance_remaining: { decrement: d.balance_remaining } },
-          }),
-          prisma.balanceAdjustment.create({
-            data: {
-              donor_id: d.id,
-              amount_cents: -d.balance_remaining,
-              balance_after_cents: 0,
-              type: 'FREEZE_ZERO',
-              reason: `Bulk credit sweep (${displayName})`,
-              created_by: 'admin',
-            },
-          }),
-        ];
-      }),
+  try {
+    const result = await prisma.$transaction((tx) =>
+      sweepWalletCreditsTx(tx, where, confirm === true, 'admin'),
     );
+    res.json(result);
+  } catch (e) {
+    sendError(res, e, '[admin/sweep-credits]');
   }
-
-  res.json({ success: true, donor_count: donors.length, total_cents: totalCents });
 });
 
 router.post('/donors/:id/reverse-spend', async (req, res) => {
@@ -703,155 +589,14 @@ router.post('/donors/:id/reverse-spend', async (req, res) => {
   if (!spend_type || !spend_id) {
     return res.status(400).json({ error: 'spend_type and spend_id required' });
   }
-
-  const donor = await prisma.donor.findUnique({ where: { id: req.params.id } });
-  if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-  if (spend_type === 'claim') {
-    const claim = await prisma.rewardClaim.findUnique({
-      where: { id: spend_id },
-      include: { reward: true },
-    });
-    if (!claim || claim.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Claim not found' });
-    if (claim.status === 'REVERSED')
-      return res.status(400).json({ error: 'Claim already reversed' });
-    if (claim.status === 'FULFILLED')
-      return res
-        .status(400)
-        .json({ error: 'Cannot reverse fulfilled claim; mark it as PENDING first' });
-
-    const refundCents = claim.reward.cost_cents;
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: refundCents } },
-      }),
-      prisma.rewardClaim.update({
-        where: { id: claim.id },
-        data: { status: 'REVERSED', reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      prisma.reward.update({
-        where: { id: claim.reward_id },
-        data: { quantity_claimed: { decrement: 1 } },
-      }),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: refundCents,
-          balance_after_cents: donor.balance_remaining + refundCents,
-          type: 'REFUND',
-          reason: 'Reversed reward claim',
-          reference_id: claim.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else if (spend_type === 'vote') {
-    const vote = await prisma.pollVote.findUnique({ where: { id: spend_id } });
-    if (!vote || vote.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Vote not found' });
-    if (vote.reversed_at) return res.status(400).json({ error: 'Vote already reversed' });
-
-    const option = await prisma.pollOption.findUnique({ where: { id: vote.poll_option_id } });
-    // Only decrement the public tally if the option was actually credited
-    // (ACTIVE). A vote funding a still-PENDING_APPROVAL custom entry has
-    // votes_cents === 0 on the option, so skip the decrement to avoid going
-    // negative; mark the option REJECTED instead so it stays excluded.
-    const wasActive = option?.status === 'ACTIVE';
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: vote.amount_cents } },
-      }),
-      prisma.pollVote.update({
-        where: { id: vote.id },
-        data: { reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      ...(option
-        ? [
-            wasActive
-              ? prisma.pollOption.update({
-                  where: { id: option.id },
-                  data: { votes_cents: { decrement: vote.amount_cents } },
-                })
-              : prisma.pollOption.update({
-                  where: { id: option.id },
-                  data: { status: 'REJECTED' },
-                }),
-          ]
-        : []),
-      ...(wasActive
-        ? [
-            prisma.poll.update({
-              where: { id: vote.poll_id },
-              data: { total_votes_cents: { decrement: vote.amount_cents } },
-            }),
-          ]
-        : []),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: vote.amount_cents,
-          balance_after_cents: donor.balance_remaining + vote.amount_cents,
-          type: 'REFUND',
-          reason: 'Reversed poll vote',
-          reference_id: vote.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else if (spend_type === 'contribution') {
-    const contrib = await prisma.fundContribution.findUnique({ where: { id: spend_id } });
-    if (!contrib || contrib.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Contribution not found' });
-    if (contrib.reversed_at)
-      return res.status(400).json({ error: 'Contribution already reversed' });
-
-    const goal = await prisma.fundGoal.findUnique({ where: { id: contrib.goal_id } });
-    const newTotal = goal ? goal.current_cents - contrib.amount_cents : 0;
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: contrib.amount_cents } },
-      }),
-      prisma.fundContribution.update({
-        where: { id: contrib.id },
-        data: { reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      ...(goal
-        ? [
-            prisma.fundGoal.update({
-              where: { id: goal.id },
-              data: {
-                current_cents: { decrement: contrib.amount_cents },
-                is_complete: newTotal <= 0 ? false : undefined,
-              },
-            }),
-          ]
-        : []),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: contrib.amount_cents,
-          balance_after_cents: donor.balance_remaining + contrib.amount_cents,
-          type: 'REFUND',
-          reason: 'Reversed fund contribution',
-          reference_id: contrib.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else {
-    return res
-      .status(400)
-      .json({ error: 'Invalid spend_type. Must be claim, vote, or contribution' });
+  try {
+    await prisma.$transaction((tx) =>
+      reverseSpendTx(tx, req.params.id, spend_type, spend_id, 'admin'),
+    );
+    res.json({ success: true });
+  } catch (e) {
+    sendError(res, e, '[admin/reverse-spend]');
   }
-
-  res.json({ success: true });
 });
 
 // Polls CRUD
@@ -1009,7 +754,7 @@ router.patch('/polls/options/:id', async (req, res) => {
 router.delete('/polls/options/:id', async (req, res) => {
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const refund = await refundPollOptionVotes(tx, req.params.id);
+      const refund = await refundPollOptionVotes(tx, req.params.id, 'admin');
       await tx.pollOption.update({
         where: { id: req.params.id },
         data: { status: 'REJECTED' },
@@ -1025,7 +770,9 @@ router.delete('/polls/options/:id', async (req, res) => {
 
 router.post('/polls/options/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) => refundPollOptionVotes(tx, req.params.id));
+    const result = await prisma.$transaction((tx) =>
+      refundPollOptionVotes(tx, req.params.id, 'admin'),
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -1166,7 +913,7 @@ router.delete('/goals/:id', async (req, res) => {
     if (!prior) return res.status(404).json({ error: 'Goal not found' });
 
     const result = await withWebhooks(async (tx, emit) => {
-      const refund = await refundGoalContributions(tx, req.params.id);
+      const refund = await refundGoalContributions(tx, req.params.id, 'admin');
       await tx.fundGoal.update({
         where: { id: req.params.id },
         data: { is_active: false },
@@ -1193,7 +940,9 @@ router.delete('/goals/:id', async (req, res) => {
 
 router.post('/goals/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) => refundGoalContributions(tx, req.params.id));
+    const result = await prisma.$transaction((tx) =>
+      refundGoalContributions(tx, req.params.id, 'admin'),
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;

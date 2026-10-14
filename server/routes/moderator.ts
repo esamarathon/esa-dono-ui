@@ -1,6 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { sendError } from '../lib/httpError.js';
+import { moderateCustomEntryTx } from '../services/reversal.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
@@ -166,77 +168,14 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
     return res.status(400).json({ error: 'Status must be APPROVED or REJECTED' });
   }
 
-  const entry = await prisma.pollCustomEntry.findUnique({ where: { id: req.params.id } });
-  if (!entry) return res.status(404).json({ error: 'Entry not found' });
-  if (entry.status !== 'PENDING') {
-    return res.status(400).json({ error: 'Only pending entries can be moderated' });
+  try {
+    const updated = await prisma.$transaction((tx) =>
+      moderateCustomEntryTx(tx, req.params.id, status, req.donor?.email || 'moderator'),
+    );
+    res.json(updated);
+  } catch (e) {
+    sendError(res, e, '[moderator/custom-entries]');
   }
-
-  const option = await prisma.pollOption.findUnique({ where: { custom_entry_id: entry.id } });
-  if (!option) return res.status(404).json({ error: 'Associated poll option not found' });
-
-  const vote = await prisma.pollVote.findFirst({
-    where: { poll_option_id: option.id, reversed_at: null },
-    orderBy: { created_at: 'desc' },
-  });
-  if (!vote) return res.status(404).json({ error: 'Associated funding vote not found' });
-
-  const moderatorEmail = req.donor?.email || 'moderator';
-
-  if (status === 'APPROVED') {
-    await prisma.$transaction([
-      prisma.pollOption.update({
-        where: { id: option.id },
-        data: { status: 'ACTIVE', votes_cents: { increment: vote.amount_cents } },
-      }),
-      prisma.poll.update({
-        where: { id: entry.poll_id },
-        data: { total_votes_cents: { increment: vote.amount_cents } },
-      }),
-      prisma.pollCustomEntry.update({
-        where: { id: entry.id },
-        data: { status: 'APPROVED' },
-      }),
-    ]);
-  } else {
-    const donor = await prisma.donor.findUnique({ where: { id: vote.donor_id } });
-    if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: vote.amount_cents } },
-      }),
-      prisma.pollVote.update({
-        where: { id: vote.id },
-        data: { reversed_at: new Date(), reversed_by: moderatorEmail },
-      }),
-      prisma.pollOption.update({
-        where: { id: option.id },
-        data: { status: 'REJECTED' },
-      }),
-      prisma.pollCustomEntry.update({
-        where: { id: entry.id },
-        data: { status: 'REJECTED' },
-      }),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: vote.amount_cents,
-          balance_after_cents: donor.balance_remaining + vote.amount_cents,
-          type: 'REFUND',
-          reason: 'Rejected custom poll entry',
-          reference_id: vote.id,
-          created_by: moderatorEmail,
-        },
-      }),
-    ]);
-  }
-
-  const updated = await prisma.pollCustomEntry.findUnique({
-    where: { id: req.params.id },
-  });
-  res.json(updated);
 });
 
 // Rewards CRUD
