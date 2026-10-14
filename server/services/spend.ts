@@ -176,6 +176,8 @@ export async function claimRewardTx(
     throw httpError(400, 'quantity must be a positive integer');
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
   if (!reward || !reward.is_active) throw httpError(404, 'Reward not found');
+  if (reward.type === 'PHYSICAL' && !pool)
+    throw httpError(400, 'Physical rewards require a cash-funded pledge through Stripe checkout');
   if (reward.quantity_total !== null && reward.quantity_claimed + quantity > reward.quantity_total)
     throw httpError(400, 'Reward sold out');
   const unitPrice = pool ? pool.unit_price_cents : reward.cost_cents;

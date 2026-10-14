@@ -185,6 +185,32 @@ describe('proposeCustomEntryTx', () => {
     }
   });
 
+  it('rejects direct physical reward claims even with enough Wallet credit, without changing funds or stock', async () => {
+    const donor = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: { title: 'Cash-funded only', type: 'PHYSICAL', cost_cents: 1000, quantity_total: 2 },
+    });
+    try {
+      await expect(
+        prisma.$transaction((tx) => claimRewardTx(tx, donor.id, reward.id)),
+      ).rejects.toMatchObject({
+        status: 400,
+        message: 'Physical rewards require a cash-funded pledge through Stripe checkout',
+      });
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 5000,
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 0,
+      });
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
   it('preserves direct legacy reward prices below the new-pledge selection minimum', async () => {
     const donor = await makeDonor(50);
     const reward = await prisma.reward.create({
