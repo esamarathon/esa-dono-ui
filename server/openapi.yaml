@@ -1266,17 +1266,45 @@ paths:
                 properties:
                   donors: { type: integer }
                   donations: { type: integer }
-                  claims: { type: integer }
-                  pledges: { type: integer }
+                  claims:
+                    type: integer
+                    description: Live reward entitlements only (PENDING, FULFILLED, CANCELLING with no reversal), counted once regardless of funding components.
+                  pledged_cents:
+                    type: integer
+                    description: Current pledge amounts of pooled COMPLETED and REFUNDED donations, including Wallet funding; not money.
+                  pledges:
+                    type: object
+                    required: [open, overdue]
+                    properties:
+                      open: { type: integer }
+                      overdue:
+                        {
+                          type: integer,
+                          description: OPEN past expires_at with Checkout Session not complete (including null or unknown state).,
+                        }
+                  payment_refunds:
+                    type: object
+                    required: [requested, failed]
+                    properties:
+                      requested: { type: integer }
+                      failed:
+                        {
+                          type: integer,
+                          description: FAILED records only; unresolved shipping on a RESOLVED record does not change its status.,
+                        }
                   total_raised_cents:
                     type: integer
-                    description: Money total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
-                  unallocated_credits_cents:
-                    type: integer
-                    description: Sum of Donor.balance_remaining across all donors — credited but not yet spent on a reward/poll/goal (#59)
+                    description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping, Wallet funding and incentive allocations are excluded.
+                  wallet_credit_cents:
+                    type: object
+                    description: Replaces unallocated_credits_cents. Available and held Wallet credit are separate, not additional charity money.
+                    required: [available, held]
+                    properties:
+                      available: { type: integer }
+                      held: { type: integer }
                   channels:
                     type: array
-                    description: Per-channel raised totals (admin-only; not shown publicly)
+                    description: Donation-scoped money, pledge, Unused and Pool credit; incentive-scoped allocated cents. Never sum across categories or mix with money.
                     items:
                       type: object
                       properties:
@@ -1290,6 +1318,22 @@ paths:
                         donations:
                           type: integer
                           description: Count of all the Channel's donations, whatever their status
+                        pledged_cents:
+                          type: integer
+                          description: Current pooled pledge amounts on counted donations routed to this Channel.
+                        allocated_cents:
+                          $ref: '#/components/schemas/PoolAmounts'
+                        unused_pool_cents:
+                          $ref: '#/components/schemas/UnusedPoolAmounts'
+                        pool_credit_cents:
+                          $ref: '#/components/schemas/PoolAmounts'
+                  shared:
+                    type: object
+                    required: [allocated_cents]
+                    description: Allocations of incentives without a Channel; never attributed to the source donation's Channel.
+                    properties:
+                      allocated_cents:
+                        $ref: '#/components/schemas/PoolAmounts'
 
   /admin/channels:
     get:
@@ -3201,6 +3245,15 @@ paths:
                   active_polls: { type: integer }
                   total_rewards: { type: integer }
                   total_goals: { type: integer }
+                  unused_pool:
+                    type: object
+                    description: Distinct donations with positive Unused poll or goal cents, for Events not ended; comments must be nonblank. No donor email.
+                    required: [with_comment, all]
+                    properties:
+                      with_comment:
+                        $ref: '#/components/schemas/UnusedPoolWork'
+                      all:
+                        $ref: '#/components/schemas/UnusedPoolWork'
 
   /moderator/events:
     get:
@@ -4520,6 +4573,20 @@ components:
             type: string,
             description: Stable oldest funding source; present for redemption-backed claims,
           }
+    UnusedPoolAmounts:
+      type: object
+      required: [poll, goal]
+      additionalProperties: false
+      properties:
+        poll: { type: integer, minimum: 0 }
+        goal: { type: integer, minimum: 0 }
+    UnusedPoolWork:
+      type: object
+      required: [donations, cents]
+      properties:
+        donations: { type: integer, minimum: 0 }
+        cents:
+          $ref: '#/components/schemas/UnusedPoolAmounts'
     PoolAmounts:
       type: object
       required: [reward, poll, goal]

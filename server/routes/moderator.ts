@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { readAccountingStatsTx } from '../services/accountingStats.js';
 import { handle, httpError, sendError } from '../lib/httpError.js';
 import {
   assignUnusedTx,
@@ -53,19 +54,9 @@ const router = Router();
 router.use(moderatorAuth);
 
 // Dashboard stats
-router.get('/stats', async (req, res) => {
-  const [pendingEntries, activePolls, totalRewards, totalGoals] = await Promise.all([
-    prisma.pollCustomEntry.count({ where: { status: 'PENDING' } }),
-    prisma.poll.count({ where: { is_active: true } }),
-    prisma.reward.count({ where: { is_active: true } }),
-    prisma.fundGoal.count({ where: { is_active: true } }),
-  ]);
-  res.json({
-    pending_entries: pendingEntries,
-    active_polls: activePolls,
-    total_rewards: totalRewards,
-    total_goals: totalGoals,
-  });
+router.get('/stats', async (_req, res) => {
+  const stats = await prisma.$transaction((tx) => readAccountingStatsTx(tx));
+  res.json(stats.moderator);
 });
 
 // Channels and Events (routes/identityRoutes.ts)

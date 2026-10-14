@@ -111,7 +111,10 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 - **Metrics** (`services/metrics.ts`, docs in `docs/webhooks-and-metrics.md`):
   - `dono_donations_unassigned` counts donations waiting to be assigned.
   - Per-Event/Channel breakdowns are **separate** gauges labelled `event`/`channel` (slugs, `""` when unassigned or shared): `dono_{donated_cents,donations,reward_claims,poll_votes}_by_channel`. They are separate so `sum()` never double-counts the unlabelled totals.
-  - Cents gauges follow the same money-total rule (`COMPLETED` + `REFUNDED`).
+  - Only `dono_donated_cents_*` follows the money-total rule (`COMPLETED` + `REFUNDED` current `amount_cents`, shipping excluded). Incentive, Unused and Pool-credit cents are separate category measures, never additional money.
+  - `services/accountingStats.ts` supplies one safe, tx-aware bulk snapshot to business gauges and admin/moderator stats. It reuses `computePoolAccounting`, sums effective reward funding components, and counts live entitlements once. Allocation labels follow the incentive; Unused/Pool-credit labels follow the donation. Event-end conversions are derived, not stored.
+  - Admin stats expose current `pledged_cents`, available/held Wallet credit, open/overdue pledges, requested/failed refunds, per-Channel category amounts and shared incentive allocations. Moderator stats add comments-only/all Unused counts and category cents, without donor email.
+  - Database gauges are interval-cached. Deduplicate replicas with `max without (instance)` **before** aggregating; never sum across incentive categories or mix them with money.
   - `dono_events_active` counts Events; `dono_channels_active` counts Channels.
 - **Client**: `/donate` requires selecting a channel (`CartContext.selectChannel`) before showing incentives, pre-filtered to shared + that channel. Switching channels with channel-scoped items in the cart asks for confirmation (`pendingChannelId` / `confirmChannelSwitch`) and drops those items.
 
