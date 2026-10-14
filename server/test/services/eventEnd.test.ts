@@ -73,6 +73,8 @@ afterEach(async () => {
   await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_end_audit');
   await prisma.pendingPledge.deleteMany({ where: { channel: { event_id: { in: events } } } });
   await prisma.paymentRefund.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
+  await prisma.poolCreditRedemption.deleteMany({ where: { batch: { donor_id: { in: donors } } } });
+  await prisma.poolCreditBatch.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donors } } });
@@ -211,6 +213,77 @@ it('deactivation alone preserves credit, including reward credit; End and Undo e
   ).toBe(80);
   expect(await prisma.poolCredit.count({ where: { donation_id: f.donation.id } })).toBe(2);
 });
+it('does not classify a later credit-funded claim by the original physical pledge item', async () => {
+  const f = await fixture();
+  const reward = await prisma.reward.create({
+    data: { title: 'Now digital', cost_cents: 100, type: 'DIGITAL' },
+  });
+  rewards.push(reward.id);
+  const old = await prisma.rewardClaim.create({
+    data: {
+      reward_id: reward.id,
+      donor_id: f.donor.id,
+      donation_id: f.donation.id,
+      amount_cents: 100,
+      status: 'REVERSED',
+      reversed_at: new Date(),
+    },
+  });
+  await prisma.pendingPledge.create({
+    data: {
+      pledge_token: crypto.randomUUID(),
+      format: 'POOLED',
+      draft_id: crypto.randomUUID(),
+      confirmed_plan: '{}',
+      pledge_amount_cents: 100,
+      new_money_cents: 100,
+      channel_id: f.channel.id,
+      fulfilled_by_donation_id: f.donation.id,
+      status: 'FULFILLED',
+      expires_at: new Date(),
+      items: {
+        create: {
+          kind: 'REWARD',
+          target_id: reward.id,
+          amount_cents: 100,
+          confirmed_reward_type: 'PHYSICAL',
+          unit_price_cents: 100,
+        },
+      },
+    },
+  });
+  const credit = await prisma.poolCredit.create({
+    data: {
+      donation_id: f.donation.id,
+      category: 'reward',
+      amount_cents: 100,
+      remaining_cents: 0,
+      source_claim_id: old.id,
+      created_by: 'admin',
+    },
+  });
+  const replacement = await prisma.rewardClaim.create({
+    data: {
+      reward_id: reward.id,
+      donor_id: f.donor.id,
+      donation_id: f.donation.id,
+      amount_cents: 100,
+    },
+  });
+  const batch = await prisma.poolCreditBatch.create({
+    data: {
+      donor_id: f.donor.id,
+      event_id: f.event.id,
+      idempotency_key: crypto.randomUUID(),
+      request_data: '{}',
+    },
+  });
+  await prisma.poolCreditRedemption.create({
+    data: { credit_id: credit.id, batch_id: batch.id, claim_id: replacement.id, amount_cents: 100 },
+  });
+  expect(await preview(f.event.id)).toMatchObject({ unshipped_physical_donations: 0 });
+});
+
 it('rolls back end state if audit persistence fails', async () => {
   const f = await fixture();
   await prisma.$executeRawUnsafe(

@@ -23,7 +23,13 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
       status: true,
       pledge_amount_cents: true,
       reward_claims: {
-        where: { reversed_at: null, status: { in: ['PENDING', 'CANCELLING'] } },
+        // Credit-funded claims are never physical, even when this reward id
+        // also appeared as PHYSICAL in the source donation's original pledge.
+        where: {
+          reversed_at: null,
+          status: { in: ['PENDING', 'CANCELLING'] },
+          credit_redemptions: { none: {} },
+        },
         select: { reward_id: true, reward: { select: { type: true } } },
       },
       pledge: {

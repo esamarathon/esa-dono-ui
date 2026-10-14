@@ -4256,7 +4256,7 @@ components:
         unshipped_physical_donations:
           {
             type: integer,
-            description: 'Distinct COMPLETED pooled donations with PENDING or CANCELLING physical claims; confirmed type takes precedence over live catalog type',
+            description: 'Distinct COMPLETED pooled donations with PENDING or CANCELLING physical claims; confirmed type takes precedence over live catalog type. Credit-funded claims have no physical-refund window.',
           }
         open_pledges: { type: integer }
         requested_payment_refunds: { type: integer }
