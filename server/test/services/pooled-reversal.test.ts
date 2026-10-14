@@ -159,6 +159,29 @@ afterAll(() => prisma.$disconnect());
 
 describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each([
+    { status: 'REFUNDED' as const, after: 500 },
+    { status: 'CHARGEBACK' as const, after: 0 },
+  ])('historical PENDING preview counts zero before $status', async ({ status, after }) => {
+    const donor = await prisma.donor.create({
+      data: { email: `${crypto.randomUUID()}@example.com` },
+    });
+    donors.push(donor.id);
+    const donation = await prisma.donation.create({
+      data: {
+        donor_id: donor.id,
+        external_id: crypto.randomUUID(),
+        status: 'PENDING',
+        amount_cents: 500,
+        pledge_amount_cents: null,
+      },
+    });
+    const preview = await prisma.$transaction((tx) =>
+      previewDonationReversalTx(tx, donation.id, status),
+    );
+    expect(preview).toMatchObject({ money_before_cents: 0, money_after_cents: after });
+  });
+
+  it.each([
     { wallet: 400, prior: 0, balance: 100, expected: 500, delta: 400 },
     { wallet: 400, prior: 250, balance: 100, expected: 250, delta: 150 },
     { wallet: 200, prior: 700, balance: 100, expected: 0, delta: -100 },

@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
+import { countsTowardTotals } from '../lib/donationTotals.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { readDonationAccountingTx } from './poolAccounting.js';
 
@@ -377,8 +378,8 @@ export async function previewDonationReversalTx(
     status,
     accounting: donation.pledge_amount_cents === null ? ('LEGACY' as const) : ('POOLED' as const),
     wallet_adjustment_cents: Math.max(desired, -donor.balance_remaining),
-    money_before_cents: donation.amount_cents,
-    money_after_cents: status === 'CHARGEBACK' ? 0 : donation.amount_cents,
+    money_before_cents: countsTowardTotals(donation.status) ? donation.amount_cents : 0,
+    money_after_cents: countsTowardTotals(status) ? donation.amount_cents : 0,
     reversed_rows: {
       reward: claims.length,
       poll: donation.allocations.poll.length,
