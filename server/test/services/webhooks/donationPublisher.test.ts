@@ -101,9 +101,14 @@ async function pooledWriteIn() {
     plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
   });
   pledges.push(pledge_token);
+  const externalId = crypto.randomUUID();
+  await prisma.pendingPledge.update({
+    where: { pledge_token },
+    data: { checkout_session_id: externalId },
+  });
   const intake = await intakeDonation({
     source: 'stripe',
-    externalId: crypto.randomUUID(),
+    externalId,
     email: context.donor.email,
     donorName: 'Reader',
     amountCents: 1000,

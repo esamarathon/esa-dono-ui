@@ -1,246 +1,224 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import crypto from 'crypto';
-
-vi.mock('../../services/donation.js', () => ({
-  intakeDonation: vi.fn(),
-}));
-
-vi.mock('../../services/auction.js', () => ({
-  advanceCascadeTx: vi.fn(),
-  settleWinTx: vi.fn(),
-}));
-
-vi.mock('../../lib/prisma.js', () => ({
-  default: { $transaction: vi.fn((fn: (tx: unknown) => unknown) => fn({})) },
-}));
-
-import { intakeDonation as processDonation } from '../../services/donation.js';
-import { advanceCascadeTx, settleWinTx } from '../../services/auction.js';
+import crypto from 'node:crypto';
+import prisma from '../../lib/prisma.js';
+import { planPledge } from '@dono/shared';
+import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 import webhookRouter from '../../routes/webhook.js';
 
-function createApp() {
-  const app = express();
-  app.use(express.raw({ type: 'application/json' }));
-  app.use('/api/webhooks/stripe', webhookRouter);
-  return app;
-}
-
-const webhookSecret = 'whsec_test_secret';
-
-function signedHeaders(payload: string) {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signedPayload = `${timestamp}.${payload}`;
-  const signature = crypto.createHmac('sha256', webhookSecret).update(signedPayload).digest('hex');
-  return `t=${timestamp},v1=${signature}`;
-}
-
-function checkoutEvent(overrides: Record<string, unknown> = {}) {
+const stripe = vi.hoisted(() => ({ create: vi.fn(), retrieve: vi.fn(), expire: vi.fn() }));
+vi.mock('stripe', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('stripe')>();
   return {
-    id: 'evt_test_1',
-    type: 'checkout.session.completed',
-    data: {
-      object: {
-        id: 'cs_test_123',
-        amount_total: 2500,
-        customer_details: { email: 'donor@example.com', name: 'Test Donor' },
-        metadata: { pledge_token: 'pledge-abc' },
-        ...overrides,
-      },
+    ...actual,
+    default: class extends actual.default {
+      constructor(...args: ConstructorParameters<typeof actual.default>) {
+        super(...args);
+        this.checkout.sessions.create = stripe.create;
+        this.checkout.sessions.retrieve = stripe.retrieve;
+        this.checkout.sessions.expire = stripe.expire;
+      }
     },
   };
-}
-
-describe('POST /api/webhooks/stripe', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.STRIPE_WEBHOOK_SECRET = '';
-    process.env.STRIPE_SECRET_KEY = '';
-  });
-
-  it('returns 200 for a non-checkout-completed event', async () => {
-    const payload = JSON.stringify({
-      id: 'evt_test_1',
-      type: 'checkout.session.expired',
-      data: { object: {} },
-    });
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .set('stripe-signature', signedHeaders(payload))
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(res.body.received).toBe(true);
-    expect(processDonation).not.toHaveBeenCalled();
-  });
-
-  it('processes a checkout.session.completed event when no secret is set', async () => {
-    vi.mocked(processDonation).mockResolvedValue({ donor: { id: 'donor-1' } } as any);
-
-    const payload = JSON.stringify(checkoutEvent());
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(res.body.received).toBe(true);
-    expect(processDonation).toHaveBeenCalledWith({
-      externalId: 'cs_test_123',
-      email: 'donor@example.com',
-      donorName: 'Test Donor',
-      source: 'stripe',
-      amountCents: 2500,
-      pledgeToken: 'pledge-abc',
-      shippingCents: 0,
-    });
-  });
-
-  it('processes a valid signed event', async () => {
-    process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
-    process.env.STRIPE_SECRET_KEY = 'sk_test_placeholder';
-    vi.mocked(processDonation).mockResolvedValue({ donor: { id: 'donor-1' } } as any);
-
-    const payload = JSON.stringify(checkoutEvent());
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .set('stripe-signature', signedHeaders(payload))
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(processDonation).toHaveBeenCalled();
-  });
-
-  it('rejects an invalid signature', async () => {
-    process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
-    process.env.STRIPE_SECRET_KEY = 'sk_test_placeholder';
-
-    const payload = JSON.stringify(checkoutEvent());
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .set('stripe-signature', 't=12345,v1=invalidsignature')
-      .send(payload);
-
-    expect(res.status).toBe(400);
-    expect(processDonation).not.toHaveBeenCalled();
-  });
-
-  it('skips when email is missing', async () => {
-    const payload = JSON.stringify(checkoutEvent({ customer_details: {} }));
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(res.body.skipped).toBe('missing email or id');
-    expect(processDonation).not.toHaveBeenCalled();
-  });
-
-  it('extracts shipping amount but no shipping address for physical rewards', async () => {
-    vi.mocked(processDonation).mockResolvedValue({ donor: { id: 'donor-1' } } as any);
-
-    const payload = JSON.stringify(
-      checkoutEvent({
-        amount_total: 3200,
-        total_details: { amount_shipping: 700 },
-        shipping_details: {
-          name: 'Recipient Name',
-          address: {
-            line1: '123 Main St',
-            line2: 'Apt 4',
-            city: 'Springfield',
-            country: 'US',
-          },
-        },
-      }),
-    );
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(processDonation).toHaveBeenCalledWith({
-      externalId: 'cs_test_123',
-      email: 'donor@example.com',
-      donorName: 'Test Donor',
-      source: 'stripe',
-      amountCents: 3200,
-      pledgeToken: 'pledge-abc',
-      shippingCents: 700,
-    });
-  });
 });
+vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
-describe('auction session events', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.STRIPE_WEBHOOK_SECRET = '';
-    process.env.STRIPE_SECRET_KEY = '';
+const donors: string[] = [];
+const channels: string[] = [];
+const tokens: string[] = [];
+const auctions: string[] = [];
+function app() {
+  const app = express();
+  app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
+  app.use(express.json());
+  return app;
+}
+async function pending() {
+  const channel = await createTestChannel(prisma);
+  channels.push(channel.id);
+  const donor = await prisma.donor.create({
+    data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: 975 },
   });
+  donors.push(donor.id);
+  const pledge = await createPledge({
+    draft_id: crypto.randomUUID(),
+    pledge_amount_cents: 1000,
+    items: [],
+    channel_id: channel.id,
+    walletDonorId: donor.id,
+    plan: planPledge({ pledge_amount_cents: 1000, selections: [], available_wallet_cents: 975 }),
+  });
+  tokens.push(pledge.pledge_token);
+  const id = `cs_${crypto.randomUUID()}`;
+  stripe.create.mockResolvedValue({ id, url: 'https://checkout.stripe.com/test' });
+  await createCheckoutForPledge(pledge.pledge_token, donor);
+  const session = {
+    id,
+    status: 'complete',
+    payment_status: 'paid',
+    amount_total: 50,
+    customer_details: { email: donor.email, name: 'Reader' },
+    metadata: { pledge_token: pledge.pledge_token },
+  };
+  return { pledge, donor, session };
+}
+async function notify(type: string, session: object, signature?: string) {
+  const payload = JSON.stringify({ id: 'evt_test', type, data: { object: session } });
+  const req = request(app()).post('/api/webhooks/stripe').set('Content-Type', 'application/json');
+  if (signature === 'valid') {
+    const time = Math.floor(Date.now() / 1000);
+    const hash = crypto
+      .createHmac('sha256', 'whsec_test')
+      .update(`${time}.${payload}`)
+      .digest('hex');
+    req.set('stripe-signature', `t=${time},v1=${hash}`);
+  } else if (signature) req.set('stripe-signature', signature);
+  return req.send(payload);
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test');
+});
+afterEach(async () => {
+  await prisma.auction.updateMany({
+    where: { id: { in: auctions } },
+    data: { current_offer_id: null },
+  });
+  await prisma.auctionWin.deleteMany({ where: { auction_id: { in: auctions } } });
+  await prisma.auctionOffer.deleteMany({ where: { auction_id: { in: auctions } } });
+  await prisma.bid.deleteMany({ where: { auction_id: { in: auctions } } });
+  await prisma.auction.deleteMany({ where: { id: { in: auctions } } });
+  await prisma.pendingPledge.deleteMany({ where: { pledge_token: { in: tokens } } });
+  await prisma.donation.deleteMany({ where: { donor_id: { in: donors } } });
+  await prisma.donor.deleteMany({ where: { id: { in: donors } } });
+  await prisma.channel.deleteMany({ where: { id: { in: channels } } });
+  donors.length = channels.length = tokens.length = auctions.length = 0;
+  vi.unstubAllEnvs();
+});
+afterAll(() => prisma.$disconnect());
 
-  it('settles a paid auction session without touching processDonation', async () => {
-    vi.mocked(settleWinTx).mockResolvedValue({ settled: true });
-
-    const payload = JSON.stringify(
-      checkoutEvent({ id: 'cs_auction_1', metadata: { auction_id: 'auc_1' } }),
+describe('Stripe webhook with real SQLite intake/reconciliation', () => {
+  it('verifies the raw signed body and fulfills duplicate paid notifications once', async () => {
+    const { session, donor } = await pending();
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test');
+    const results = await Promise.all([
+      notify('checkout.session.completed', session, 'valid'),
+      notify('checkout.session.async_payment_succeeded', session, 'valid'),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([200, 200]);
+    expect(await prisma.donation.count({ where: { external_id: session.id } })).toBe(1);
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 25,
+      balance_held_cents: 0,
+      total_donated: 50,
+    });
+  });
+  it('rejects an invalid signature before accounting', async () => {
+    const { session, donor } = await pending();
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test');
+    expect((await notify('checkout.session.completed', session, 't=12345,v1=invalid')).status).toBe(
+      400,
     );
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(settleWinTx).toHaveBeenCalledWith({}, 'auc_1', 'cs_auction_1');
-    expect(processDonation).not.toHaveBeenCalled();
+    expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(0);
   });
-
-  it('advances the cascade on an expired auction session', async () => {
-    vi.mocked(advanceCascadeTx).mockResolvedValue({ advanced: true, status: 'AWAITING_PAYMENT' });
-
-    const payload = JSON.stringify({
-      id: 'evt_test_2',
-      type: 'checkout.session.expired',
-      data: {
-        object: { id: 'cs_auction_2', metadata: { auction_id: 'auc_2' } },
-      },
+  it('leaves completed/unpaid processing held and accepts later async success', async () => {
+    const { session, donor } = await pending();
+    expect(
+      (await notify('checkout.session.completed', { ...session, payment_status: 'unpaid' })).status,
+    ).toBe(200);
+    expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(0);
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_held_cents: 950,
     });
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(advanceCascadeTx).toHaveBeenCalledWith({}, 'auc_2', 'cs_auction_2');
+    expect((await notify('checkout.session.async_payment_succeeded', session)).status).toBe(200);
+    expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(1);
   });
-
-  it('ignores an expired session with no auction metadata (pledge sessions)', async () => {
-    const payload = JSON.stringify({
-      id: 'evt_test_3',
-      type: 'checkout.session.expired',
-      data: { object: { id: 'cs_pledge_1', metadata: {} } },
+  it.each(['checkout.session.expired', 'checkout.session.async_payment_failed'])(
+    'reconciles %s and releases the hold once',
+    async (type) => {
+      const { session, donor, pledge } = await pending();
+      stripe.retrieve.mockResolvedValue({ ...session, payment_status: 'unpaid' });
+      const notification = {
+        ...session,
+        payment_status: 'unpaid',
+        status: type.endsWith('expired') ? 'expired' : 'complete',
+      };
+      expect((await notify(type, notification)).status).toBe(200);
+      expect((await notify(type, notification)).status).toBe(200);
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 975,
+        balance_held_cents: 0,
+      });
+      expect(
+        await prisma.pendingPledge.findUnique({ where: { pledge_token: pledge.pledge_token } }),
+      ).toMatchObject({ status: 'EXPIRED', wallet_hold_status: 'RELEASED' });
+    },
+  );
+  it('records shipping outside money and never stores a shipping address', async () => {
+    const { session, donor } = await pending();
+    expect(
+      (
+        await notify('checkout.session.completed', {
+          ...session,
+          amount_total: 250,
+          total_details: { amount_shipping: 200 },
+          shipping_details: { address: { line1: 'Private address marker' } },
+        })
+      ).status,
+    ).toBe(200);
+    const donation = await prisma.donation.findUnique({ where: { external_id: session.id } });
+    expect(donation).toMatchObject({ amount_cents: 50, shipping_cents: 200 });
+    expect(JSON.stringify(donation)).not.toContain('Private address marker');
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      total_donated: 50,
     });
-
-    const res = await request(createApp())
-      .post('/api/webhooks/stripe')
-      .set('Content-Type', 'application/json')
-      .send(payload);
-
-    expect(res.status).toBe(200);
-    expect(advanceCascadeTx).not.toHaveBeenCalled();
-    expect(processDonation).not.toHaveBeenCalled();
   });
+  it('ignores unrelated events and malformed sessions without creating money', async () => {
+    expect((await notify('payment_intent.created', {})).status).toBe(200);
+    expect((await notify('checkout.session.expired', {})).status).toBe(200);
+  });
+  it.each(['checkout.session.completed', 'checkout.session.expired'])(
+    'preserves the separate auction %s branch',
+    async (type) => {
+      const { donor } = await pending();
+      const auction = await prisma.auction.create({
+        data: {
+          title: 'Auction item',
+          type: 'DIGITAL',
+          starting_price_cents: 1000,
+          min_increment_cents: 100,
+          ends_at: new Date(),
+          status: 'AWAITING_PAYMENT',
+        },
+      });
+      auctions.push(auction.id);
+      const bid = await prisma.bid.create({
+        data: { auction_id: auction.id, donor_id: donor.id, amount_cents: 1000 },
+      });
+      const offer = await prisma.auctionOffer.create({
+        data: {
+          auction_id: auction.id,
+          donor_id: donor.id,
+          bid_id: bid.id,
+          rank: 1,
+          amount_cents: 1000,
+          checkout_session_id: 'cs_auction',
+          expires_at: new Date(),
+        },
+      });
+      await prisma.auction.update({
+        where: { id: auction.id },
+        data: { current_offer_id: offer.id },
+      });
+      expect(
+        (await notify(type, { id: 'cs_auction', metadata: { auction_id: auction.id } })).status,
+      ).toBe(200);
+      expect(await prisma.auction.findUnique({ where: { id: auction.id } })).toMatchObject({
+        status: type.endsWith('expired') ? 'UNSOLD' : 'SETTLED',
+      });
+      expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(0);
+    },
+  );
 });

@@ -289,6 +289,8 @@ describe('Donation routing (resolveDonationRoute via HTTP)', () => {
         data: {
           object: {
             id: sessionId,
+            status: 'complete',
+            payment_status: 'paid',
             amount_total: 1500,
             customer_details: { email: `stripe-${rand()}@example.com`, name: 'Stripe Donor' },
           },

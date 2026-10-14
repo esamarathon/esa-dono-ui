@@ -31,3 +31,11 @@ export const createPledge = (data: CreatePledgeInput | LegacyCartInput): Promise
   client.post('/pledge', data).then((r) => r.data);
 export const getPledge = (token: string): Promise<Pledge> =>
   client.get(`/pledge/${token}`).then((r) => r.data);
+
+/** Reconcile only; possession of a pledge token never establishes a donor session. */
+export const reconcilePledge = (token: string): Promise<Pledge> =>
+  client.post(`/pledge/${token}/reconcile`).then((r) => r.data);
+export const cancelPledge = (token: string): Promise<Pledge> =>
+  client.post(`/pledge/${token}/cancel`).then((r) => r.data);
+export const continuePledge = (token: string): Promise<Pledge> =>
+  client.post(`/pledge/${token}/continue`).then((r) => r.data);

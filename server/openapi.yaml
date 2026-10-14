@@ -900,7 +900,11 @@ paths:
         plan and items, creating neither a pledge nor a Wallet hold. Confirmed
         prices, types, auto rows and initial Wallet hold are stored atomically.
         Retrying an existing draft returns its immutable plan, including its own
-        held funding, before comparison. Full payment reconciliation is slice 3.
+        held funding, before comparison. Unknown attempts remain immutable.
+        Stripe creation uses the pledge token as its idempotency key and the exact
+        two-hour deadline, with distinct success/cancel returns and recovery disabled.
+        Uncertain create returns this confirmed pledge with checkout_error; never
+        assume a null Session id means no payment opportunity exists.
 
         Missing pledge_amount_cents or any top_up_cents returns 400 with
         "The donate page was updated. Reload to continue."
@@ -971,10 +975,9 @@ paths:
                 allOf:
                   - { $ref: '#/components/schemas/PooledPledge' }
                   - type: object
-                    required: [donate_url, has_checkout]
+                    required: [checkout_error]
                     properties:
-                      donate_url: { type: string, nullable: true }
-                      has_checkout: { type: boolean }
+                      checkout_error: { type: string, nullable: true }
         '400':
           description: Obsolete donate contract, missing draft/plan, invalid cents/text or category overage
         '403':
@@ -1016,6 +1019,62 @@ paths:
         '404':
           description: Pledge not found
 
+  /pledge/{token}/reconcile:
+    post:
+      tags: [Pledge]
+      summary: Reconcile the exact Stripe Session and return the immutable review
+      description: |
+        Public token-bound operation; never authenticates the donor. Paid/complete
+        fulfills once. Complete/unpaid remains PROCESSING with held funding.
+        Only authoritative non-payment releases funding. Unknown state returns
+        409 and blocks editing/new checkout. No local deadline releases funds.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PledgeState' }
+        '404': { description: Pledge not found }
+        '409': { $ref: '#/components/responses/PledgeReconciliationConflict' }
+
+  /pledge/{token}/cancel:
+    post:
+      tags: [Pledge]
+      summary: Expire then reconcile before allowing edits
+      description: |
+        A Wallet-bound pledge requires its owning donor session. A never-attempted
+        checkout can be cancelled atomically. An uncertain create must first recover
+        its Session identity; null id alone is not evidence. Expire errors trigger
+        retrieval. Open/unknown outcomes return 409; complete/unpaid returns PROCESSING.
+        Confirmed non-payment releases once. FULFILLED is never overwritten.
+        LEGACY pledges are read-only (409).
+      security: [{}, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PledgeState' }
+        '403': { description: Wallet-bound pledge requires its owning donor session }
+        '404': { description: Pledge not found }
+        '409': { $ref: '#/components/responses/PledgeReconciliationConflict' }
+
+  /pledge/{token}/continue:
+    post:
+      tags: [Pledge]
+      summary: Continue the same confirmed checkout, never a new plan
+      description: |
+        Reconciles an existing attempt before returning a payable URL. Retrying an
+        uncertain create reuses its exact request/key only within 24 hours. After
+        that, identity must be discovered without another create. An unresolved
+        lookup stays blocked. Terminal/processing pledges return no payable URL.
+        A Wallet-bound pledge requires its owning donor session; LEGACY returns 409.
+      security: [{}, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PledgeState' }
+        '403': { description: Wallet-bound pledge requires its owning donor session }
+        '404': { description: Pledge not found }
+        '409': { $ref: '#/components/responses/PledgeReconciliationConflict' }
+        '503': { description: Stripe is unavailable for a physical pledge }
+
   # ─── Webhook ───
   /webhooks/stripe:
     post:
@@ -1023,7 +1082,16 @@ paths:
       summary: Stripe webhook receiver
       description: |
         Receives raw JSON body (mounted before `express.json()`).
-        Only processes `checkout.session.completed` events.
+        Handles checkout.session.completed, checkout.session.expired,
+        checkout.session.async_payment_succeeded and checkout.session.async_payment_failed.
+        Only complete/paid Sessions enter intake. Exact bound Session identity is
+        required for pooled funding and any already-bound pledge. Old unbound legacy
+        late payments bind only a cash-only receipt, without original incentives.
+        Copied/recovered token metadata cannot consume pooled funding. Complete/unpaid
+        retains funding. Expiry and verified async failure use common reconciliation.
+        Existing legacy failure returns a legacy_async_failure receipt for #188's
+        chargeback handler; no reversal accounting is invented here. Auction
+        completed/expired handling remains separate.
       requestBody:
         content:
           application/json:
@@ -2013,7 +2081,22 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: Pledges with nested items and fulfilled_by donor (capped at 100)
+          description: Pledges with nested items, funding/Stripe reconciliation fields, admin_review_required and fulfilled_by donor (capped at 100). PAYMENT_REVIEW flags received cash credited without original incentive fulfillment.
+
+  /admin/pledges/{id}/check-stripe:
+    post:
+      tags: [Admin]
+      summary: Check Stripe for a Pending pledge
+      description: Runs the same reconciliation as the public return. No manual release or automatic sweep.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/PledgeState' }
+        '401': { description: Authentication required }
+        '403': { description: Admin role required }
+        '404': { description: Pledge not found }
+        '409': { description: Stripe state unknown; funding and immutable review retained }
 
   /admin/blocked-words:
     get:
@@ -3530,6 +3613,21 @@ paths:
 
 components:
   responses:
+    PledgeState:
+      description: Immutable review and derived payment state. No donor email, auth token or shipping address.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PledgeRead' }
+    PledgeReconciliationConflict:
+      description: Reconciliation unconfirmed, or a read-only legacy pledge. Keep the review; do not start another checkout.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, pledge]
+            properties:
+              error: { type: string }
+              pledge: { $ref: '#/components/schemas/PledgeRead' }
     AllocationHistoryConflict:
       description: The incentive has allocation history, including reversed rows. Nothing is removed.
       content:
@@ -3628,12 +3726,49 @@ components:
         wallet_applied_cents: { type: integer, minimum: 0 }
         new_money_cents: { type: integer, minimum: 0 }
         requires_shipping: { type: boolean }
+    PledgeRead:
+      oneOf:
+        - { $ref: '#/components/schemas/PooledPledge' }
+        - { $ref: '#/components/schemas/LegacyPledge' }
+      discriminator: { propertyName: format }
     PledgeReadBase:
       type: object
-      required: [format, pledge_token, status, expires_at, items]
+      required:
+        [
+          format,
+          pledge_token,
+          status,
+          expires_at,
+          items,
+          payment_state,
+          can_edit,
+          can_continue,
+          read_only,
+          admin_review_required,
+          donate_url,
+          has_checkout,
+        ]
       properties:
+        payment_state:
+          type: string
+          enum:
+            [READY, OPEN, PROCESSING, UNKNOWN, NON_PAYMENT, FULFILLED, LEGACY_PAID, PAYMENT_REVIEW]
+          description: |
+            READY has no known Stripe attempt; OPEN can pay the same Session.
+            PROCESSING/UNKNOWN retain funding and forbid edits/new checkout.
+            NON_PAYMENT is confirmed, not a local deadline. Only pooled NON_PAYMENT
+            can edit. LEGACY_PAID records old-shape cash without D or incentives.
+            PAYMENT_REVIEW records actual cash as NULL-D Wallet credit when released
+            Wallet funding cannot be reacquired in full. It is NOT pledge fulfillment.
+        can_edit: { type: boolean }
+        can_continue: { type: boolean }
+        read_only: { type: boolean }
+        admin_review_required: { type: boolean }
+        donate_url: { type: string, nullable: true }
+        has_checkout: { type: boolean }
         pledge_token: { type: string }
-        status: { type: string, enum: [OPEN, FULFILLED, EXPIRED, CANCELLED] }
+        status:
+          { type: string, enum: [OPEN, FULFILLED, EXPIRED, CANCELLED, LEGACY_PAID, PAYMENT_REVIEW] }
         expires_at: { type: string, format: date-time }
         items:
           type: array

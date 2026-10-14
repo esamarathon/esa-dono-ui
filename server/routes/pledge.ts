@@ -5,11 +5,22 @@ import {
   pledgeResponse,
   type WalletDonor,
 } from '../services/pledge.js';
+import { cancelPledge, getPledge, reconcilePledge } from '../services/checkout.js';
 import { resolveDonorToken } from '../middleware/donorAuth.js';
+import { httpError } from '../lib/httpError.js';
 import prisma from '../lib/prisma.js';
 import type { PledgePlan } from '@dono/shared';
 
 const router = Router();
+
+async function walletDonor(req: Request): Promise<WalletDonor | null> {
+  const token = resolveDonorToken(req);
+  if (!token) return null;
+  const donor = await prisma.donor.findUnique({ where: { magic_token: token } });
+  return donor && donor.token_expires_at && new Date() <= donor.token_expires_at && !donor.is_frozen
+    ? donor
+    : null;
+}
 
 /** New drafts confirm a live plan; retrying a draft preserves its original funding. */
 router.post('/', async (req: Request, res: Response) => {
@@ -26,18 +37,7 @@ router.post('/', async (req: Request, res: Response) => {
       channel_id,
     } = req.body;
     // Authentication precedes planning. Email alone never authorizes Wallet credit.
-    let walletDonor: WalletDonor | null = null;
-    const token = resolveDonorToken(req);
-    if (token) {
-      const donor = await prisma.donor.findUnique({ where: { magic_token: token } });
-      if (
-        donor &&
-        donor.token_expires_at &&
-        new Date() <= donor.token_expires_at &&
-        !donor.is_frozen
-      )
-        walletDonor = donor;
-    }
+    const donor = await walletDonor(req);
     const pledge = await createPledge({
       email,
       comment,
@@ -48,23 +48,23 @@ router.post('/', async (req: Request, res: Response) => {
       plan,
       top_up_cents,
       channel_id,
-      walletDonorId: walletDonor?.id,
+      walletDonorId: donor?.id,
     });
-    let checkout: { donate_url: string | null; checkout_session_id: string | null } = {
-      donate_url: null,
-      checkout_session_id: null,
-    };
+    let checkoutError: string | null = null;
+    let donateUrl: string | null = null;
     try {
-      checkout = await createCheckoutForPledge(pledge.pledge_token, walletDonor, email);
-    } catch (checkoutErr) {
-      // The confirmed Pending pledge/hold survives an unavailable external adapter.
-      // Slice 3 owns Stripe reconciliation and recovery, not this plan comparison.
-      console.error('Checkout session creation failed (non-fatal):', checkoutErr);
+      const stored = await getPledge(pledge.pledge_token);
+      if (stored.checkout_session_id) await reconcilePledge(pledge.pledge_token);
+      const checkout = await createCheckoutForPledge(pledge.pledge_token, donor);
+      donateUrl = checkout.donate_url;
+    } catch (error) {
+      // The confirmed immutable pledge/hold survives an uncertain external call.
+      checkoutError = (error as Error).message;
     }
     res.json({
-      ...pledge,
-      donate_url: checkout.donate_url,
-      has_checkout: !!checkout.checkout_session_id,
+      ...pledgeResponse(await getPledge(pledge.pledge_token)),
+      ...(donateUrl ? { donate_url: donateUrl } : {}),
+      checkout_error: checkoutError,
     });
   } catch (err) {
     const error = err as Error & { status?: number; plan?: PledgePlan; items?: unknown };
@@ -77,17 +77,58 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+/** Token possession permits reconciliation, never authentication or Wallet changes on a new plan. */
+router.post('/:token/reconcile', async (req, res) => {
+  try {
+    res.json(await reconcilePledge(req.params.token));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+router.post('/:token/cancel', async (req, res) => {
+  try {
+    res.json(await cancelPledge(req.params.token, await walletDonor(req)));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+router.post('/:token/continue', async (req, res) => {
+  try {
+    const donor = await walletDonor(req);
+    const pledge = await getPledge(req.params.token);
+    if (pledge.format !== 'POOLED') throw httpError(409, 'Legacy pledges are read-only');
+    if (pledge.wallet_donor_id && pledge.wallet_donor_id !== donor?.id)
+      throw httpError(403, 'This pledge belongs to another donor session');
+    if (pledge.checkout_session_id || pledge.checkout_requested_at)
+      await reconcilePledge(req.params.token);
+    const latest = await getPledge(req.params.token);
+    if (
+      latest.status === 'OPEN' &&
+      !latest.non_payment_confirmed_at &&
+      latest.checkout_session_status !== 'complete'
+    )
+      await createCheckoutForPledge(req.params.token, donor);
+    res.json(pledgeResponse(await getPledge(req.params.token)));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+
+async function actionError(req: Request, res: Response, error: unknown) {
+  const status = (error as { status?: number }).status || 409;
+  // The UI can keep the confirmed review on uncertain payment, without leaking PII.
+  const pledge = status === 409 ? pledgeResponse(await getPledge(req.params.token!)) : undefined;
+  res.status(status).json({ error: (error as Error).message, ...(pledge ? { pledge } : {}) });
+}
+
 /** Historical pledges are readable only, with an explicit LEGACY discriminant. */
 router.get('/:token', async (req: Request, res: Response) => {
   try {
-    const pledge = await prisma.pendingPledge.findUnique({
-      where: { pledge_token: req.params.token },
-      include: { items: true },
-    });
-    if (!pledge) return res.status(404).json({ error: 'Pledge not found' });
-    res.json(pledgeResponse(pledge));
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.json(pledgeResponse(await getPledge(req.params.token!)));
+  } catch (error) {
+    res
+      .status((error as { status?: number }).status || 500)
+      .json({ error: (error as Error).message });
   }
 });
 

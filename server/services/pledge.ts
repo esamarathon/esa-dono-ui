@@ -11,7 +11,8 @@ import {
 import prisma from '../lib/prisma.js';
 import { withSpan } from '../lib/tracing.js';
 import { httpError } from '../lib/httpError.js';
-import { isStripeConfigured } from './stripe.js';
+import { isStripeConfigured, createCheckoutSession, pledgeCheckoutRequest } from './stripe.js';
+import type Stripe from 'stripe';
 import { intakeDonation } from './donation.js';
 import { PLEDGE_TTL_MS } from '../config.js';
 
@@ -43,9 +44,42 @@ export interface CreatePledgeInput {
 
 type StoredPledge = Prisma.PendingPledgeGetPayload<{ include: { items: true } }>;
 
+function pledgePaymentState(pledge: StoredPledge) {
+  if (
+    pledge.status === 'FULFILLED' ||
+    pledge.status === 'LEGACY_PAID' ||
+    pledge.status === 'PAYMENT_REVIEW'
+  )
+    return pledge.status;
+  if (pledge.non_payment_confirmed_at && pledge.wallet_hold_status !== 'HELD') return 'NON_PAYMENT';
+  if (pledge.checkout_session_status === 'complete') return 'PROCESSING';
+  if (pledge.checkout_session_status === 'open') return 'OPEN';
+  if (
+    pledge.checkout_requested_at ||
+    pledge.checkout_session_id ||
+    pledge.checkout_session_status === 'unknown' ||
+    (pledge.wallet_hold_status === 'HELD' && pledge.status !== 'OPEN')
+  )
+    return 'UNKNOWN';
+  return 'READY';
+}
+
 /** Public read shape: old amounts exist ONLY on the LEGACY variant. No session secrets. */
 export function pledgeResponse(pledge: StoredPledge) {
+  const paymentState = pledgePaymentState(pledge);
+  const canContinue =
+    pledge.format === 'POOLED' &&
+    pledge.status === 'OPEN' &&
+    paymentState === 'OPEN' &&
+    pledge.expires_at > new Date();
   const common = {
+    payment_state: paymentState,
+    can_edit: pledge.format === 'POOLED' && paymentState === 'NON_PAYMENT',
+    can_continue: canContinue,
+    read_only: !(pledge.format === 'POOLED' && paymentState === 'NON_PAYMENT'),
+    admin_review_required: paymentState === 'PAYMENT_REVIEW',
+    donate_url: canContinue ? pledge.checkout_url : null,
+    has_checkout: !!pledge.checkout_session_id,
     pledge_token: pledge.pledge_token,
     status: pledge.status,
     expires_at: pledge.expires_at,
@@ -98,7 +132,7 @@ async function cleanText(tx: Prisma.TransactionClient, value: unknown, label: st
 /**
  * Validate live review inputs and atomically store the immutable plan + initial
  * Wallet hold. Existing drafts resolve first: their own held funding is never
- * compared with a fresh balance. Checkout reconciliation belongs to slice 3.
+ * compared with a fresh balance. Unknown payment attempts remain immutable.
  */
 export async function createPledge(input: CreatePledgeInput) {
   return withSpan('pledge.create', async () => {
@@ -117,7 +151,14 @@ export async function createPledge(input: CreatePledgeInput) {
       // attempts serialize instead of both trying to upgrade a read lock.
       await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE draft_id = ${input.draft_id}`;
       const existing = await tx.pendingPledge.findFirst({
-        where: { draft_id: input.draft_id, status: { in: ['OPEN', 'FULFILLED'] } },
+        where: {
+          draft_id: input.draft_id,
+          OR: [
+            { status: { in: ['OPEN', 'FULFILLED', 'PAYMENT_REVIEW', 'LEGACY_PAID'] } },
+            { non_payment_confirmed_at: null },
+            { wallet_hold_status: 'HELD' },
+          ],
+        },
         orderBy: { created_at: 'desc' },
         include: { items: true },
       });
@@ -280,7 +321,7 @@ export async function createPledge(input: CreatePledgeInput) {
           display_name: displayName,
           requires_shipping: plan.requires_shipping,
           channel_id: channel.id,
-          expires_at: new Date(Date.now() + PLEDGE_TTL_MS),
+          expires_at: new Date(Math.floor((Date.now() + PLEDGE_TTL_MS) / 1000) * 1000),
           items: {
             create: [
               ...rows,
@@ -306,22 +347,79 @@ export interface WalletDonor {
   magic_token: string | null;
 }
 
+// Coalesce local double clicks. Cross-process retries use the persisted request
+// and Stripe's same-token key; neither the lock nor a DB transaction spans Stripe.
+const checkoutCreates = new Map<
+  string,
+  Promise<{ donate_url: string | null; checkout_session_id: string | null }>
+>();
+
 /** Use confirmed funding only. No fresh Wallet discount at checkout. */
 export async function createCheckoutForPledge(
   pledgeToken: string,
   donor?: WalletDonor | null,
-  email?: string | null,
+  _email?: string | null,
 ) {
-  const pledge = await prisma.pendingPledge.findUnique({
-    where: { pledge_token: pledgeToken },
-    include: { items: true },
-  });
-  if (!pledge) throw httpError(404, 'Pledge not found');
-  if (pledge.format !== 'POOLED') throw httpError(409, 'Legacy pledges are read-only');
-  if (pledge.wallet_donor_id && pledge.wallet_donor_id !== donor?.id)
+  const current = await prisma.pendingPledge.findUnique({ where: { pledge_token: pledgeToken } });
+  if (!current) throw httpError(404, 'Pledge not found');
+  if (current.wallet_donor_id && current.wallet_donor_id !== donor?.id)
     throw httpError(403, 'This pledge belongs to another donor session');
-  if (pledge.checkout_session_id || pledge.status !== 'OPEN') {
-    return { donate_url: pledge.checkout_url, checkout_session_id: pledge.checkout_session_id };
+  const running = checkoutCreates.get(pledgeToken);
+  if (running) return running;
+  const operation = checkoutForPledge(pledgeToken, donor);
+  checkoutCreates.set(pledgeToken, operation);
+  try {
+    return await operation;
+  } finally {
+    if (checkoutCreates.get(pledgeToken) === operation) checkoutCreates.delete(pledgeToken);
+  }
+}
+
+async function checkoutForPledge(pledgeToken: string, donor?: WalletDonor | null) {
+  const pledge = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE pledge_token = ${pledgeToken}`;
+    const stored = await tx.pendingPledge.findUniqueOrThrow({
+      where: { pledge_token: pledgeToken },
+      include: { items: true },
+    });
+    if (stored.format !== 'POOLED') throw httpError(409, 'Legacy pledges are read-only');
+    if (
+      stored.checkout_session_id ||
+      (stored.status !== 'OPEN' && !stored.checkout_requested_at) ||
+      stored.new_money_cents === 0 ||
+      !isStripeConfigured()
+    )
+      return stored;
+    if (stored.checkout_requested_at) {
+      if (Date.now() - stored.checkout_requested_at.getTime() >= 24 * 60 * 60 * 1000)
+        throw httpError(409, 'Checkout creation is unresolved. Check Stripe before continuing.');
+      return stored;
+    }
+    // Stripe requires at least 30 minutes to create a Session. Never extend the
+    // immutable two-hour deadline to make a delayed first checkout possible.
+    if (stored.expires_at.getTime() < Date.now() + 30 * 60 * 1000)
+      throw httpError(409, 'Checkout deadline is too close. Cancel this pledge before editing.');
+    const request = pledgeCheckoutRequest({
+      pledgeToken,
+      amountCents: stored.new_money_cents!,
+      email: stored.donor_email,
+      requiresShipping: stored.requires_shipping,
+      expiresAt: stored.expires_at,
+    });
+    return tx.pendingPledge.update({
+      where: { id: stored.id },
+      data: {
+        checkout_requested_at: new Date(),
+        checkout_request: JSON.stringify(request),
+      },
+      include: { items: true },
+    });
+  });
+  if (pledge.checkout_session_id || (pledge.status !== 'OPEN' && !pledge.checkout_requested_at)) {
+    return {
+      donate_url: pledgeResponse(pledge).donate_url,
+      checkout_session_id: pledge.checkout_session_id,
+    };
   }
   if (pledge.new_money_cents === 0) {
     if (!donor) throw httpError(403, 'Wallet funding requires a donor session');
@@ -337,16 +435,42 @@ export async function createCheckoutForPledge(
       );
     return { donate_url: null, checkout_session_id: null };
   }
-  const { createCheckoutSession } = await import('./stripe.js');
-  const session = await createCheckoutSession({
-    pledgeToken,
-    amountCents: pledge.new_money_cents!,
-    email: (pledge.donor_email || email || '').trim().toLowerCase(),
-    requiresShipping: pledge.requires_shipping,
+  const session = await createCheckoutSession(
+    {
+      pledgeToken,
+      amountCents: pledge.new_money_cents!,
+      email: pledge.donor_email,
+      requiresShipping: pledge.requires_shipping,
+      expiresAt: pledge.expires_at,
+    },
+    JSON.parse(pledge.checkout_request!) as Stripe.Checkout.SessionCreateParams,
+  );
+  await prisma.pendingPledge.updateMany({
+    where: { id: pledge.id, checkout_session_id: null },
+    data: {
+      checkout_session_id: session.id,
+      checkout_url: session.url ?? null,
+      checkout_session_status: session.status ?? 'unknown',
+      payment_status: session.payment_status ?? null,
+    },
   });
-  await prisma.pendingPledge.update({
+  // A cached create response can already be paid/processing/expired. Bind its
+  // identity first, then use the same reconciliation as a webhook, outside tx.
+  if (session.status === 'complete' || session.status === 'expired') {
+    const { reconcileCheckoutNotification } = await import('./checkout.js');
+    await reconcileCheckoutNotification(
+      session.status === 'expired' ? 'checkout.session.expired' : 'checkout.session.completed',
+      session,
+    );
+  }
+  const latest = await prisma.pendingPledge.findUniqueOrThrow({
     where: { id: pledge.id },
-    data: { checkout_session_id: session.id, checkout_url: session.url },
+    include: { items: true },
   });
-  return { donate_url: session.url, checkout_session_id: session.id };
+  if (latest.checkout_session_id !== session.id)
+    throw httpError(409, 'Checkout Session identity changed');
+  return {
+    donate_url: pledgeResponse(latest).donate_url,
+    checkout_session_id: latest.checkout_session_id,
+  };
 }
