@@ -32,6 +32,66 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe('pledge HTTP contract on SQLite', () => {
+  it('previews the same live default-goal chain without reserving or changing anything', async () => {
+    const event = await prisma.event.create({
+      data: { name: 'Preview', slug: `preview-${crypto.randomUUID()}` },
+    });
+    const own = await createTestChannel(prisma, { event_id: event.id });
+    const primary = await createTestChannel(prisma, { event_id: event.id });
+    const goalIds: string[] = [];
+    try {
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: primary.id },
+      });
+      const listed = await prisma.fundGoal.create({
+        data: { title: 'Own list', channel_id: own.id, target_cents: 10000 },
+      });
+      const shared = await prisma.fundGoal.create({
+        data: { title: 'Primary list', target_cents: 5000 },
+      });
+      const closest = await prisma.fundGoal.create({
+        data: { title: 'Closest own', channel_id: own.id, target_cents: 200 },
+      });
+      const foreign = await prisma.fundGoal.create({
+        data: { title: 'Foreign', channel_id: primary.id, target_cents: 100 },
+      });
+      goalIds.push(listed.id, shared.id, closest.id, foreign.id);
+      await prisma.channelDefaultGoal.createMany({
+        data: [
+          { channel_id: own.id, goal_id: listed.id, position: 0 },
+          { channel_id: primary.id, goal_id: foreign.id, position: 0 },
+          { channel_id: primary.id, goal_id: shared.id, position: 1 },
+        ],
+      });
+      const preview = () => request(app()).get(`/api/pledge/default-goal/${own.id}`);
+      expect((await preview()).body).toEqual({ goal: { id: listed.id, title: 'Own list' } });
+      await prisma.fundGoal.update({ where: { id: listed.id }, data: { is_complete: true } });
+      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: primary.id } });
+      expect((await preview()).body).toEqual({ goal: { id: closest.id, title: 'Closest own' } });
+      await prisma.fundGoal.update({ where: { id: closest.id }, data: { is_active: false } });
+      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      await prisma.fundGoal.update({ where: { id: shared.id }, data: { is_active: false } });
+      const response = await preview();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ goal: null });
+      expect(await prisma.fundGoal.findUnique({ where: { id: closest.id } })).toMatchObject({
+        current_cents: 0,
+      });
+      await prisma.channel.update({ where: { id: own.id }, data: { is_active: false } });
+      expect((await preview()).status).toBe(404);
+      expect((await request(app()).get('/api/pledge/default-goal/missing')).status).toBe(404);
+    } finally {
+      await prisma.channelDefaultGoal.deleteMany({
+        where: { channel_id: { in: [own.id, primary.id] } },
+      });
+      await prisma.fundGoal.deleteMany({ where: { id: { in: goalIds } } });
+      await prisma.event.update({ where: { id: event.id }, data: { primary_channel_id: null } });
+      await prisma.channel.deleteMany({ where: { event_id: event.id } });
+      await prisma.event.delete({ where: { id: event.id } });
+    }
+  });
   it('exposes read-only reconciliation, authenticated cancellation and admin-only Check Stripe without PII', async () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
@@ -156,6 +216,11 @@ describe('pledge HTTP contract on SQLite', () => {
     expect(retry.body).toEqual(res.body);
     const read = await request(app()).get(`/api/pledge/${res.body.pledge_token}`);
     expect(read.body.plan).toEqual(changed.body.plan);
+    expect(read.body).toMatchObject({
+      comment: 'Hello',
+      display_name: 'Reader',
+      channel_id: channel.id,
+    });
     expect(JSON.stringify(read.body)).not.toContain(donor.magic_token!);
     expect(JSON.stringify(read.body)).not.toContain(donor.email);
   });

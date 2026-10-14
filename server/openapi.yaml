@@ -883,6 +883,36 @@ paths:
           description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
   # ─── Pledge ───
+  /pledge/default-goal/{channelId}:
+    get:
+      tags: [Pledge]
+      summary: Read-only preview of the Channel's current default goal
+      description: Uses the fulfillment resolver (own list, primary list, closest own/shared). No reservation; eligibility is checked again at payment completion. No donor data.
+      parameters:
+        - in: path
+          name: channelId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current eligible goal, or null when no goal can take money
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [goal]
+                properties:
+                  goal:
+                    type: object
+                    nullable: true
+                    required: [id, title]
+                    properties:
+                      id: { type: string }
+                      title: { type: string }
+        '404':
+          description: Unknown or inactive Channel
+        '429':
+          description: Global API rate limit
   /pledge:
     post:
       tags: [Pledge]
@@ -3747,8 +3777,15 @@ components:
           admin_review_required,
           donate_url,
           has_checkout,
+          comment,
+          display_name,
+          channel_id,
         ]
       properties:
+        comment: { type: string, nullable: true, description: Immutable confirmed public message }
+        display_name:
+          { type: string, nullable: true, description: Immutable public name; null means Anonymous }
+        channel_id: { type: string, nullable: true }
         payment_state:
           type: string
           enum:
