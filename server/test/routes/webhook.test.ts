@@ -82,6 +82,7 @@ beforeEach(() => {
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test');
 });
 afterEach(async () => {
+  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_legacy_webhook');
   await prisma.auction.updateMany({
     where: { id: { in: auctions } },
     data: { current_offer_id: null },
@@ -91,7 +92,12 @@ afterEach(async () => {
   await prisma.bid.deleteMany({ where: { auction_id: { in: auctions } } });
   await prisma.auction.deleteMany({ where: { id: { in: auctions } } });
   await prisma.pendingPledge.deleteMany({ where: { pledge_token: { in: tokens } } });
+  await prisma.balanceAdjustment.updateMany({
+    where: { donor_id: { in: donors } },
+    data: { donation_id: null },
+  });
   await prisma.donation.deleteMany({ where: { donor_id: { in: donors } } });
+  await prisma.balanceAdjustment.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.donor.deleteMany({ where: { id: { in: donors } } });
   await prisma.channel.deleteMany({ where: { id: { in: channels } } });
   donors.length = channels.length = tokens.length = auctions.length = 0;
@@ -100,6 +106,75 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 describe('Stripe webhook with real SQLite intake/reconciliation', () => {
+  it('consumes duplicate legacy async failures as one common legacy chargeback before acknowledging', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const donor = await prisma.donor.create({
+      data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: 700 },
+    });
+    donors.push(donor.id);
+    const donation = await prisma.donation.create({
+      data: {
+        donor_id: donor.id,
+        external_id: `cs_${crypto.randomUUID()}`,
+        amount_cents: 1000,
+        channel_id: channel.id,
+        event_id: channel.event_id,
+      },
+    });
+    const results = await Promise.all([
+      notify('checkout.session.async_payment_failed', { id: donation.external_id }),
+      notify('checkout.session.async_payment_failed', { id: donation.external_id }),
+    ]);
+    expect(results.map((row) => row.status)).toEqual([200, 200]);
+    expect(results.map((row) => row.body)).toEqual([{ received: true }, { received: true }]);
+    expect(await prisma.donation.findUnique({ where: { id: donation.id } })).toMatchObject({
+      status: 'CHARGEBACK',
+      pledge_amount_cents: null,
+    });
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 0,
+    });
+    expect(
+      await prisma.balanceAdjustment.findMany({ where: { donor_id: donor.id } }),
+    ).toMatchObject([{ type: 'CHARGEBACK', amount_cents: -700 }]);
+  });
+  it('does not acknowledge a failed legacy reversal transaction and safely retries it', async () => {
+    const donor = await prisma.donor.create({
+      data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: 1000 },
+    });
+    donors.push(donor.id);
+    const donation = await prisma.donation.create({
+      data: { donor_id: donor.id, external_id: `cs_${crypto.randomUUID()}`, amount_cents: 1000 },
+    });
+    await prisma.$executeRawUnsafe(
+      `CREATE TRIGGER fail_legacy_webhook BEFORE INSERT ON BalanceAdjustment WHEN NEW.donor_id = '${donor.id}' BEGIN SELECT RAISE(ABORT, 'late legacy ledger failure'); END`,
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        (await notify('checkout.session.async_payment_failed', { id: donation.external_id }))
+          .status,
+      ).toBe(500);
+    } finally {
+      log.mockRestore();
+    }
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 1000,
+    });
+    expect(await prisma.donation.findUnique({ where: { id: donation.id } })).toMatchObject({
+      status: 'COMPLETED',
+      refund_id: null,
+    });
+    await prisma.$executeRawUnsafe('DROP TRIGGER fail_legacy_webhook');
+    expect(
+      (await notify('checkout.session.async_payment_failed', { id: donation.external_id })).status,
+    ).toBe(200);
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 0,
+    });
+    expect(await prisma.balanceAdjustment.count({ where: { donor_id: donor.id } })).toBe(1);
+  });
   it('verifies the raw signed body and fulfills duplicate paid notifications once', async () => {
     const { session, donor } = await pending();
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test');

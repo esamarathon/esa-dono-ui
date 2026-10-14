@@ -15,8 +15,16 @@ import { fileURLToPath } from 'url';
  * not weaken this test to make a change pass.
  */
 describe('moderator routes never select/include donor.email', () => {
-  it('has no donor.select.email pattern anywhere in moderator.ts code (comments excluded)', () => {
-    const path = fileURLToPath(new URL('../../routes/moderator.ts', import.meta.url));
+  it.each([
+    '../../routes/moderator.ts',
+    '../../routes/identityRoutes.ts',
+    '../../services/reversal.ts',
+    '../../services/poolAccounting.ts',
+    '../../services/incentiveLifecycle.ts',
+    '../../services/channels.ts',
+    '../../services/events.ts',
+  ])('has no donor.select.email pattern in %s code (comments excluded)', (file) => {
+    const path = fileURLToPath(new URL(file, import.meta.url));
     const source = readFileSync(path, 'utf-8');
 
     // Strip `//` line comments so this test can document the forbidden

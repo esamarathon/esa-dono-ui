@@ -67,7 +67,10 @@ export async function buildTiltifyDonation(
       channel: { select: { id: true, slug: true, event_id: true } },
       // What the donation actually paid for: a pledge item that failed at
       // fulfilment has no row. Reversed rows are left out.
-      reward_claims: { where: { reversed_at: null }, orderBy: { created_at: 'asc' } },
+      reward_claims: {
+        where: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+        orderBy: { created_at: 'asc' },
+      },
       // A write-in (POLL_CUSTOM) vote counts once its option is approved (ACTIVE).
       poll_votes: {
         where: { reversed_at: null, poll_option: { status: 'ACTIVE' } },

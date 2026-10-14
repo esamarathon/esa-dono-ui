@@ -178,6 +178,75 @@ describe('Admin CRUD routes', () => {
   });
 
   describe('donation status (#63)', () => {
+    it('previews without mutation and acknowledges a shipped chargeback flag through admin-only adapters', async () => {
+      const donor = await prisma.donor.create({
+        data: { email: `preview-${crypto.randomUUID()}@example.com` },
+      });
+      donorIds.push(donor.id);
+      const donation = await prisma.donation.create({
+        data: {
+          donor_id: donor.id,
+          external_id: crypto.randomUUID(),
+          amount_cents: 800,
+          pledge_amount_cents: 1000,
+          wallet_applied_cents: 200,
+        },
+      });
+      const reward = await prisma.reward.create({
+        data: { title: 'Shipped', type: 'PHYSICAL', cost_cents: 9000, quantity_claimed: 1 },
+      });
+      rewardIds.push(reward.id);
+      const claim = await prisma.rewardClaim.create({
+        data: {
+          donor_id: donor.id,
+          donation_id: donation.id,
+          reward_id: reward.id,
+          amount_cents: 400,
+          status: 'FULFILLED',
+        },
+      });
+      const path = `/api/admin/donations/${donation.id}/reversal-preview`;
+      expect((await request(createApp()).get(path).query({ status: 'REFUNDED' })).status).toBe(401);
+      const preview = await request(createApp()).get(path).query({ status: 'REFUNDED' }).set(AUTH);
+      expect(preview.status).toBe(200);
+      expect(preview.body).toMatchObject({
+        accounting: 'POOLED',
+        wallet_adjustment_cents: 600,
+        money_before_cents: 800,
+        money_after_cents: 800,
+        retained_claim_ids: [claim.id],
+      });
+      expect(JSON.stringify(preview.body)).not.toContain(donor.email);
+      expect(await prisma.donation.findUnique({ where: { id: donation.id } })).toMatchObject({
+        status: 'COMPLETED',
+      });
+      expect(await prisma.balanceAdjustment.count({ where: { donor_id: donor.id } })).toBe(0);
+      await request(createApp())
+        .patch(`/api/admin/donations/${donation.id}/status`)
+        .set(AUTH)
+        .send({ status: 'CHARGEBACK' })
+        .expect(200);
+      const acknowledgement = await request(createApp())
+        .post(`/api/admin/claims/${claim.id}/acknowledge-chargeback`)
+        .set(AUTH)
+        .send({ note: '  Already shipped  ' });
+      expect(acknowledgement.status).toBe(200);
+      expect(acknowledgement.body).toMatchObject({
+        status: 'FULFILLED',
+        chargeback_flagged_at: null,
+        chargeback_acknowledged_by: 'admin',
+        chargeback_acknowledgement_note: 'Already shipped',
+        chargeback_acknowledged_at: expect.any(String),
+      });
+      await request(createApp())
+        .patch(`/api/admin/claims/${claim.id}`)
+        .set(AUTH)
+        .send({ status: 'PENDING' })
+        .expect(409);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 1,
+      });
+    });
     it('defaults new donations to COMPLETED', async () => {
       const donor = await prisma.donor.create({
         data: { email: `status-default-${crypto.randomUUID()}@example.com` },
@@ -225,7 +294,7 @@ describe('Admin CRUD routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('PATCH /donations/:id/status refunds and claws back unspent balance, linking the adjustment', async () => {
+    it('PATCH /donations/:id/status leaves unspent legacy Wallet credit alone and links WALLET_REFUND', async () => {
       const donor = await prisma.donor.create({
         data: {
           email: `status-refund-${crypto.randomUUID()}@example.com`,
@@ -251,15 +320,15 @@ describe('Admin CRUD routes', () => {
       expect(res.body.refund_id).toBeTruthy();
 
       const donorAfter = await prisma.donor.findUnique({ where: { id: donor.id } });
-      expect(donorAfter!.balance_remaining).toBe(0);
+      expect(donorAfter!.balance_remaining).toBe(1000);
 
       const adjustment = await prisma.balanceAdjustment.findUnique({
         where: { id: res.body.refund_id },
       });
       expect(adjustment).toMatchObject({
-        type: 'REFUND',
-        amount_cents: -1000,
-        balance_after_cents: 0,
+        type: 'WALLET_REFUND',
+        amount_cents: 0,
+        balance_after_cents: 1000,
         reference_id: donation.id,
       });
     });

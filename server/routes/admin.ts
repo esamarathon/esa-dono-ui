@@ -29,6 +29,9 @@ import {
   reverseSpendTx,
   setDonationStatusTx,
   sweepWalletCreditsTx,
+  previewDonationReversalTx,
+  setClaimStatusTx,
+  acknowledgeChargebackClaimTx,
 } from '../services/reversal.js';
 import {
   closeAuctionTx,
@@ -143,13 +146,22 @@ router.patch('/donations/:id/channel', async (req, res) => {
 
 /**
  * PATCH /admin/donations/:id/status (#63)
- * Sets a donation's lifecycle status. Moving into REFUNDED/CHARGEBACK claws
- * back whatever of the donation's amount is still sitting in the donor's
- * unspent balance_remaining (capped there — already-spent credit is not
- * cascaded through claims/votes/goals; use reverse-spend for that), records
- * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
- * has a refund_id it is terminal: no further status changes are allowed.
+ * The common module applies the pooled/NULL-D legacy Wallet refund or chargeback
+ * rule, reverses allocations and publishes atomically. Both statuses are terminal.
  */
+
+router.get('/donations/:id/reversal-preview', async (req, res) => {
+  const { status } = req.query;
+  if (status !== 'REFUNDED' && status !== 'CHARGEBACK')
+    return res.status(400).json({ error: 'Invalid status' });
+  try {
+    res.json(
+      await prisma.$transaction((tx) => previewDonationReversalTx(tx, req.params.id, status)),
+    );
+  } catch (e) {
+    sendError(res, e, '[admin/donations/reversal-preview]');
+  }
+});
 
 router.patch('/donations/:id/status', async (req, res) => {
   const { status, reason } = req.body;
@@ -161,7 +173,11 @@ router.patch('/donations/:id/status', async (req, res) => {
     const updated = await withWebhooks((tx, _emit, publisher) =>
       setDonationStatusTx(tx, req.params.id, status, reason, 'admin', publisher),
     );
-    res.json(updated);
+    const donor = await prisma.donor.findUnique({
+      where: { id: updated.donor_id },
+      select: { email: true },
+    });
+    res.json({ ...updated, donor });
   } catch (e) {
     sendError(res, e, '[admin/donations/status]');
   }
@@ -191,12 +207,35 @@ router.patch('/claims/:id', async (req, res) => {
   if (!['PENDING', 'FULFILLED'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  const claim = await prisma.rewardClaim.update({
-    where: { id: req.params.id },
-    data: { status },
-    include: { reward: true, donor: { select: { email: true } } },
-  });
-  res.json(claim);
+  try {
+    const claim = await withWebhooks((tx, _emit, publisher) =>
+      setClaimStatusTx(tx, req.params.id, status, publisher),
+    );
+    const donor = await prisma.donor.findUnique({
+      where: { id: claim.donor_id },
+      select: { email: true },
+    });
+    res.json({ ...claim, donor });
+  } catch (e) {
+    sendError(res, e, '[admin/claims/status]');
+  }
+});
+
+router.post('/claims/:id/acknowledge-chargeback', async (req, res) => {
+  try {
+    res.json(
+      await withWebhooks((tx) =>
+        acknowledgeChargebackClaimTx(
+          tx,
+          req.params.id,
+          req.donor?.email ?? 'admin',
+          req.body?.note,
+        ),
+      ),
+    );
+  } catch (e) {
+    sendError(res, e, '[admin/claims/acknowledge-chargeback]');
+  }
 });
 
 // Rewards CRUD
@@ -461,7 +500,11 @@ router.post('/donors/:id/adjust-balance', async (req, res) => {
     const result = await prisma.$transaction((tx) =>
       adjustWalletCreditTx(tx, req.params.id, cents, type, reason, 'admin'),
     );
-    res.json(result);
+    const donor = await prisma.donor.findUnique({
+      where: { id: req.params.id },
+      select: { email: true },
+    });
+    res.json({ ...result, email: donor?.email });
   } catch (e) {
     sendError(res, e, '[admin/adjust-balance]');
   }
@@ -520,8 +563,8 @@ router.post('/donors/:id/reverse-spend', async (req, res) => {
     return res.status(400).json({ error: 'spend_type and spend_id required' });
   }
   try {
-    await prisma.$transaction((tx) =>
-      reverseSpendTx(tx, req.params.id, spend_type, spend_id, 'admin'),
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, req.params.id, spend_type, spend_id, 'admin', publisher),
     );
     res.json({ success: true });
   } catch (e) {
@@ -627,8 +670,8 @@ router.delete('/polls/options/:id', async (req, res) => {
 
 router.post('/polls/options/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) =>
-      refundPollOptionVotes(tx, req.params.id, 'admin'),
+    const result = await withWebhooks((tx, _emit, publisher) =>
+      refundPollOptionVotes(tx, req.params.id, 'admin', publisher),
     );
     res.json({ success: true, ...result });
   } catch (err) {
@@ -732,8 +775,8 @@ router.delete('/goals/:id', async (req, res) => {
 
 router.post('/goals/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) =>
-      refundGoalContributions(tx, req.params.id, 'admin'),
+    const result = await withWebhooks((tx, _emit, publisher) =>
+      refundGoalContributions(tx, req.params.id, 'admin', publisher),
     );
     res.json({ success: true, ...result });
   } catch (err) {

@@ -270,6 +270,8 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 
 **R1. Wallet refund** (status `REFUNDED`). Reverse every live row except `FULFILLED` claims, plus Pool credit and Unused pool money. Recompute Wallet credit with the max rule and add the difference (ADR-0011 §5). The money total does not change. Adjustment type `WALLET_REFUND`.
 
+**Approved goal-completion policy** ([#188 amendment](https://github.com/esamarathon/esa-dono-ui/issues/188#issuecomment-6164166021)): reverse-spend, per-goal reversal and Wallet refund recompute `is_complete` from remaining allocated cents ≥ target. A $100 goal falling from $110 to $90 reopens. The chargeback exception stays: completed goals remain complete. Removing manual goal completion is #193, not part of this accounting change.
+
 **R2. Chargeback.**
 
 - Reverse the same rows. `FULFILLED` claims are flagged.
@@ -717,10 +719,9 @@ Deferred: #161 (manual or automatic goal fallback) starts after this PRD ships.
 
 ## Open Questions
 
-None block slicing. Four are left to the slice that owns them:
+None block slicing. Three are left to the slice that owns them:
 
 - Incentive input validation: slice 10 (§S5). Neither role's routes check cents, title or that the Channel exists; `is_complete` can be set by hand on a goal (see the goal-completion question below); `channel_id` can change on an incentive that has allocation history.
-- The goal-completion rule after a reverse-spend, a per-item goal reverse and a Wallet refund: slice 0 records the current per-path behaviour, slice 5 decides. Reverse-spend keeps a goal complete unless its total drops to $0; the per-item goal refund recomputes it against the target. Already decided: a chargeback keeps completed goals complete (ADR-0011 §5), and the Payment refund shrink includes completed goals and ended polls (#167 §2).
 - The exact schema names (§P1): slice 1.
 - Whether `docs/deployment.md` or a separate runbook file holds §T8 and §O: slice 11.
 

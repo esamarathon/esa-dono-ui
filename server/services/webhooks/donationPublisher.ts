@@ -2,15 +2,23 @@ import type { Donation } from '@prisma/client';
 import { countsTowardTotals } from '../../lib/donationTotals.js';
 import {
   buildDonationCreatedPayload,
+  buildDonationStateData,
+  buildDonationUpdatedPayload,
+  type WebhookPayloadDonationCreated,
   buildDonationModeratedPayload,
   buildDonationVisibilityPayload,
   type WebhookTx,
 } from './delivery.js';
 import type { EmitWebhook } from './outbox.js';
+import { readDonationAccountingTx } from '../poolAccounting.js';
 import { buildTiltifyDonation, buildTiltifyTotals, type TiltifyMessage } from './tiltifyPayload.js';
 
 type DonationIds = string | readonly string[];
-type DonationState = { donation: Donation; tiltify: TiltifyMessage | null };
+type DonationState = {
+  donation: Donation;
+  native: WebhookPayloadDonationCreated['data'];
+  tiltify: TiltifyMessage | null;
+};
 export type DonationSnapshot = ReadonlyMap<string, DonationState | null>;
 
 /** Donation messages and totals bound to the surrounding outbox transaction. */
@@ -33,6 +41,10 @@ export function createDonationPublisher(
     if (!donation) return null;
     return {
       donation,
+      native: buildDonationStateData(
+        donation,
+        (await readDonationAccountingTx(tx, id)).allocations,
+      ),
       tiltify:
         donation.channel_id && (await hasTiltifyTargets())
           ? await buildTiltifyDonation(tx, id)
@@ -75,7 +87,12 @@ export function createDonationPublisher(
         const donation = current.donation;
         if (!donation.channel_id) continue;
         const introduced = !previous?.donation.channel_id;
-        if (introduced) await emit('donation.created', () => buildDonationCreatedPayload(donation));
+        if (introduced)
+          await emit('donation.created', () =>
+            buildDonationCreatedPayload(donation, current.native.allocations),
+          );
+        else if (JSON.stringify(previous?.native) !== JSON.stringify(current.native))
+          await emit('donation.updated', () => buildDonationUpdatedPayload(current.native));
         if (previous && previous.donation.moderated !== donation.moderated) {
           await emit('donation.moderated', () =>
             buildDonationModeratedPayload({
@@ -109,6 +126,7 @@ export function createDonationPublisher(
       for (const id of new Set(typeof donationIds === 'string' ? [donationIds] : donationIds)) {
         const current = await read(id);
         if (!current?.donation.channel_id) continue;
+        await emit('donation.updated', () => buildDonationUpdatedPayload(current.native));
         if (current.tiltify) await queueTiltify([current.tiltify]);
         affectedChannels.add(current.donation.channel_id);
       }

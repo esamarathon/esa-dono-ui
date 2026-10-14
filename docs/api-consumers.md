@@ -111,8 +111,28 @@ back to email; no-token historical matching remains legacy-only. Existing auctio
 completed/expired handling and Tiltify wire shapes are unchanged. Sibling caller updates
 remain #194, not part of this slice.
 
-Legacy async-failure handoff to #188: `reconcileCheckoutNotification` returns
-`{legacy_async_failure: {donation_id, checkout_session_id, pledge_token}}` for an existing
+Legacy async-failure handoff: `reconcileCheckoutNotification` returns
+`{legacy_async_failure: {donation_id, checkout_session_id, pledge_token}}` internally for an existing
 NULL-D donation and persists the bound pledge's `payment_status='failed'`. The webhook
-currently exposes the receipt; #188 must consume it there and apply the legacy chargeback
-rule before the single pooled release. #186 performs no reversal accounting.
+consumes it through the common legacy chargeback transaction and publisher before responding
+`{received:true}`. Duplicates and terminal historical records do not adjust credit twice.
+
+## Reversals and current-state messages (#188)
+
+`GET /admin/donations/:id/reversal-preview?status=REFUNDED|CHARGEBACK` returns the same
+server-computed Wallet/money/row/retained-claim effect used on confirmation. Status PATCH
+retains its path and response, with admin-only email added in the router. `REQUESTED`
+Payment refunds return 409; terminal and zero-money chargebacks are blocked. Claims permit
+only live PENDING/FULFILLED transitions; charged-back/REQUESTED claims return 409.
+`POST /admin/claims/:id/acknowledge-chargeback` accepts optional `{note}` and clears a
+shipped flag, recording actor/time without changing stock or credit.
+
+Pooled row reversals create category Pool credit (donor/auto) or computed Unused pool money
+(moderator), never Wallet credit. Legacy rows retain one-to-one Wallet refunds at recorded
+prices. Goal completion is recomputed against its target after ordinary reversals; chargebacks
+keep completed goals complete. Shared services and moderator responses never include donor email.
+
+Native `donation.created` adds status, pledge amount, Wallet funding and live `allocations`
+with source. New `donation.updated` carries the same full safe data and requires explicit
+Destination opt-in. Tiltify keeps money/scalars/lists/goal-amount contracts with no source;
+changed allocations replace the donation under the same id. See `docs/outbound-events.md`.

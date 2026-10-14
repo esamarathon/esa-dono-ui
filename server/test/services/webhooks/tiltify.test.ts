@@ -109,6 +109,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       where: { destination_id: { in: ids.destinations } },
     });
     await prisma.webhookDestination.deleteMany({ where: { id: { in: ids.destinations } } });
+    await prisma.poolCredit.deleteMany({ where: { donation_id: { in: ids.donations } } });
     await prisma.rewardClaim.deleteMany({ where: { reward_id: { in: ids.rewards } } });
     // Everything a test donor created, before the donor itself (FKs).
     await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: ids.donors } } });
@@ -260,7 +261,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       ).id,
     );
     const before = await lastSeq(tiltifyDest);
-    await donate({
+    const donationId = await donate({
       email: `pooled-${rand()}@example.com`,
       amount_cents: 1000,
       pledge_token: pledge.pledge_token,
@@ -273,6 +274,44 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       { target_id: goal.id, amount: { currency: 'USD', value: '10.00' } },
     ]);
     expect(JSON.stringify(d)).not.toContain('source');
+    // One $10 payment backs $10 in EACH category, never $30 of money.
+    const donation = await prisma.donation.findUniqueOrThrow({ where: { id: donationId } });
+    const claim = await prisma.rewardClaim.findFirstOrThrow({ where: { donation_id: donationId } });
+    const afterCreation = await lastSeq(tiltifyDest);
+    await request(createApp())
+      .post(`/api/admin/donors/${donation.donor_id}/reverse-spend`)
+      .set(AUTH)
+      .send({ spend_type: 'claim', spend_id: claim.id })
+      .expect(200);
+    await request(createApp())
+      .post(`/api/admin/polls/options/${poll.options[0]!.id}/refund`)
+      .set(AUTH)
+      .expect(200);
+    await request(createApp()).post(`/api/admin/goals/${goal.id}/refund`).set(AUTH).expect(200);
+    const corrections = await messages(tiltifyDest, afterCreation);
+    expect(corrections.map((row) => row.message_type)).toEqual([
+      'tiltify.donation',
+      'tiltify.donation',
+      'tiltify.donation',
+    ]);
+    expect(corrections.map((row) => row.body.id)).toEqual([donationId, donationId, donationId]);
+    expect(nth(corrections, 2).body).toMatchObject({
+      amount: { value: '10.00' },
+      reward_id: null,
+      reward_claims: [],
+      poll_id: null,
+      poll_votes: [],
+      target_id: null,
+      target_contributions: [],
+    });
+    expect(JSON.stringify(corrections)).not.toContain('source');
+    expect(JSON.stringify(corrections)).not.toContain('allocated_by');
+    expect(await prisma.balanceAdjustment.count({ where: { donor_id: donation.donor_id } })).toBe(
+      0,
+    );
+    expect(await prisma.donor.findUnique({ where: { id: donation.donor_id } })).toMatchObject({
+      balance_remaining: 0,
+    });
   });
 
   it('rejects TILTIFY on an HTTP Destination (§T1)', async () => {
@@ -489,14 +528,14 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       amount_cents: 100,
       channel_id: channelId,
     });
-    // Intake still requires positive money until the wallet-only slice ships.
+    // Zero-money donations cannot record a chargeback.
     await prisma.donation.update({ where: { id: zero }, data: { amount_cents: 0 } });
     const beforeAll = await lastSeq(tiltifyDest);
     await request(createApp())
       .patch(`/api/admin/donations/${zero}/status`)
       .set(AUTH)
       .send({ status: 'CHARGEBACK' })
-      .expect(200);
+      .expect(400);
     expect(await messages(tiltifyDest, beforeAll)).toEqual([]);
 
     // A refund goes to the donor's wallet: the charity keeps the money, no total moves.
