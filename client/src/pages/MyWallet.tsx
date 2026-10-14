@@ -13,6 +13,7 @@ import {
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
 import ChannelPill from '../components/ChannelPill';
+import PoolCredits from '../components/PoolCredits';
 import type { DonorWallet } from '../types';
 import { hasModeratorAccess } from '../types';
 
@@ -250,9 +251,9 @@ export default function MyWallet() {
   if (!donor) return <WalletLogin message={error} onLogin={handleLogin} />;
 
   return (
-    <div className="max-w-2xl mx-auto p-8">
+    <div className="max-w-6xl mx-auto p-4 sm:p-8">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="font-display text-4xl uppercase">my wallet</h1>
+        <p className="font-data text-sm uppercase">my wallet</p>
         <button
           onClick={handleLogout}
           className="font-data font-bold text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
@@ -269,10 +270,6 @@ export default function MyWallet() {
               <p className="font-data text-xs text-d-yellow mt-1">moderator access enabled</p>
             )}
           </div>
-          <div className="text-right">
-            <p className="font-data text-sm text-off-white/55">available balance</p>
-            <p className="font-display text-3xl text-d-yellow">{fmt(donor.balance_remaining)}</p>
-          </div>
         </div>
         <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
           <div className="flex gap-8">
@@ -283,6 +280,8 @@ export default function MyWallet() {
           </div>
         </div>
       </Card>
+
+      <PoolCredits donorId={donor.id} wallet={donor.balance_remaining} />
 
       <h2 className="font-display text-3xl uppercase mb-3">donation history</h2>
       {donor.donations.length === 0 ? (
@@ -315,7 +314,9 @@ export default function MyWallet() {
             <Card key={c.id} className="flex justify-between items-center">
               <div>
                 <p className="font-data font-bold text-off-white">{c.reward.title}</p>
-                <p className="font-data text-sm text-off-white/55">{fmt(c.reward.cost_cents)}</p>
+                <p className="font-data text-sm text-off-white/55">
+                  {fmt(c.amount_cents)} allocated
+                </p>
               </div>
               <span
                 className={`font-data text-xs font-bold px-2 py-1 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : 'text-d-yellow'}`}

@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/api/donor', () => ({
   getDonor: mocks.getDonor,
   requestToken: mocks.requestToken,
+  getPoolCredits: vi.fn().mockResolvedValue({ wallet_credit_cents: 0, events: [] }),
+  getPoolCreditEvent: vi.fn(),
+  applyPoolCredits: vi.fn(),
 }));
 vi.mock('../../src/api/auth', () => ({ getOAuthProviders: mocks.getOAuthProviders }));
 vi.mock('../../src/lib/tracing', () => ({
