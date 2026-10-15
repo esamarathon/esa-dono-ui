@@ -527,9 +527,13 @@ git apply --reverse --check "$PATCH"
 Git apply was verified in a standalone directory without `.git`; GNU patch is not needed.
 If `--check` fails, stop and manually reconcile unrelated parent edits; do not force it.
 `python3 scripts/check-parent-pledge-callers.py --parent-root "$ESA_ROOT"` from the dono
-checkout tests application on private copies, syntax and independent pooled literals.
-The public caller obtains a real 409 corrected review then confirms it, uses explicit D
-and the admin **simulated settled-intake** boundary with token/new money/external id.
+checkout checks application and syntax on private copies, then compiles and executes only
+its extracted `purchase` function with mocked HTTP/API responses and independent literal
+fixtures (including a rejected bad-amount control). It uses no network or containers and
+does not execute the caller's top-level runtime or the staging probe's behavior.
+When run in the sandbox, the public caller obtains a real 409 corrected review then
+confirms it, uses explicit D and the admin **simulated settled-intake** boundary with
+token/new money/external id.
 It does **not** fabricate unbound Stripe success or relax production exact-Session checks.
 The direct staging caller uses the shared planner and a stable draft. Direct PHYSICAL
 Wallet claims must return 400 with no debit/claim/stock change; cash-backed physical
