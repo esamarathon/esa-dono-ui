@@ -381,7 +381,14 @@ CREATE UNIQUE INDEX "PendingPledge_open_draft_key" ON "PendingPledge"("draft_id"
 CREATE UNIQUE INDEX "PaymentRefund_requested_donation_key" ON "PaymentRefund"("donation_id") WHERE "status" = 'REQUESTED';
 
 -- Null donation pledge amounts select legacy accounting. Do not infer pooled budgets.
-UPDATE "Donation" SET "amount_cents" = 0 WHERE "external_id" LIKE 'wallet-%';
+-- Only the literal wallet- prefix plus an exact 8-4-4-4-12 hexadecimal UUID is wallet-only.
+UPDATE "Donation" SET "amount_cents" = 0 WHERE "external_id" GLOB (
+  'wallet-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]' ||
+  '-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]' ||
+  '-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]' ||
+  '-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]' ||
+  '-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]'
+);
 UPDATE "PendingPledge"
 SET "status" = 'EXPIRED', "updated_at" = CAST(strftime('%s', 'now') AS INTEGER) * 1000
 WHERE "format" = 'LEGACY' AND "status" = 'OPEN';

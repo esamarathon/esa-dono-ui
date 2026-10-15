@@ -1,3 +1,4 @@
+import type { PrismaClient } from '@prisma/client';
 import prisma from '../../lib/prisma.js';
 import {
   emitTiltifyMessage,
@@ -35,9 +36,12 @@ export type EmitWebhook = (
  */
 export async function withWebhooks<T>(
   fn: (tx: WebhookTx, emit: EmitWebhook, publisher: DonationPublisher) => Promise<T>,
+  options: { database: PrismaClient; dispatch: false } | undefined = undefined,
 ): Promise<T> {
+  // Offline transition tools queue through the same publisher on an explicit database.
+  // Only the running backend may dispatch that database's committed deliveries.
   const woken = new Set<string>();
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await (options?.database ?? prisma).$transaction(async (tx) => {
     const emit: EmitWebhook = async (messageType, build) => {
       for (const id of await emitWebhookMessage(tx, messageType, build)) woken.add(id);
     };
@@ -64,6 +68,6 @@ export async function withWebhooks<T>(
     );
     return fn(tx, emit, publisher);
   });
-  for (const id of woken) wakeDispatcher(id);
+  if (!options) for (const id of woken) wakeDispatcher(id);
   return result;
 }
