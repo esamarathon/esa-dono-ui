@@ -4,7 +4,7 @@ import { httpError } from '../lib/httpError.js';
 import { withWebhooks } from './webhooks/outbox.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { previewPoolShrinkTx, applyPoolShrinkTx } from './paymentRefundShrink.js';
-import { readRewardFundingTx } from './rewardFunding.js';
+import { confirmedRewardType, readRewardFundingTx } from './rewardFunding.js';
 import {
   createPaymentRefund,
   listPaymentRefunds,
@@ -110,9 +110,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
               ? 'A Stripe Checkout payment is required'
               : claim.reversed_at || claim.status !== 'PENDING'
                 ? 'Only a live PENDING claim is eligible'
-                : (donation.pledge?.items.find(
-                      (item) => item.kind === 'REWARD' && item.target_id === claim.reward_id,
-                    )?.confirmed_reward_type ?? claim.reward.type) !== 'PHYSICAL'
+                : confirmedRewardType(claim, donation.pledge?.items) !== 'PHYSICAL'
                   ? 'Only a confirmed physical reward is eligible'
                   : donation.shipping_cents === null
                     ? 'Shipping must be recorded before a Payment refund'
@@ -132,10 +130,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
     };
   const item = Math.min(claim.amount_cents, donation.amount_cents);
   const physical = donation.reward_claims.filter(
-    (row) =>
-      (donation.pledge?.items.find(
-        (item) => item.kind === 'REWARD' && item.target_id === row.reward_id,
-      )?.confirmed_reward_type ?? row.reward.type) === 'PHYSICAL',
+    (row) => confirmedRewardType(row, donation.pledge?.items) === 'PHYSICAL',
   );
   const shipping =
     physical.length === 1

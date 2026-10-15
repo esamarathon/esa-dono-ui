@@ -57,22 +57,20 @@ describe('admin funded removals', () => {
       Promise.resolve({ data: path === '/polls' ? [poll] : [goal] }),
     );
     mocks.adminClient.delete.mockResolvedValue({ data: { success: true } });
-    mocks.getReversalPreview.mockImplementation((path: string) =>
-      Promise.resolve({
-        destinations: [
-          {
-            destination: 'Pool credit',
-            category: path.startsWith('/goals') ? 'goal' : 'poll',
-            donation_id: 'd1',
-            credit_id: null,
-            amount_cents: path.startsWith('/goals') ? 750 : 500,
-          },
-        ],
-      }),
-    );
   });
 
   it('requires confirmation and warns before removing a funded poll option', async () => {
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'poll',
+          donation_id: 'd1',
+          credit_id: null,
+          amount_cents: 500,
+        },
+      ],
+    });
     vi.mocked(window.confirm).mockReturnValue(false);
     renderPage('polls');
 
@@ -95,6 +93,17 @@ describe('admin funded removals', () => {
   });
 
   it('requires confirmation and warns before removing a funded goal', async () => {
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'goal',
+          donation_id: 'd1',
+          credit_id: null,
+          amount_cents: 750,
+        },
+      ],
+    });
     vi.mocked(window.confirm).mockReturnValue(false);
     renderPage('goals');
 

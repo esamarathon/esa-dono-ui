@@ -8,24 +8,26 @@ import {
 import ModeratorUnusedPoolMoney from '../../src/pages/moderator/ModeratorUnusedPoolMoney';
 const client = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock('../../src/api/moderator', () => ({ default: client }));
-const donation = {
-  id: 'd1',
-  donor_name: 'Alice',
-  comment: 'runner choice',
-  channel_id: 'main',
-  event: { id: 'e1', name: 'Marathon', ended_at: null },
-  unused_cents: { poll: 37, goal: 0 },
-  assignments: [
-    {
-      id: 'a1',
-      category: 'poll',
-      label: 'Old choice',
-      amount_cents: 20,
-      allocated_at: null,
-      can_undo: true,
-    },
-  ],
-};
+function donation(unused: number, assigned: number) {
+  return {
+    id: 'd1',
+    donor_name: 'Alice',
+    comment: 'runner choice',
+    channel_id: 'main',
+    event: { id: 'e1', name: 'Marathon', ended_at: null },
+    unused_cents: { poll: unused, goal: 0 },
+    assignments: [
+      {
+        id: 'a1',
+        category: 'poll',
+        label: 'Old choice',
+        amount_cents: assigned,
+        allocated_at: null,
+        can_undo: true,
+      },
+    ],
+  };
+}
 function Filter() {
   const { setSelectedChannelId } = useModeratorChannelFilter();
   return <button onClick={() => setSelectedChannelId('side')}>side channel</button>;
@@ -45,6 +47,13 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+});
+function mockUnused({
+  unused,
+  assigned,
+  before,
+  after,
+}: Readonly<{ unused: number; assigned: number; before: number; after: number }>) {
   client.get.mockImplementation((path: string) =>
     Promise.resolve({
       data:
@@ -52,24 +61,25 @@ beforeEach(() => {
           ? [{ id: 'main', name: 'Main' }]
           : path.includes('/targets')
             ? {
-                amount_cents: 37,
+                amount_cents: unused,
                 targets: [
                   {
                     id: 'opt',
                     label: 'Fast run',
                     channel_id: null,
-                    before_cents: 1000,
-                    after_cents: 1037,
+                    before_cents: before,
+                    after_cents: after,
                     target_cents: null,
                   },
                 ],
               }
-            : [donation],
+            : [donation(unused, assigned)],
     }),
   );
   client.post.mockResolvedValue({ data: {} });
-});
+}
 it('uses default toggles, global Channel filter, eligible server impact, assignment and undo', async () => {
+  mockUnused({ unused: 37, assigned: 20, before: 1000, after: 1037 });
   renderPage();
   expect(await screen.findByText('Alice')).toBeInTheDocument();
   expect(screen.getByLabelText('comments only')).toBeChecked();
@@ -99,6 +109,7 @@ it('uses default toggles, global Channel filter, eligible server impact, assignm
   );
 });
 it('shows stale errors, keeps the choice for review and never retries an assignment automatically', async () => {
+  mockUnused({ unused: 37, assigned: 20, before: 1000, after: 1037 });
   client.post.mockRejectedValue({
     response: { data: { error: 'Unused amount changed; reload before assigning' } },
   });

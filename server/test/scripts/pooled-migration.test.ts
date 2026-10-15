@@ -39,9 +39,31 @@ beforeEach(async () => {
     }
   }
   deploy(path.join(dir, 'schema.prisma'));
+}, 60_000);
+
+async function fixture(
+  history: Readonly<{
+    totalDonated: number;
+    wallet: number;
+    receipt: number;
+    rewardPrice: number;
+    goalTarget: number;
+    vote: number;
+    unlinkedVote: number;
+    contribution: number;
+    unlinkedContribution: number;
+    donationAdjustment: number;
+    itemAdjustment: number;
+    pledgeTotal: number;
+    topUp: number;
+    walletDiscount: number;
+    itemAmount: number;
+    quantity: number;
+  }>,
+) {
   await db.$transaction(async (tx) => {
     await tx.$executeRaw`INSERT INTO Donor (id, email, total_donated, balance_remaining, updated_at)
-      VALUES ('donor', 'history@example.test', 9000, 321, 1000)`;
+      VALUES ('donor', 'history@example.test', ${history.totalDonated}, ${history.wallet}, 1000)`;
     await tx.$executeRaw`INSERT INTO Channel (id, name, slug, event_id, updated_at)
       VALUES ('channel', 'History', 'history', '00000000-0000-4000-8000-000000000001', 1000)`;
     for (const status of ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK']) {
@@ -49,15 +71,15 @@ beforeEach(async () => {
         const id = `${kind}-${status}`;
         const externalId = kind === 'wallet' ? `wallet-${crypto.randomUUID()}` : `cs_${status}`;
         await tx.$executeRaw`INSERT INTO Donation (id, external_id, donor_id, amount_cents, status, channel_id, event_id)
-          VALUES (${id}, ${externalId}, 'donor', 1000, ${status}, 'channel', '00000000-0000-4000-8000-000000000001')`;
+          VALUES (${id}, ${externalId}, 'donor', ${history.receipt}, ${status}, 'channel', '00000000-0000-4000-8000-000000000001')`;
       }
     }
     await tx.$executeRaw`INSERT INTO Reward (id, title, type, cost_cents, updated_at)
-      VALUES ('physical', 'Shirt', 'PHYSICAL', 275, 1000)`;
+      VALUES ('physical', 'Shirt', 'PHYSICAL', ${history.rewardPrice}, 1000)`;
     await tx.$executeRaw`INSERT INTO Poll (id, title, updated_at) VALUES ('poll', 'History poll', 1000)`;
     await tx.$executeRaw`INSERT INTO PollOption (id, poll_id, label) VALUES ('option', 'poll', 'Choice')`;
     await tx.$executeRaw`INSERT INTO FundGoal (id, title, target_cents, updated_at)
-      VALUES ('goal', 'History goal', 5000, 1000)`;
+      VALUES ('goal', 'History goal', ${history.goalTarget}, 1000)`;
     for (const [id, donationId, status] of [
       ['claim', 'stripe-REFUNDED', 'PENDING'],
       ['shipped', 'stripe-CHARGEBACK', 'FULFILLED'],
@@ -68,24 +90,24 @@ beforeEach(async () => {
         VALUES (${id}, 'physical', 'donor', ${donationId}, ${status}, '{"size":"M"}', 1000)`;
     }
     await tx.$executeRaw`INSERT INTO PollVote (id, poll_id, poll_option_id, donor_id, amount_cents, donation_id)
-      VALUES ('vote', 'poll', 'option', 'donor', 125, 'stripe-REFUNDED'),
-             ('unlinked-vote', 'poll', 'option', 'donor', 20, NULL)`;
+      VALUES ('vote', 'poll', 'option', 'donor', ${history.vote}, 'stripe-REFUNDED'),
+             ('unlinked-vote', 'poll', 'option', 'donor', ${history.unlinkedVote}, NULL)`;
     await tx.$executeRaw`INSERT INTO FundContribution (id, goal_id, donor_id, amount_cents, donation_id)
-      VALUES ('contribution', 'goal', 'donor', 150, 'stripe-CHARGEBACK'),
-             ('unlinked-contribution', 'goal', 'donor', 30, NULL)`;
+      VALUES ('contribution', 'goal', 'donor', ${history.contribution}, 'stripe-CHARGEBACK'),
+             ('unlinked-contribution', 'goal', 'donor', ${history.unlinkedContribution}, NULL)`;
     await tx.$executeRaw`INSERT INTO BalanceAdjustment
       (id, donor_id, amount_cents, balance_after_cents, type, reference_id)
-      VALUES ('refund', 'donor', -1000, 321, 'REFUND', 'stripe-REFUNDED'),
-             ('item-refund', 'donor', 275, 321, 'REFUND', 'reversed')`;
+      VALUES ('refund', 'donor', ${history.donationAdjustment}, ${history.wallet}, 'REFUND', 'stripe-REFUNDED'),
+             ('item-refund', 'donor', ${history.itemAdjustment}, ${history.wallet}, 'REFUND', 'reversed')`;
     await tx.$executeRaw`UPDATE Donation SET refund_id = 'refund' WHERE id = 'stripe-REFUNDED'`;
     for (const status of ['OPEN', 'FULFILLED', 'EXPIRED', 'CANCELLED']) {
       await tx.$executeRaw`INSERT INTO PendingPledge
         (id, pledge_token, total_cents, top_up_cents, wallet_discount_cents, status, requires_shipping,
          checkout_session_id, channel_id, comment, display_name, expires_at, updated_at)
-        VALUES (${status}, ${`token-${status}`}, 900, 100, 50, ${status}, true,
+        VALUES (${status}, ${`token-${status}`}, ${history.pledgeTotal}, ${history.topUp}, ${history.walletDiscount}, ${status}, true,
           ${`session-${status}`}, 'channel', 'Keep me', 'Historical donor', 1000, 1000)`;
       await tx.$executeRaw`INSERT INTO PledgeItem (id, pledge_id, kind, target_id, amount_cents, quantity)
-        VALUES (${`item-${status}`}, ${status}, 'REWARD', 'physical', 800, 2)`;
+        VALUES (${`item-${status}`}, ${status}, 'REWARD', 'physical', ${history.itemAmount}, ${history.quantity})`;
     }
     await tx.$executeRaw`INSERT INTO WebhookEndpoint (id, url, secret, event_types, updated_at)
       VALUES ('destination', 'https://example.test/hook', 'secret', '["donation.created"]', 1000)`;
@@ -94,7 +116,7 @@ beforeEach(async () => {
   cpSync(path.join(dir, 'history.db'), path.join(dir, 'pre-change.db'));
   deploy(path.join(serverDir, 'prisma/schema.prisma'));
   db = new PrismaClient({ datasourceUrl: url });
-}, 60_000);
+}
 
 afterEach(async () => {
   await db.$disconnect();
@@ -103,6 +125,24 @@ afterEach(async () => {
 
 describe('pooled accounting migration on populated SQLite', () => {
   it('rolls back schema and corrections together when a historical claim cannot be priced', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     const failureUrl = `file:${path.join(dir, 'pre-change.db')}`;
     const old = new PrismaClient({ datasourceUrl: `${failureUrl}?connection_limit=1` });
     try {
@@ -138,6 +178,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     }
   });
   it('zeros only exact wallet UUIDs, preserving wallet-prefix cash and malformed identifiers', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     const historyUrl = `file:${path.join(dir, 'pre-change.db')}`;
     const history = new PrismaClient({ datasourceUrl: historyUrl });
     try {
@@ -175,6 +233,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     }
   });
   it('nets shipping on all four migrated Stripe statuses without repairing reversal or allocation history', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     // Original intake received four cash receipts; old terminal adjustments did not
     // rewrite cumulative receipts. Wallet-only rows are already zero after migration.
     await db.donor.update({ where: { id: 'donor' }, data: { total_donated: 4000 } });
@@ -249,6 +325,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     expect((await db.donor.findUniqueOrThrow({ where: { id: 'donor' } })).total_donated).toBe(3200);
   });
   it('rejects ambiguous pledge shapes, unattributed moderator rows and untraceable credit', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     await expect(
       db.pendingPledge.create({
         data: {
@@ -319,6 +413,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     );
   });
   it('retains category credit origins, redemption links and donor-scoped batch idempotency', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     await db.donation.create({
       data: {
         id: 'credit-donation',
@@ -426,6 +538,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     expect(await db.$queryRawUnsafe('PRAGMA foreign_key_check')).toEqual([]);
   });
   it('persists held funding, confirmed prices and serialized physical Payment refund history', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     const pledge = await db.pendingPledge.create({
       data: {
         id: 'pooled-pledge',
@@ -639,6 +769,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     expect(await db.$queryRawUnsafe('PRAGMA foreign_key_check')).toEqual([]);
   });
   it('reports pre-change terminal donations, live linked allocations and applied adjustments without repairing them', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     const before = await db.$queryRawUnsafe('SELECT * FROM BalanceAdjustment ORDER BY id');
     const output = execFileSync(
       process.execPath,
@@ -691,6 +839,24 @@ describe('pooled accounting migration on populated SQLite', () => {
     expect(await db.$queryRawUnsafe('PRAGMA foreign_key_check')).toEqual([]);
   });
   it('preserves legacy history and only corrects wallet-only counted money', async () => {
+    await fixture({
+      totalDonated: 9000,
+      wallet: 321,
+      receipt: 1000,
+      rewardPrice: 275,
+      goalTarget: 5000,
+      vote: 125,
+      unlinkedVote: 20,
+      contribution: 150,
+      unlinkedContribution: 30,
+      donationAdjustment: -1000,
+      itemAdjustment: 275,
+      pledgeTotal: 900,
+      topUp: 100,
+      walletDiscount: 50,
+      itemAmount: 800,
+      quantity: 2,
+    });
     const donations = await db.$queryRawUnsafe<
       { id: string; amount_cents: number; pledge_amount_cents: number | null }[]
     >('SELECT id, amount_cents, pledge_amount_cents FROM Donation ORDER BY id');

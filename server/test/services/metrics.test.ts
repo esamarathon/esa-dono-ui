@@ -17,7 +17,7 @@ const value = async (name: string, labels: Record<string, string> = {}) => {
     .find((m) => m.name === name)
     ?.values.find((v) => Object.entries(labels).every(([k, val]) => v.labels[k] === val))?.value;
 };
-async function fixture() {
+async function fixture({ cash }: Readonly<{ cash: number }>) {
   const donor = await prisma.donor.create({
     data: { email: `${crypto.randomUUID()}@example.com` },
   });
@@ -32,7 +32,7 @@ async function fixture() {
       donor_id: donor.id,
       event_id: event.id,
       channel_id: channel.id,
-      amount_cents: 12345,
+      amount_cents: cash,
       external_id: crypto.randomUUID(),
     },
   });
@@ -60,7 +60,7 @@ describe('refreshBusinessMetrics', () => {
     // Other suites can retain donor accounts in the per-run database.
     await refreshBusinessMetrics();
     const donorsBefore = (await value('dono_donors_total'))!;
-    const f = await fixture();
+    const f = await fixture({ cash: 12345 });
     await prisma.donation.create({
       data: {
         donor_id: f.donor.id,
@@ -98,7 +98,7 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('drops stale money and Pool series when routing changes between refreshes', async () => {
-    const f = await fixture();
+    const f = await fixture({ cash: 12345 });
     await prisma.donation.update({
       where: { id: f.donation.id },
       data: { pledge_amount_cents: 12345 },
@@ -126,7 +126,7 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('a scrape serves the cached value until refresh, without a database transaction', async () => {
-    const f = await fixture();
+    const f = await fixture({ cash: 12345 });
     await refreshBusinessMetrics();
     await prisma.donation.update({ where: { id: f.donation.id }, data: { amount_cents: 1 } });
     const transaction = vi.spyOn(prisma, '$transaction');
@@ -137,7 +137,7 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('keeps the previous snapshot and success time, increments the error counter and does not throw on DB failure', async () => {
-    await fixture();
+    await fixture({ cash: 12345 });
     await refreshBusinessMetrics();
     const timestamp = await value('dono_metrics_last_refresh_timestamp_seconds');
     vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('db down'));
@@ -150,7 +150,7 @@ describe('refreshBusinessMetrics', () => {
   });
 
   it('publishes legacy and new Wallet adjustment types, resetting absent types to zero', async () => {
-    const f = await fixture();
+    const f = await fixture({ cash: 12345 });
     for (const type of ['REFUND', 'WALLET_REFUND', 'FAILED_PAYMENT_REFUND'])
       await prisma.balanceAdjustment.create({
         data: {

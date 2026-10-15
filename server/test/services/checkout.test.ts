@@ -40,29 +40,38 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-async function pending(goalId?: string) {
+async function pending({
+  availableWallet,
+  pledgeCents,
+  goalCents,
+  goalId,
+}: Readonly<{ availableWallet: number; pledgeCents: number; goalCents: number; goalId?: string }>) {
   const channel = await createTestChannel(prisma);
   channels.push(channel.id);
   const donor = await prisma.donor.create({
     data: {
       email: `${crypto.randomUUID()}@example.com`,
-      balance_remaining: 975,
+      balance_remaining: availableWallet,
       magic_token: crypto.randomUUID(),
     },
   });
   donors.push(donor.id);
   const selections = goalId
-    ? [{ kind: 'GOAL' as const, target_id: goalId, amount_cents: 100, insertion_order: 0 }]
+    ? [{ kind: 'GOAL' as const, target_id: goalId, amount_cents: goalCents, insertion_order: 0 }]
     : [];
   const input = {
     draft_id: crypto.randomUUID(),
-    pledge_amount_cents: 1000,
+    pledge_amount_cents: pledgeCents,
     items: selections,
     channel_id: channel.id,
     walletDonorId: donor.id,
     comment: 'Original comment',
     display_name: 'Original name',
-    plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: 975 }),
+    plan: planPledge({
+      pledge_amount_cents: pledgeCents,
+      selections,
+      available_wallet_cents: availableWallet,
+    }),
   };
   const pledge = await createPledge(input);
   tokens.push(pledge.pledge_token);
@@ -97,7 +106,11 @@ describe('checkout lifecycle on real SQLite', () => {
   it.each(['open', null] as const)(
     'blocks cancellation and edits when Stripe is still open or unknown (%s)',
     async (status) => {
-      const { pledge, donor } = await pending();
+      const { pledge, donor } = await pending({
+        availableWallet: 975,
+        pledgeCents: 1000,
+        goalCents: 0,
+      });
       stripe.create.mockResolvedValue({
         id: 'cs_not_cancelled',
         url: 'https://checkout.stripe.com/pending',
@@ -124,7 +137,11 @@ describe('checkout lifecycle on real SQLite', () => {
     },
   );
   it('reconciles a paid webhook arriving before the create response without a DB lock spanning Stripe', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     const entered = deferred<void>();
     const response = deferred<{
       id: string;
@@ -165,7 +182,11 @@ describe('checkout lifecycle on real SQLite', () => {
     expect(await prisma.donation.count({ where: { external_id: 'cs_early' } })).toBe(1);
   });
   it('commits contradictory received cash, its review link and one outbox message together, or rolls all back', async () => {
-    const { pledge, donor, input } = await pending();
+    const { pledge, donor, input } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockResolvedValue({ id: 'cs_review_outbox', url: null });
     await createCheckoutForPledge(pledge.pledge_token, donor);
     stripe.expire.mockResolvedValue({
@@ -229,7 +250,11 @@ describe('checkout lifecycle on real SQLite', () => {
     });
   });
   it('fulfills an already paid Session recovered from a lost create response, even after local expiry', async () => {
-    const { pledge, donor, input } = await pending();
+    const { pledge, donor, input } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockRejectedValueOnce(new Error('lost response'));
     await expect(createCheckoutForPledge(pledge.pledge_token, donor)).rejects.toThrow();
     await prisma.pendingPledge.update({
@@ -264,7 +289,11 @@ describe('checkout lifecycle on real SQLite', () => {
     });
   });
   it('does not overwrite fulfillment when cancellation returns an older expired Session', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockResolvedValue({ id: 'cs_race', url: 'https://checkout.stripe.com/race' });
     await createCheckoutForPledge(pledge.pledge_token, donor);
     const entered = deferred<void>();
@@ -298,7 +327,11 @@ describe('checkout lifecycle on real SQLite', () => {
   });
 
   it('rolls back release or late reacquisition together with the final pledge write', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockResolvedValue({
       id: 'cs_rollback',
       url: 'https://checkout.stripe.com/rollback',
@@ -340,7 +373,11 @@ describe('checkout lifecycle on real SQLite', () => {
   });
 
   it('never replays a lost create key beyond 24 hours, but can discover its original Session without creating another', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockRejectedValue(new Error('lost response'));
     await expect(createCheckoutForPledge(pledge.pledge_token, donor)).rejects.toThrow();
     await prisma.pendingPledge.update({
@@ -382,7 +419,11 @@ describe('checkout lifecycle on real SQLite', () => {
   it.each(['failed', 'open', 'paid', 'unknown', 'processing', 'retryable'] as const)(
     'reconciles verified async failure against current Stripe state (%s)',
     async (current) => {
-      const { pledge, donor } = await pending();
+      const { pledge, donor } = await pending({
+        availableWallet: 975,
+        pledgeCents: 1000,
+        goalCents: 0,
+      });
       stripe.create.mockResolvedValue({ id: 'cs_async', url: 'https://checkout.stripe.com/async' });
       await createCheckoutForPledge(pledge.pledge_token, donor);
       const notification = {
@@ -437,7 +478,11 @@ describe('checkout lifecycle on real SQLite', () => {
   );
 
   it('hands an existing legacy async failure to #188 without inventing a chargeback', async () => {
-    const { donor, channel } = await pending();
+    const { donor, channel } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     const old = await prisma.pendingPledge.create({
       data: {
         pledge_token: crypto.randomUUID(),
@@ -478,7 +523,11 @@ describe('checkout lifecycle on real SQLite', () => {
     });
   });
   it('rejects copied token metadata from a different Session and never falls through an unknown token to email', async () => {
-    const { pledge, donor, channel } = await pending();
+    const { pledge, donor, channel } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockResolvedValue({ id: 'cs_bound', url: 'https://checkout.stripe.com/bound' });
     await createCheckoutForPledge(pledge.pledge_token, donor);
     await expect(
@@ -540,7 +589,11 @@ describe('checkout lifecycle on real SQLite', () => {
   it.each([true, false])(
     'records an old-shape late exact-token payment without D or allocations (bound Session: %s)',
     async (bound) => {
-      const { donor, channel } = await pending();
+      const { donor, channel } = await pending({
+        availableWallet: 975,
+        pledgeCents: 1000,
+        goalCents: 0,
+      });
       const goal = await prisma.fundGoal.create({
         data: { title: 'Old incentive', target_cents: 10000 },
       });
@@ -628,7 +681,11 @@ describe('checkout lifecycle on real SQLite', () => {
     },
   );
   it('preserves original legacy fulfillment and its allocation history after the deadline', async () => {
-    const { donor, channel } = await pending();
+    const { donor, channel } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     const goal = await prisma.fundGoal.create({
       data: { title: 'Originally fulfilled incentive', target_cents: 10000 },
     });
@@ -672,7 +729,11 @@ describe('checkout lifecycle on real SQLite', () => {
   });
 
   it('keeps a previously stored dev LEGACY_PAID receipt readable and idempotent', async () => {
-    const { donor, channel } = await pending();
+    const { donor, channel } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     const receipt = await prisma.donation.create({
       data: { external_id: 'cs_dev_legacy', donor_id: donor.id, amount_cents: 1000 },
     });
@@ -720,7 +781,12 @@ describe('checkout lifecycle on real SQLite', () => {
         data: { title: 'Original incentive', target_cents: 10000 },
       });
       goals.push(goal.id);
-      const { pledge, donor, input } = await pending(goal.id);
+      const { pledge, donor, input } = await pending({
+        availableWallet: 975,
+        pledgeCents: 1000,
+        goalCents: 100,
+        goalId: goal.id,
+      });
       stripe.create.mockResolvedValue({ id: 'cs_late', url: 'https://checkout.stripe.com/late' });
       await createCheckoutForPledge(pledge.pledge_token, donor);
       if (funding === 'held') {
@@ -800,7 +866,11 @@ describe('checkout lifecycle on real SQLite', () => {
     },
   );
   it('keeps complete/unpaid funding held, then fulfills paid money and consumes the hold only once', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create.mockResolvedValue({
       id: 'cs_processing',
       url: 'https://checkout.stripe.com/processing',
@@ -854,7 +924,11 @@ describe('checkout lifecycle on real SQLite', () => {
     ]);
   });
   it('recovers a lost create response before cancelling, releases only after exact Session expiration, once', async () => {
-    const { pledge, donor } = await pending();
+    const { pledge, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     stripe.create
       .mockRejectedValueOnce(new Error('lost response'))
       .mockResolvedValue({ id: 'cs_lost', url: 'https://checkout.stripe.com/lost' });
@@ -898,7 +972,11 @@ describe('checkout lifecycle on real SQLite', () => {
     });
   });
   it('serializes double checkout and reuses one payable Session with immutable funding and protocol', async () => {
-    const { pledge, donor, input } = await pending();
+    const { pledge, donor, input } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      goalCents: 0,
+    });
     const entered = deferred<void>();
     const response = deferred<{
       id: string;

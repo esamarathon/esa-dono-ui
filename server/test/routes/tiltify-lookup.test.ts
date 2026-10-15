@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
@@ -26,7 +26,29 @@ describe('optional ESA incentive lookup API (#189)', () => {
   const targets: string[] = [];
   const polls: Array<{ id: string; firstOption: string; secondOption: string }> = [];
 
-  beforeAll(async () => {
+  async function fixture({
+    rewardPrice,
+    stock,
+    claimed,
+    goalTarget,
+    goalCurrent,
+    pollTotal,
+    firstApproved,
+    secondApproved,
+    pending,
+    rejected,
+  }: Readonly<{
+    rewardPrice: number;
+    stock: number;
+    claimed: number;
+    goalTarget: number;
+    goalCurrent: number;
+    pollTotal: number;
+    firstApproved: number;
+    secondApproved: number;
+    pending: number;
+    rejected: number;
+  }>) {
     eventId = (
       await prisma.event.create({
         data: {
@@ -65,9 +87,9 @@ describe('optional ESA incentive lookup API (#189)', () => {
               title: 'Historical reward',
               description: 'Public reward description',
               type: 'CUSTOM',
-              cost_cents: 725,
-              quantity_total: 10,
-              quantity_claimed: 12,
+              cost_cents: rewardPrice,
+              quantity_total: stock,
+              quantity_claimed: claimed,
               is_active: false,
               channel_id,
               ...timestamps,
@@ -82,8 +104,8 @@ describe('optional ESA incentive lookup API (#189)', () => {
           await prisma.fundGoal.create({
             data: {
               title: 'Historical target',
-              target_cents: 123_450,
-              current_cents: 6_789,
+              target_cents: goalTarget,
+              current_cents: goalCurrent,
               is_active: false,
               channel_id,
               ...timestamps,
@@ -98,15 +120,15 @@ describe('optional ESA incentive lookup API (#189)', () => {
           title: 'Ended poll',
           is_active: true,
           ends_at: new Date(updated_at),
-          total_votes_cents: 2_500,
+          total_votes_cents: pollTotal,
           channel_id,
           ...timestamps,
           options: {
             create: [
-              { label: 'Second approved', votes_cents: 500 },
-              { label: privateMarker, votes_cents: 700, status: 'PENDING_APPROVAL' },
-              { label: privateMarker, votes_cents: 300, status: 'REJECTED' },
-              { label: 'First approved', votes_cents: 1_000 },
+              { label: 'Second approved', votes_cents: secondApproved },
+              { label: privateMarker, votes_cents: pending, status: 'PENDING_APPROVAL' },
+              { label: privateMarker, votes_cents: rejected, status: 'REJECTED' },
+              { label: 'First approved', votes_cents: firstApproved },
             ],
           },
         },
@@ -136,9 +158,9 @@ describe('optional ESA incentive lookup API (#189)', () => {
         chargeback_acknowledgement_note: privateMarker,
       },
     });
-  });
+  }
 
-  afterAll(async () => {
+  afterEach(async () => {
     await prisma.rewardClaim.deleteMany({ where: { donor_id: donorId } });
     await prisma.donor.deleteMany({ where: { id: donorId } });
     await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
@@ -146,10 +168,24 @@ describe('optional ESA incentive lookup API (#189)', () => {
     await prisma.poll.deleteMany({ where: { id: { in: polls.map((p) => p.id) } } });
     await prisma.channel.deleteMany({ where: { id: { in: [channelA, channelB, otherChannel] } } });
     await prisma.event.deleteMany({ where: { id: { in: [eventId, otherEventId] } } });
-    await prisma.$disconnect();
+    rewards.length = targets.length = polls.length = 0;
+    eventId = otherEventId = channelA = channelB = otherChannel = donorId = '';
   });
+  afterAll(() => prisma.$disconnect());
 
   it('looks up own, shared and same-Event foreign ended polls with only approved options in vote order', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     for (const context of [channelA, eventId]) {
       for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
         const poll = polls[index]!;
@@ -188,6 +224,18 @@ describe('optional ESA incentive lookup API (#189)', () => {
   });
 
   it('looks up own, shared and same-Event foreign targets with the true owner and exact bare DTO', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     for (const context of [channelA, eventId]) {
       for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
         const res = await get(`/campaign/${context}/lookup/targets/${targets[index]}`);
@@ -214,6 +262,18 @@ describe('optional ESA incentive lookup API (#189)', () => {
   });
 
   it('rejects unknown contexts, missing or wrong-kind resources, and owners in another Event', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     for (const [kind, ids] of [
       ['rewards', rewards],
       ['targets', targets],
@@ -242,6 +302,18 @@ describe('optional ESA incentive lookup API (#189)', () => {
   });
 
   it('does not widen Channel lists, Event lists or ordinary poll detail', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     for (const [kind, ids] of [
       ['rewards', rewards],
       ['targets', targets],
@@ -266,6 +338,18 @@ describe('optional ESA incentive lookup API (#189)', () => {
   });
 
   it('looks up own, shared and same-Event foreign rewards with the true owner and exact bare DTO', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     for (const context of [channelA, eventId]) {
       for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
         const res = await get(`/campaign/${context}/lookup/rewards/${rewards[index]}`);
@@ -294,6 +378,18 @@ describe('optional ESA incentive lookup API (#189)', () => {
   });
 
   it('re-reads current prices, stock, target progress and newly approved poll options without a warm list', async () => {
+    await fixture({
+      rewardPrice: 725,
+      stock: 10,
+      claimed: 12,
+      goalTarget: 123450,
+      goalCurrent: 6789,
+      pollTotal: 2500,
+      firstApproved: 1000,
+      secondApproved: 500,
+      pending: 700,
+      rejected: 300,
+    });
     const refreshedAt = '2025-01-03T00:00:00.000Z';
     const foreignPoll = polls[2]!;
     const newOption = await prisma.pollOption.create({

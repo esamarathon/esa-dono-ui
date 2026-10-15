@@ -47,6 +47,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('moderator_key', 'test');
   localStorage.setItem('donation_draft_v1', 'untouched');
+});
+it('uses the real routed staff provider for live allocations, global Channel selection and assignment Undo without browser-draft coupling', async () => {
   api.get.mockImplementation((path: string) =>
     Promise.resolve({
       data:
@@ -69,8 +71,6 @@ beforeEach(() => {
               : [],
     }),
   );
-});
-it('uses the real routed staff provider for live allocations, global Channel selection and assignment Undo without browser-draft coupling', async () => {
   api.post.mockResolvedValue({ data: { success: true } });
   render(
     <MemoryRouter initialEntries={['/moderate/donations']}>

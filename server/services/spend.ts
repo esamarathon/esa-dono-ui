@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client';
 import { MIN_SPEND_CENTS, type ClaimData, type PoolCategory } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 import { readDonationAccountingTx } from './poolAccounting.js';
+import { textWordTokens } from './blockedWords.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -303,7 +304,7 @@ export async function customEntryTextErrorTx(
   if (maxEntryChars && text.length > maxEntryChars)
     return `Entry exceeds maximum of ${maxEntryChars} characters`;
   const blockedWords = await tx.blockedWord.findMany();
-  const words = new Set(text.toLowerCase().match(/\b\w+\b/g) || []);
+  const words = textWordTokens(text);
   for (const blocked of blockedWords) {
     if (words.has(blocked.word.toLowerCase()))
       return `Entry contains blocked word: "${blocked.word}"`;

@@ -277,14 +277,11 @@ paths:
                     {
                       type: array,
                       items: { type: string },
-                      description: Financial sources,
-                      not changed routing,
+                      description: 'Financial sources, not changed routing',
                     }
         '400':
           {
-            description: Invalid key,
-            duplicate target,
-            invalid category or nonpositive/noninteger allocation,
+            description: 'Invalid key, duplicate target, invalid category or nonpositive/noninteger allocation',
           }
         '401': { description: Missing or invalid donor session }
         '403': { description: Frozen donor }
@@ -1192,7 +1189,7 @@ paths:
                 display_name:
                   type: string
                   maxLength: 60
-                  description: Optional donor-facing display name, carried through to the fulfilled Donation's donor_name (falls back to Stripe's customer name, or null, when omitted)
+                  description: Optional public display name. Empty, whitespace-only or omitted means Anonymous (null donor_name); a confirmed blank never falls back to a payment-provider name.
                 channel_id:
                   type: string
                   description: Required. The channel this donation is routed to.
@@ -1728,7 +1725,7 @@ paths:
               schema: { $ref: '#/components/schemas/SpendReversalPreview' }
         '400': { description: Missing spend_type or spend_id }
         '404': { description: Spend record not found or belongs to another donor }
-        '409': { description: Reversed, fulfilled, CANCELLING, charged-back or REQUESTED source }
+        '409': { description: 'Reversed, fulfilled, CANCELLING, charged-back or REQUESTED source' }
 
   /admin/goals/{id}/reversal-preview:
     get:
@@ -1826,7 +1823,7 @@ paths:
                       reward: { type: integer }
                       poll: { type: integer }
                       goal: { type: integer }
-        '400': { description: Invalid status, terminal donation, or zero-money chargeback }
+        '400': { description: 'Invalid status, terminal donation, or zero-money chargeback' }
         '404': { description: Donation not found }
         '409': { description: A Payment refund is REQUESTED }
 
@@ -2027,9 +2024,7 @@ paths:
         '404': { description: Payment refund not found }
         '409':
           {
-            description: Not later-failed,
-            already resolved differently,
-            source status disallows resolution or another REQUESTED refund exists,
+            description: 'Not later-failed, already resolved differently, source status disallows resolution or another REQUESTED refund exists',
           }
   /admin/payment-refunds/{id}/resolve-shipping:
     post:
@@ -2089,7 +2084,7 @@ paths:
           description: Claim updated (with reward and admin-only donor email)
         '400': { description: Invalid status }
         '404': { description: Claim not found }
-        '409': { description: Charged-back donation, REQUESTED Payment refund or non-live claim }
+        '409': { description: 'Charged-back donation, REQUESTED Payment refund or non-live claim' }
 
   /admin/claims/{id}/acknowledge-chargeback:
     post:
@@ -2108,8 +2103,7 @@ paths:
       responses:
         '200':
           {
-            description: Claim with flag cleared and acknowledgement actor,
-            time and optional note recorded; no credit or stock change,
+            description: 'Claim with flag cleared and acknowledgement actor, time and optional note recorded; no credit or stock change',
           }
         '400': { description: Invalid note }
         '404': { description: Claim not found }
@@ -2196,12 +2190,14 @@ paths:
       tags: [Admin]
       summary: Add a donation (manual entry / no real payment) — dev simulation or a real donation received externally (#62)
       description: |
-        Credits a donor's wallet balance and sends a magic link exactly as if
-        a real Stripe donation had completed. Used both for dev/test
-        simulations and for recording a real donation received outside
-        Stripe (e.g. at an external event) — pass `external_id` with that
-        platform's own reference for dedup/traceability, and `occurred_at`
-        to backdate it to when it was actually received.
+        Records received money through the common intake and sends a magic link.
+        An exact pooled pledge_token fulfills its confirmed plan using new money
+        and grants no Wallet credit. Without a pooled pledge, NULL-D legacy cash
+        receipts credit the donor's Wallet. This admin adapter is for dev/test
+        simulation or recording donations received outside Stripe; it does not
+        prove Stripe Checkout, Session binding, signatures or address collection.
+        Pass external_id with the external platform's reference for deduplication
+        and traceability, and occurred_at to backdate the receipt.
       security: [{ AdminKey: [] }]
       requestBody:
         required: true
@@ -3282,7 +3278,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Contributions refunded and audit adjustments recorded
+          description: Contributions reversed to their original destinations. Pooled rows create no BalanceAdjustment; legacy/unlinked Wallet refunds record REFUND adjustments.
           content:
             application/json:
               schema:
@@ -3870,7 +3866,11 @@ paths:
       summary: Approve or reject a custom poll entry
       description: |
         APPROVED: credits option tally (`votes_cents`, `total_votes_cents`).
-        REJECTED: refunds donor balance, marks option REJECTED, writes BalanceAdjustment.
+        REJECTED: marks the option REJECTED and reverses its live funding. Pooled
+        donor/auto funding returns poll Pool credit, never Wallet credit, with no
+        BalanceAdjustment. Moderator funding becomes Unused pool money. Legacy or
+        unlinked funding returns Wallet credit with a REFUND BalanceAdjustment;
+        old charged-back sources receive no credit.
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       parameters:
         - name: id
@@ -4336,7 +4336,7 @@ paths:
               schema: { $ref: '#/components/schemas/UnusedPicker' }
         '400': { description: Invalid category }
         '404': { description: Donation not found }
-        '409': { description: Legacy, terminal, unassigned or REQUESTED Payment refund source }
+        '409': { description: 'Legacy, terminal, unassigned or REQUESTED Payment refund source' }
   /moderator/donations/{id}/unused-pool-money:
     post:
       tags: [Moderator]
@@ -4370,14 +4370,11 @@ paths:
                   source: { type: string, enum: [moderator] }
                   allocated_by: { type: string }
                   allocated_at: { type: string, format: date-time }
-        '400': { description: Invalid category, target id or expected positive integer cents }
+        '400': { description: 'Invalid category, target id or expected positive integer cents' }
         '404': { description: Donation not found }
         '409':
           {
-            description: Stale unused amount,
-            ineligible target,
-            unassigned or non-live source,
-            or REQUESTED Payment refund,
+            description: 'Stale unused amount, ineligible target, unassigned or non-live source, or REQUESTED Payment refund',
           }
   /moderator/unused-pool-money/{category}/{id}/undo:
     post:
@@ -4392,7 +4389,7 @@ paths:
         '200': { description: Assignment reversed }
         '400': { description: Invalid category or already reversed }
         '404': { description: Moderator assignment not found }
-        '409': { description: Target closed, chargeback or REQUESTED Payment refund }
+        '409': { description: 'Target closed, chargeback or REQUESTED Payment refund' }
   /admin/events/{id}/end-preview:
     get:
       tags: [Admin]
@@ -4442,7 +4439,7 @@ paths:
               schema: { $ref: '#/components/schemas/Event' }
         '400': { description: Slug confirmation does not match }
         '404': { description: Event not found }
-        '409': { description: Event active, already ended or REQUESTED Payment refund }
+        '409': { description: 'Event active, already ended or REQUESTED Payment refund' }
   /admin/events/{id}/undo-end:
     post:
       tags: [Admin]
@@ -4545,7 +4542,7 @@ components:
                   description: Original grant restored by a redemption reversal,
                 }
               amount_cents:
-                { type: integer, description: Recorded effective component, not catalog price }
+                { type: integer, description: 'Recorded effective component, not catalog price' }
     StaffAllocation:
       type: object
       required: [id, label, channel, source, amount_cents]
@@ -4560,14 +4557,13 @@ components:
           {
             type: string,
             nullable: true,
-            description: Staff assignment attribution,
-            never source donor identity,
+            description: 'Staff assignment attribution, never source donor identity',
           }
         allocated_at: { type: string, format: date-time, nullable: true }
         recorded_amount_cents:
           { type: integer, description: Whole reward entitlement recorded amount }
         current_price_cents:
-          { type: integer, description: Current reward catalog price, not the allocation }
+          { type: integer, description: 'Current reward catalog price, not the allocation' }
         chargeback_flagged_at: { type: string, format: date-time, nullable: true }
     CategoryAccounting:
       type: object
@@ -4668,14 +4664,12 @@ components:
         held_wallet_cents:
           {
             type: integer,
-            description: Original confirmed Wallet funding,
-            retained after release or consumption,
+            description: 'Original confirmed Wallet funding, retained after release or consumption',
           }
         wallet_held_cents:
           {
             type: integer,
-            description: Currently held amount only,
-            zero unless wallet_hold_status is HELD,
+            description: 'Currently held amount only, zero unless wallet_hold_status is HELD',
           }
         wallet_hold_status: { type: string, enum: [NONE, HELD, CONSUMED, RELEASED] }
         checkout_session_status: { type: string, nullable: true }
@@ -5067,8 +5061,7 @@ components:
         data:
           {
             nullable: true,
-            description: Opaque claim/write-in data; validated by the server,
-            not the pure planner,
+            description: 'Opaque claim/write-in data; validated by the server, not the pure planner',
           }
     PledgePlan:
       type: object

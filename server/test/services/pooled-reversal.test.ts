@@ -59,12 +59,30 @@ async function queued(destinationId: string) {
   ).map((row) => ({ type: row.message_type, payload: JSON.parse(row.payload) }));
 }
 
-async function fixture(pledge: number | null = 1000, wallet = 0, balance = 100) {
+async function fixture({
+  pledge,
+  wallet,
+  balance,
+  cash,
+  pollCents,
+  goalCents,
+  goalTarget,
+  goalProgress,
+}: Readonly<{
+  pledge: number | null;
+  wallet: number;
+  balance: number;
+  cash: number;
+  pollCents: number;
+  goalCents: number;
+  goalTarget: number;
+  goalProgress: number;
+}>) {
   const donor = await prisma.donor.create({
     data: {
       email: `${crypto.randomUUID()}@example.com`,
       balance_remaining: balance,
-      total_donated: 1000 - wallet,
+      total_donated: cash,
     },
   });
   donors.push(donor.id);
@@ -72,7 +90,7 @@ async function fixture(pledge: number | null = 1000, wallet = 0, balance = 100) 
     data: {
       donor_id: donor.id,
       external_id: crypto.randomUUID(),
-      amount_cents: 1000 - wallet,
+      amount_cents: cash,
       pledge_amount_cents: pledge,
       wallet_applied_cents: wallet,
     },
@@ -86,14 +104,14 @@ async function fixture(pledge: number | null = 1000, wallet = 0, balance = 100) 
       donor_id: donor.id,
       donation_id: donation.id,
       reward_id: reward.id,
-      amount_cents: 1000 - wallet,
+      amount_cents: cash,
     },
   });
   const poll = await prisma.poll.create({
     data: {
       title: 'Poll',
-      total_votes_cents: 1000,
-      options: { create: { label: 'A', votes_cents: 1000 } },
+      total_votes_cents: pollCents,
+      options: { create: { label: 'A', votes_cents: pollCents } },
     },
     include: { options: true },
   });
@@ -104,15 +122,25 @@ async function fixture(pledge: number | null = 1000, wallet = 0, balance = 100) 
       donation_id: donation.id,
       poll_id: poll.id,
       poll_option_id: poll.options[0]!.id,
-      amount_cents: 1000,
+      amount_cents: pollCents,
     },
   });
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal', target_cents: 1000, current_cents: 1100, is_complete: true },
+    data: {
+      title: 'Goal',
+      target_cents: goalTarget,
+      current_cents: goalProgress,
+      is_complete: true,
+    },
   });
   goals.push(goal.id);
   const contribution = await prisma.fundContribution.create({
-    data: { donor_id: donor.id, donation_id: donation.id, goal_id: goal.id, amount_cents: 1000 },
+    data: {
+      donor_id: donor.id,
+      donation_id: donation.id,
+      goal_id: goal.id,
+      amount_cents: goalCents,
+    },
   });
   return { donor, donation, reward, claim, poll, vote, goal, contribution };
 }
@@ -188,7 +216,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   ])(
     'chargeback returns original W minus grants, capped at available ($delta)',
     async ({ wallet, prior, balance, expected, delta }) => {
-      const f = await fixture(1000, wallet, balance);
+      const f = await fixture({
+        pledge: 1000,
+        wallet,
+        balance,
+        cash: 1000 - wallet,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       await prisma.donation.update({
         where: { id: f.donation.id },
         data: { wallet_credit_granted_cents: prior, failed_payment_wallet_credit_cents: prior },
@@ -259,7 +296,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['donor', 'auto', 'moderator'])(
     'per-item %s rows return category credit or computed Unused, never Wallet',
     async (source) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       await prisma.pollVote.update({
         where: { id: f.vote.id },
         data: {
@@ -310,7 +356,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   ])(
     'Wallet refund max rule retains $retained and subtracts $prior prior grants',
     async ({ retained, prior, delta }) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       await prisma.donation.update({
         where: { id: f.donation.id },
         data: { wallet_credit_granted_cents: prior, failed_payment_wallet_credit_cents: prior },
@@ -367,7 +422,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   ])(
     'concurrent pooled $source $kind reversals preserve provenance and grant once',
     async ({ kind, source, category }) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       const { native, tiltify } = await route(f.donation.id);
       if (kind === 'vote')
         await prisma.pollVote.update({
@@ -416,7 +480,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['REFUNDED', 'CHARGEBACK'])(
     'legacy %s uses the sum of live linked rows, not Pools or the live reward price',
     async (action) => {
-      const f = await fixture(null, 0, 50);
+      const f = await fixture({
+        pledge: null,
+        wallet: 0,
+        balance: 50,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       await prisma.rewardClaim.update({
         where: { id: f.claim.id },
         data: { amount_cents: 200, status: 'FULFILLED' },
@@ -441,7 +514,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['claim', 'vote', 'contribution'])(
     'blocks charged-back %s reverse-spend without repairing terminal history',
     async (kind) => {
-      const f = await fixture(null);
+      const f = await fixture({
+        pledge: null,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       await prisma.donation.update({
         where: { id: f.donation.id },
         data: { status: 'CHARGEBACK' },
@@ -464,7 +546,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   );
 
   it('a retained shipped claim marked pending after Wallet refund returns recorded reward Pool credit', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      pledge: 1000,
+      wallet: 0,
+      balance: 100,
+      cash: 1000,
+      pollCents: 1000,
+      goalCents: 1000,
+      goalTarget: 1000,
+      goalProgress: 1100,
+    });
     await prisma.rewardClaim.update({
       where: { id: f.claim.id },
       data: { status: 'FULFILLED', amount_cents: 600 },
@@ -486,7 +577,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   });
 
   it('legacy chargeback returns the linked Wallet-funded excess when live allocations exceed new money', async () => {
-    const f = await fixture(null);
+    const f = await fixture({
+      pledge: null,
+      wallet: 0,
+      balance: 100,
+      cash: 1000,
+      pollCents: 1000,
+      goalCents: 1000,
+      goalTarget: 1000,
+      goalProgress: 1100,
+    });
     await prisma.rewardClaim.update({ where: { id: f.claim.id }, data: { amount_cents: 400 } });
     await prisma.pollVote.update({ where: { id: f.vote.id }, data: { amount_cents: 600 } });
     await prisma.fundContribution.update({
@@ -503,7 +603,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   });
 
   it('safe accounting derives ended-category credit without transfers and keeps reward credit reserved', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      pledge: 1000,
+      wallet: 0,
+      balance: 100,
+      cash: 1000,
+      pollCents: 1000,
+      goalCents: 1000,
+      goalTarget: 1000,
+      goalProgress: 1100,
+    });
     const { event } = await route(f.donation.id);
     await withWebhooks(async (tx, _emit, publisher) => {
       await reverseSpendTx(tx, f.donor.id, 'claim', f.claim.id, 'admin', publisher);
@@ -538,7 +647,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   });
 
   it('REQUESTED Payment refund blocks every conflicting mutation and zero money blocks chargeback', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      pledge: 1000,
+      wallet: 0,
+      balance: 100,
+      cash: 1000,
+      pollCents: 1000,
+      goalCents: 1000,
+      goalTarget: 1000,
+      goalProgress: 1100,
+    });
     await prisma.paymentRefund.create({
       data: {
         donation_id: f.donation.id,
@@ -571,7 +689,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['REFUNDED', 'CHARGEBACK'])(
     'concurrent %s reverses all sources once and queues live-only full state atomically',
     async (action) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       const { native, tiltify } = await route(f.donation.id);
       await prisma.pollVote.update({ where: { id: f.vote.id }, data: { source: 'auto' } });
       await prisma.fundContribution.update({
@@ -618,7 +745,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['REFUNDED', 'CHARGEBACK'])(
     'a competing item reversal and %s cannot mint extra Wallet money',
     async (action) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       const results = await Promise.allSettled([
         withWebhooks((tx, _emit, publisher) =>
           reverseSpendTx(tx, f.donor.id, 'vote', f.vote.id, 'admin', publisher),
@@ -644,7 +780,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['REFUNDED', 'CHARGEBACK'])(
     'a later %s uses reduced D and only the remaining donation money',
     async (action) => {
-      const f = await fixture(1000, 400);
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 400,
+        balance: 100,
+        cash: 600,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       const { tiltify } = await route(f.donation.id);
       // An earlier accepted Payment refund removed 200 cash and shrank the Pools.
       await prisma.donation.update({
@@ -677,7 +822,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   it.each(['REFUNDED', 'CHARGEBACK', 'item'])(
     'late SQL failure rolls back %s allocations, credit, tallies, stock, flags and queued messages',
     async (action) => {
-      const f = await fixture();
+      const f = await fixture({
+        pledge: 1000,
+        wallet: 0,
+        balance: 100,
+        cash: 1000,
+        pollCents: 1000,
+        goalCents: 1000,
+        goalTarget: 1000,
+        goalProgress: 1100,
+      });
       const { native, tiltify } = await route(f.donation.id);
       if (action === 'CHARGEBACK')
         await prisma.rewardClaim.update({
@@ -726,7 +880,16 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
   );
 
   it('Wallet refund returns D=$10, not the $30 backed allocations, with money unchanged', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      pledge: 1000,
+      wallet: 0,
+      balance: 100,
+      cash: 1000,
+      pollCents: 1000,
+      goalCents: 1000,
+      goalTarget: 1000,
+      goalProgress: 1100,
+    });
     const result = await status(f.donation.id, 'REFUNDED');
     expect(result).toMatchObject({
       status: 'REFUNDED',

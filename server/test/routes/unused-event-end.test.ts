@@ -14,7 +14,7 @@ const events: string[] = [],
   donors: string[] = [],
   polls: string[] = [];
 const admin = 'Bearer key_admin_test-admin-key';
-async function fixture(role = 'MODERATOR') {
+async function fixture({ role, pledge }: Readonly<{ role: string; pledge: number }>) {
   const token = crypto.randomUUID();
   const staff = await prisma.donor.create({
     data: {
@@ -40,8 +40,8 @@ async function fixture(role = 'MODERATOR') {
     data: {
       donor_id: donor.id,
       external_id: crypto.randomUUID(),
-      amount_cents: 25,
-      pledge_amount_cents: 25,
+      amount_cents: pledge,
+      pledge_amount_cents: pledge,
       comment: 'choice',
       channel_id: channel.id,
       event_id: event.id,
@@ -68,7 +68,7 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 it.each(['DONOR', 'anonymous'])('%s cannot access any new staff endpoint', async (role) => {
-  const f = await fixture('DONOR');
+  const f = await fixture({ role: 'DONOR', pledge: 25 });
   const auth = role === 'anonymous' ? {} : { Authorization: `Bearer ${f.token}` };
   const expected = role === 'anonymous' ? 401 : 403;
   const responses = [
@@ -95,7 +95,7 @@ it.each(['DONOR', 'anonymous'])('%s cannot access any new staff endpoint', async
   expect(responses.map((r) => r.status)).toEqual(Array(8).fill(expected));
 });
 it('operational key assignments attribute moderator fallback; admin session end/undo is audited', async () => {
-  const f = await fixture('ADMIN');
+  const f = await fixture({ role: 'ADMIN', pledge: 25 });
   const assigned = await request(app)
     .post(`/api/moderator/donations/${f.donation.id}/unused-pool-money`)
     .set('Authorization', admin)
@@ -122,7 +122,7 @@ it('operational key assignments attribute moderator fallback; admin session end/
   expect(undone.body.end_undone_by).toBe(f.staff.email);
 });
 it('rejects unsupported categories and stale amounts without leaking donor identity', async () => {
-  const f = await fixture();
+  const f = await fixture({ role: 'MODERATOR', pledge: 25 });
   const response = await request(app)
     .post(`/api/moderator/donations/${f.donation.id}/unused-pool-money`)
     .set('Authorization', admin)
@@ -137,7 +137,7 @@ it('rejects unsupported categories and stale amounts without leaking donor ident
 });
 
 it('moderator list/picker/assign/undo are safe and session attribution is not the donor email', async () => {
-  const f = await fixture();
+  const f = await fixture({ role: 'MODERATOR', pledge: 25 });
   const auth = `Bearer ${f.token}`;
   const list = await request(app)
     .get('/api/moderator/unused-pool-money')
@@ -168,7 +168,7 @@ it('moderator list/picker/assign/undo are safe and session attribution is not th
     expect(JSON.stringify(response.body)).not.toContain(f.donor.email);
 });
 it('only admin can preview/end/undo; shared moderator identity exposes ended state but cannot reactivate', async () => {
-  const f = await fixture();
+  const f = await fixture({ role: 'MODERATOR', pledge: 25 });
   for (const path of ['end', 'undo-end']) {
     expect(
       (

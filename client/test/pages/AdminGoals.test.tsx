@@ -29,17 +29,6 @@ const goal = {
 describe('AdminGoals', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getReversalPreview.mockResolvedValue({
-      destinations: [
-        {
-          destination: 'Pool credit',
-          category: 'goal',
-          donation_id: 'd1',
-          credit_id: null,
-          amount_cents: 750,
-        },
-      ],
-    });
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal(
       'confirm',
@@ -86,6 +75,17 @@ describe('AdminGoals', () => {
   });
 
   it('deletes a goal after confirmation', async () => {
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'goal',
+          donation_id: 'd1',
+          credit_id: null,
+          amount_cents: 750,
+        },
+      ],
+    });
     mocks.adminClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/goals' ? [goal] : [] }),
     );
@@ -117,6 +117,17 @@ describe('AdminGoals', () => {
   });
 
   it('refunds contributions to a goal', async () => {
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'goal',
+          donation_id: 'd1',
+          credit_id: null,
+          amount_cents: 750,
+        },
+      ],
+    });
     mocks.adminClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/goals' ? [goal] : [] }),
     );

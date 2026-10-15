@@ -72,7 +72,7 @@ async function messages(destinationId: string) {
   }));
 }
 
-async function pooledWriteIn() {
+async function pooledWriteIn({ pledge, directed }: Readonly<{ pledge: number; directed: number }>) {
   const context = await fixture();
   const poll = await prisma.poll.create({
     data: {
@@ -88,17 +88,17 @@ async function pooledWriteIn() {
       kind: 'POLL_CUSTOM' as const,
       target_id: poll.id,
       poll_id: poll.id,
-      amount_cents: 100,
+      amount_cents: directed,
       insertion_order: 0,
       data: { label: 'Idea' },
     },
   ];
   const { pledge_token } = await createPledge({
     draft_id: crypto.randomUUID(),
-    pledge_amount_cents: 1000,
+    pledge_amount_cents: pledge,
     channel_id: context.channel.id,
     items: selections,
-    plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+    plan: planPledge({ pledge_amount_cents: pledge, selections, available_wallet_cents: null }),
   });
   pledges.push(pledge_token);
   const externalId = crypto.randomUUID();
@@ -111,7 +111,7 @@ async function pooledWriteIn() {
     externalId,
     email: context.donor.email,
     donorName: 'Reader',
-    amountCents: 1000,
+    amountCents: pledge,
     pledgeToken: pledge_token,
   });
   if ('duplicate' in intake) throw new Error('Unexpected duplicate');
@@ -225,7 +225,10 @@ describe('Donation publisher through the SQLite outbox', () => {
     expect(await messages(tiltify.id)).toEqual([]);
   });
   it('approves the full $1 donor plus $9 auto write-in funding once and publishes one combined vote', async () => {
-    const { donor, poll, entry, option, donation, native, tiltify } = await pooledWriteIn();
+    const { donor, poll, entry, option, donation, native, tiltify } = await pooledWriteIn({
+      pledge: 1000,
+      directed: 100,
+    });
     expect(
       await prisma.pollVote.findMany({
         where: { donation_id: donation.id },
@@ -275,7 +278,10 @@ describe('Donation publisher through the SQLite outbox', () => {
     ]);
   });
   it('reversing one funding row leaves the write-in pending so approval counts all remaining live funding', async () => {
-    const { donor, donation, poll, entry, option } = await pooledWriteIn();
+    const { donor, donation, poll, entry, option } = await pooledWriteIn({
+      pledge: 1000,
+      directed: 100,
+    });
     const donorVote = await prisma.pollVote.findFirstOrThrow({
       where: { donation_id: donation.id, source: 'donor' },
     });
@@ -304,7 +310,7 @@ describe('Donation publisher through the SQLite outbox', () => {
     '%s handles every donor and donation funding the pending option',
     async (status) => {
       const { donor, poll, entry, option, donation, native, tiltify, channel } =
-        await pooledWriteIn();
+        await pooledWriteIn({ pledge: 1000, directed: 100 });
       const second = await intakeDonation({
         source: 'admin',
         externalId: crypto.randomUUID(),
@@ -361,7 +367,10 @@ describe('Donation publisher through the SQLite outbox', () => {
   ] as const)(
     'pooled moderation rechecks all funding when %s queues before %s',
     async (firstStatus, secondStatus) => {
-      const { donor, poll, entry, option, native, tiltify } = await pooledWriteIn();
+      const { donor, poll, entry, option, native, tiltify } = await pooledWriteIn({
+        pledge: 1000,
+        directed: 100,
+      });
       const beforeNative = await messages(native.id);
       const beforeTiltify = await messages(tiltify.id);
       let release!: () => void;
@@ -450,7 +459,10 @@ describe('Donation publisher through the SQLite outbox', () => {
   );
 
   it('rolls back every pooled rejection credit and funding row when the second category credit write fails', async () => {
-    const { donor, poll, entry, option, native, tiltify } = await pooledWriteIn();
+    const { donor, poll, entry, option, native, tiltify } = await pooledWriteIn({
+      pledge: 1000,
+      directed: 100,
+    });
     const beforeNative = await messages(native.id);
     const beforeTiltify = await messages(tiltify.id);
     await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_pooled_rejection BEFORE INSERT ON PoolCredit

@@ -15,6 +15,7 @@ import { isStripeConfigured, createCheckoutSession, pledgeCheckoutRequest } from
 import type Stripe from 'stripe';
 import { intakeDonation } from './donation.js';
 import { PLEDGE_TTL_MS } from '../config.js';
+import { textWordTokens } from './blockedWords.js';
 
 export interface PledgeItemInput {
   kind: PledgeItemKind;
@@ -126,7 +127,7 @@ async function cleanText(tx: Prisma.TransactionClient, value: unknown, label: st
   if (typeof value !== 'string') throw httpError(400, `${label} must be text`);
   const text = value.trim();
   if (text.length > max) throw httpError(400, `${label} exceeds maximum of ${max} characters`);
-  const words = new Set(text.toLowerCase().match(/\b\w+\b/g) ?? []);
+  const words = textWordTokens(text);
   for (const blocked of await tx.blockedWord.findMany()) {
     if (words.has(blocked.word.toLowerCase())) {
       throw httpError(400, `Entry contains blocked word: "${blocked.word}"`);

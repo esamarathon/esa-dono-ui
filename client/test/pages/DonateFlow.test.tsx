@@ -72,7 +72,7 @@ const reward: Reward = {
   image_url: '/reward.png',
 };
 const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
-function saved(overrides: Partial<DraftPledge> = {}): DraftPledge {
+function saved(overrides: Readonly<Partial<DraftPledge>> = {}): DraftPledge {
   return {
     id: 'draft-one',
     updatedAt: Date.now(),
@@ -92,7 +92,7 @@ function saved(overrides: Partial<DraftPledge> = {}): DraftPledge {
 function save(d: DraftPledge) {
   localStorage.setItem('donation_draft_v1', JSON.stringify(d));
 }
-function payment(overrides: Partial<PledgeResult> = {}): PledgeResult {
+function payment(overrides: Readonly<Partial<PledgeResult>> = {}): PledgeResult {
   return {
     format: 'POOLED',
     draft_id: 'draft-one',
@@ -240,6 +240,7 @@ describe('amount-first donate through the routed flow', () => {
   it('shows donor base plus locked proportional auto rows and live default goal preview', async () => {
     save(
       saved({
+        amountCents: 1000,
         selections: [
           {
             kind: 'POLL_VOTE',
@@ -282,7 +283,7 @@ describe('amount-first donate through the routed flow', () => {
       fund_contributions: [],
       custom_entries: [],
     });
-    save(saved());
+    save(saved({ amountCents: 1000 }));
     renderAt();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'confirm & pay $0.50' })).toBeEnabled(),
@@ -308,6 +309,7 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(getRewards).mockResolvedValue([{ ...reward, type: 'PHYSICAL' }]);
     save(
       saved({
+        amountCents: 1000,
         selections: [
           {
             kind: 'REWARD',
@@ -335,6 +337,7 @@ describe('amount-first donate through the routed flow', () => {
   it('uses pooled donor plus auto amounts in poll and goal impact previews', async () => {
     save(
       saved({
+        amountCents: 1000,
         lastStep: 'browse',
         tab: 'polls',
         selections: [
@@ -376,6 +379,7 @@ describe('amount-first donate through the routed flow', () => {
   it('includes an auto-approved write-in in the poll impact denominator', async () => {
     save(
       saved({
+        amountCents: 1000,
         lastStep: 'browse',
         tab: 'polls',
         selections: [
@@ -413,7 +417,7 @@ describe('amount-first donate through the routed flow', () => {
   });
 
   it('requires explicit reconfirmation of a corrected server plan, with no automatic second checkout', async () => {
-    save(saved());
+    save(saved({ amountCents: 1000 }));
     const corrected = planPledge({
       pledge_amount_cents: 1000,
       selections: [],
@@ -565,7 +569,20 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByText(/Checking payment before loading/)).toBeInTheDocument();
     expect(getRewards).not.toHaveBeenCalled();
     expect(getChannels).not.toHaveBeenCalled();
-    await act(async () => pending.resolve(payment()));
+    await act(async () =>
+      pending.resolve(
+        payment({
+          pledge_amount_cents: 2500,
+          wallet_applied_cents: 0,
+          new_money_cents: 2500,
+          plan: planPledge({
+            pledge_amount_cents: 2500,
+            available_wallet_cents: null,
+            selections: [],
+          }),
+        }),
+      ),
+    );
     expect(await screen.findByText('Display name: Server name')).toBeInTheDocument();
     expect(screen.getByText('Message: Server message')).toBeInTheDocument();
     expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$25.00');
@@ -643,9 +660,20 @@ describe('amount-first donate through the routed flow', () => {
   });
 
   it('clears only a matching FULFILLED draft and shows confirmation once when resuming', async () => {
-    save(saved({ pendingToken: 'pending-one' }));
+    save(saved({ amountCents: 1000, pendingToken: 'pending-one' }));
     vi.mocked(reconcilePledge).mockResolvedValue(
-      payment({ status: 'FULFILLED', payment_state: 'FULFILLED' }),
+      payment({
+        pledge_amount_cents: 2500,
+        wallet_applied_cents: 0,
+        new_money_cents: 2500,
+        plan: planPledge({
+          pledge_amount_cents: 2500,
+          available_wallet_cents: null,
+          selections: [],
+        }),
+        status: 'FULFILLED',
+        payment_state: 'FULFILLED',
+      }),
     );
     renderAt();
     expect(await screen.findByText('Your $25.00 donation went through.')).toBeInTheDocument();
@@ -895,6 +923,7 @@ describe('amount-first donate through the routed flow', () => {
   it('drops an unavailable Channel own item but keeps shared items and amount, reopening the picker even on its saved slug path', async () => {
     save(
       saved({
+        amountCents: 1000,
         path: '/donate/marathon/main',
         eventSlug: 'marathon',
         selections: [
@@ -946,6 +975,7 @@ describe('amount-first donate through the routed flow', () => {
   it('keeps Channel-switch confirmation and shared selections while dropping only the old Channel items', async () => {
     save(
       saved({
+        amountCents: 1000,
         lastStep: 'browse',
         selections: [
           {
@@ -1011,7 +1041,7 @@ describe('amount-first donate through the routed flow', () => {
 
   it('blocks payment when authenticated Wallet availability cannot be refreshed, and permits it after a successful retry', async () => {
     localStorage.setItem('donor_session_active', '1');
-    save(saved());
+    save(saved({ amountCents: 1000 }));
     vi.mocked(getDonor).mockRejectedValue(new Error('offline'));
     renderAt();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the review');

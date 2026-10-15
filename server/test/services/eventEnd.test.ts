@@ -12,7 +12,7 @@ const events: string[] = [],
   donors: string[] = [],
   polls: string[] = [],
   rewards: string[] = [];
-async function fixture() {
+async function fixture({ pledge, pollCredit }: Readonly<{ pledge: number; pollCredit: number }>) {
   const event = await prisma.event.create({
     data: { name: 'End test', slug: crypto.randomUUID() },
   });
@@ -29,8 +29,8 @@ async function fixture() {
     data: {
       donor_id: donor.id,
       external_id: crypto.randomUUID(),
-      amount_cents: 100,
-      pledge_amount_cents: 100,
+      amount_cents: pledge,
+      pledge_amount_cents: pledge,
       channel_id: channel.id,
       event_id: event.id,
       comment: 'choice',
@@ -47,7 +47,7 @@ async function fixture() {
       donation_id: donation.id,
       poll_id: poll.id,
       poll_option_id: poll.options[0]!.id,
-      amount_cents: 60,
+      amount_cents: pollCredit,
       reversed_at: new Date(),
     },
   });
@@ -55,8 +55,8 @@ async function fixture() {
     data: {
       donation_id: donation.id,
       category: 'poll',
-      amount_cents: 60,
-      remaining_cents: 60,
+      amount_cents: pollCredit,
+      remaining_cents: pollCredit,
       source_vote_id: old.id,
       created_by: 'admin',
     },
@@ -95,7 +95,7 @@ afterEach(async () => {
 afterAll(() => prisma.$disconnect());
 
 it('previews confirmed physical types, CANCELLING claims, distinct donation count and OPEN pledges; REQUESTED blocks End', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
     data: { title: 'Confirmed physical, now digital', cost_cents: 99999, type: 'DIGITAL' },
   });
@@ -165,7 +165,7 @@ it('previews confirmed physical types, CANCELLING claims, distinct donation coun
   await end(f.event.id, f.event.slug);
 });
 it('deactivation alone preserves credit, including reward credit; End and Undo expire/restore it without transfers', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
     data: { title: 'Reward', cost_cents: 999, type: 'DIGITAL' },
   });
@@ -214,7 +214,7 @@ it('deactivation alone preserves credit, including reward credit; End and Undo e
   expect(await prisma.poolCredit.count({ where: { donation_id: f.donation.id } })).toBe(2);
 });
 it('does not classify a later credit-funded claim by the original physical pledge item', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
     data: { title: 'Now digital', cost_cents: 100, type: 'DIGITAL' },
   });
@@ -285,7 +285,7 @@ it('does not classify a later credit-funded claim by the original physical pledg
 });
 
 it('rolls back end state if audit persistence fails', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   await prisma.$executeRawUnsafe(
     `CREATE TRIGGER fail_end_audit BEFORE INSERT ON EventEndAudit WHEN NEW.event_id = '${f.event.id}' BEGIN SELECT RAISE(ABORT, 'late audit failure'); END`,
   );
@@ -298,7 +298,7 @@ it('rolls back end state if audit persistence fails', async () => {
 });
 
 it('blocks Undo only while live post-end assignments consume converted credit, not original unused', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   // Spend only the original 40 cents before end; after end an assignment is
   // affordable without converted credit if the raw grant subsequently clears.
   await end(f.event.id, f.event.slug);
@@ -341,7 +341,7 @@ it('blocks Undo only while live post-end assignments consume converted credit, n
 });
 
 it('explicit end derives conversion, guards reactivation and undo restores credit while inactive with repeated audit', async () => {
-  const f = await fixture();
+  const f = await fixture({ pledge: 100, pollCredit: 60 });
   await updateEvent(f.event.id, { is_active: true });
   await expect(end(f.event.id, f.event.slug)).rejects.toMatchObject({ status: 409 });
   await updateEvent(f.event.id, { is_active: false });

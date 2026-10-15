@@ -9,22 +9,29 @@ import tempfile
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--parent-root', type=pathlib.Path, required=True)
+parser.add_argument('--playwright-root', type=pathlib.Path, help='Private exact-version node_modules for full browser typechecking')
 args = parser.parse_args()
 repo = pathlib.Path(__file__).resolve().parent.parent
 patch = repo / 'scripts/parent-pledge-callers.patch'
-files = ['scripts/e2e-incentives.ts', 'scripts/test-incentives.sh', 'staging/incentive-test.py']
+files = ['scripts/e2e-incentives.ts', 'scripts/test-incentives.sh', 'staging/incentive-test.py',
+         'scripts/e2e-incentives-browser.ts']
 with tempfile.TemporaryDirectory(prefix='caller-patch-') as name:
     root = pathlib.Path(name)
     for file in files:
         target = root / file
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(args.parent_root.resolve() / file, target)
-    check = subprocess.run(['git', 'apply', '--check', str(patch)], cwd=root, capture_output=True)
-    if check.returncode == 0:
-        subprocess.run(['git', 'apply', str(patch)], cwd=root, check=True)
-    else:
-        # An already-applied patch is valid too. Never force over unrelated edits.
-        subprocess.run(['git', 'apply', '--reverse', '--check', str(patch)], cwd=root, check=True)
+    for file in files:
+        # Independently accept original/applied files, including a mixed 3+1 state.
+        command = ['git', 'apply', f'--include={file}']
+        check = subprocess.run([*command, '--check', str(patch)], cwd=root, capture_output=True)
+        if check.returncode == 0:
+            subprocess.run([*command, str(patch)], cwd=root, check=True)
+            print(f'PRIVATE APPLY: {file}', flush=True)
+        else:
+            # Never force over unrelated edits or assume the whole patch is applied.
+            subprocess.run([*command, '--reverse', '--check', str(patch)], cwd=root, check=True)
+            print(f'ALREADY APPLIED: {file}', flush=True)
     assert not (root / '.git').exists()
     subprocess.run(['bash', '-n', str(root / files[1])], check=True)
     python = ast.parse((root / files[2]).read_text())
@@ -153,4 +160,86 @@ console.log('PASS: actual purchase 409 -> canonical D/draft/plan -> exact-token 
     test.write_text(harness + purchase + verify)
     subprocess.run(compiler, check=True)
     subprocess.run(['node', str(test.with_suffix('.mjs'))], check=True)
-    print('PASS: standalone nonrepo Git apply/reverse-check, shell/Python/embedded JS/strict TS syntax; extracted purchase only, no network or container execution')
+    browser = (root / files[3]).read_text()
+    start = browser.index("      const items = label === 'donations'")
+    end = browser.index("      if (label !== 'donations')", start)
+    received = browser[start:end]
+    browser_harness = r'''
+import assert from 'node:assert/strict';
+const label = 'donations';
+const mixed = { rewards: 3, pollNames: ['Poll A', 'Poll B'], goalNames: ['Goal A', 'Goal B'] };
+const report = { fixtures: { goals: [
+  { title: 'Goal A', expectedCents: 643 }, { title: 'Goal B', expectedCents: 857 },
+] } };
+let rows = ['Reward 1', 'Reward 2', 'Reward 3', 'Poll A', 'Poll B', 'Goal A 6.43 USD', 'Goal B 8.57 USD'];
+const locator = (entries: string[]) => ({
+  count: async () => entries.length,
+  innerText: async () => entries.join(' '),
+  filter: ({ hasText }: { hasText: string }) => locator(entries.filter(row => row.includes(hasText))),
+});
+const donation = { locator: (_selector: string) => locator(rows), innerText: async () => rows.join(' ') };
+async function verifyReceived() {
+'''
+    browser_verify = r'''
+}
+await verifyReceived();
+for (const bad of [
+  ['Goal A 3.00 USD', 'Goal B 4.00 USD'],
+  ['Goal A 8.57 USD', 'Goal B 6.43 USD'],
+]) {
+  rows = [...rows.slice(0, 5), ...bad];
+  await assert.rejects(verifyReceived, 'Old or swapped target amounts must fail');
+}
+rows = ['Reward 1', 'Reward 2', 'Reward 3', 'Poll A', 'Goal A 6.43 USD', 'Goal B 8.57 USD'];
+await assert.rejects(verifyReceived, 'Every received incentive remains required');
+console.log('PASS: actual browser received-incentive assertions accept literal 643/857 and reject 3/4, swapped values and a missing item');
+'''
+    test.write_text(browser_harness + received + browser_verify)
+    subprocess.run(compiler, check=True)
+    subprocess.run(['node', str(test.with_suffix('.mjs'))], check=True)
+    assert 'for (const width of [1024, 1500])' in browser, 'Fixed hardware, not unsupported 768px'
+    start = browser.index('        assert.equal(bounds.outer.width')
+    end = browser.index("        const items = page!.locator", start)
+    containment = browser[start:end]
+    bounds_harness = r'''
+import assert from 'node:assert/strict';
+const bounds = {
+  viewport: 1024, outer: { right: 1024, bottom: 600, width: 1024, height: 600 },
+  scrollWidth: 1024, clientWidth: 1024, scrollHeight: 600, clientHeight: 600,
+  main: { top: 0, bottom: 550 }, actions: { top: 550, bottom: 600 }, reload: { top: 550, bottom: 600 }, itemsOutsideCard: 0,
+};
+function verifyBounds() {
+'''
+    bounds_verify = r'''
+}
+verifyBounds();
+for (const mutate of [
+  () => bounds.outer.width = 768,
+  () => bounds.outer.height = 700,
+  () => bounds.scrollWidth = 1025 + 2,
+  () => bounds.scrollHeight = 603,
+  () => bounds.itemsOutsideCard = 1,
+  () => bounds.main.bottom = 553,
+  () => bounds.actions.bottom = 603,
+]) {
+  const original = structuredClone(bounds);
+  mutate(); assert.throws(verifyBounds);
+  Object.assign(bounds, original);
+}
+console.log('PASS: actual fixed-hardware containment assertions retain overflow/overlap/item/control guards');
+'''
+    test.write_text(bounds_harness + containment + bounds_verify)
+    subprocess.run(compiler, check=True)
+    subprocess.run(['node', str(test.with_suffix('.mjs'))], check=True)
+    if args.playwright_root:
+        modules = root / 'node_modules'
+        modules.mkdir()
+        for package in ['playwright', 'playwright-core']:
+            (modules / package).symlink_to(args.playwright_root.resolve() / package, target_is_directory=True)
+        subprocess.run([str(repo / 'node_modules/.bin/tsc'), '--noEmit', '--strict', '--skipLibCheck',
+                        '--target', 'ES2023', '--module', 'ESNext', '--moduleResolution', 'Bundler', '--types', 'node',
+                        '--typeRoots', str(repo / 'node_modules/@types'), str(root / files[3])], check=True)
+        print('PASS: full browser strict typecheck with supplied real Playwright types')
+    else:
+        print('BOUNDARY: full browser typecheck needs --playwright-root with runtime-matching real types')
+    print('PASS: four-file private mixed-state Git apply/reverse-check, shell/Python/embedded JS/strict TS and extracted caller/browser assertions; no network, browser or container execution')

@@ -5,7 +5,6 @@ import type {
   AdminDonorList,
   AdminDonorWallet,
   Event,
-  Pledge,
   RefundResult,
   ReversalPreview,
   WebhookDelivery,
@@ -26,12 +25,6 @@ adminClient.interceptors.request.use((config) => {
   }
   return config;
 });
-
-/** Backend operation for the staff Check Stripe action (#193 owns its page). */
-export async function checkPledgeStripe(id: string): Promise<Pledge> {
-  const { data } = await adminClient.post(`/pledges/${id}/check-stripe`);
-  return data;
-}
 
 export async function getDonors(q = '', offset = 0): Promise<AdminDonorList> {
   const { data } = await adminClient.get('/donors', { params: { q, offset } });
