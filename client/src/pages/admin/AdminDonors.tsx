@@ -8,6 +8,7 @@ import {
   toggleDonorFreeze,
   adjustDonorBalance,
   reverseDonorSpend,
+  getReversalPreview,
   setDonorRole,
   sweepCredits,
   type SweepCreditsResult,
@@ -16,7 +17,8 @@ import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { apiErrorMessage, type AdminDonorSummary, type AdminDonorWallet } from '../../types';
-import { sanitizeMoneyInput } from '../../utils/money';
+import { sanitizeMoneyInput, reversalText } from '../../utils/money';
+import { NotMoneyNote } from '../../components/StaffAmounts';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -163,9 +165,19 @@ export default function AdminDonors() {
   };
 
   const handleReverse = async (spend_type: string, spend_id: string) => {
-    if (!window.confirm(`Reverse this ${spend_type}? This restores the balance.`)) return;
-    await reverseDonorSpend(selected!.id, spend_type, spend_id);
-    openWallet({ id: selected!.id });
+    setError('');
+    try {
+      const preview = await getReversalPreview(`/donors/${selected!.id}/reverse-spend-preview`, {
+        spend_type,
+        spend_id,
+      });
+      if (!window.confirm(`Reverse this ${spend_type}? Server preview:\n${reversalText(preview)}`))
+        return;
+      await reverseDonorSpend(selected!.id, spend_type, spend_id);
+      openWallet({ id: selected!.id });
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Cannot reverse this allocation'));
+    }
   };
 
   const handleRoleChange = async (role: 'USER' | 'MODERATOR' | 'ADMIN') => {
@@ -243,7 +255,8 @@ export default function AdminDonors() {
                 >
                   <p className="font-data font-bold text-sm truncate text-off-white">{d.email}</p>
                   <p className="font-data text-xs text-off-white/55 mt-1">
-                    {fmt(d.total_donated)} donated &middot; {fmt(d.balance_remaining)} balance
+                    {fmt(d.total_donated)} donated money &middot; {fmt(d.balance_remaining)} Wallet
+                    credit available
                   </p>
                   {d.is_frozen && (
                     <span className="font-data text-xs font-bold" style={{ color: 'var(--red)' }}>
@@ -271,17 +284,24 @@ export default function AdminDonors() {
                 <LoadingSpinner />
               ) : wallet ? (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4">
+                  <NotMoneyNote />
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card className="text-center">
-                      <p className="font-data text-xs text-off-white/55">total donated</p>
+                      <p className="font-data text-xs text-off-white/55">total donated money</p>
                       <p className="font-display text-2xl text-d-yellow">
                         {fmt(wallet.total_donated)}
                       </p>
                     </Card>
                     <Card className="text-center">
-                      <p className="font-data text-xs text-off-white/55">balance</p>
-                      <p className="font-display text-2xl text-d-yellow">
+                      <p className="font-data text-xs text-off-white/55">Wallet credit available</p>
+                      <p className="font-display text-2xl text-off-white">
                         {fmt(wallet.balance_remaining)}
+                      </p>
+                    </Card>
+                    <Card className="text-center">
+                      <p className="font-data text-xs text-off-white/55">Wallet credit held</p>
+                      <p className="font-display text-2xl text-off-white">
+                        {fmt(wallet.balance_held_cents ?? 0)}
                       </p>
                     </Card>
                     <Card className="text-center">
@@ -318,10 +338,27 @@ export default function AdminDonors() {
                       onClick={() => setModal({ type: 'adjust' })}
                       className="btrl-button btrl-button-accent"
                     >
-                      adjust balance
+                      adjust Wallet credit
                     </button>
                   </div>
 
+                  <section className="space-y-2">
+                    <h3 className="font-display text-2xl uppercase">Pool credit (read-only)</h3>
+                    {wallet.pool_credits?.events.map((summary) => (
+                      <div key={summary.event.id} className="btrl-panel p-3">
+                        <h4>
+                          {summary.event.name} {summary.event.ended_at && '(ended)'}
+                        </h4>
+                        {(['reward', 'poll', 'goal'] as const).map((category) => (
+                          <p key={category}>
+                            {category}: available {fmt(summary.available_cents[category])} ·
+                            recorded outstanding {fmt(summary.outstanding_cents[category])}{' '}
+                            {summary.reasons[category]}
+                          </p>
+                        ))}
+                      </div>
+                    ))}
+                  </section>
                   <div>
                     <h3 className="font-display text-2xl uppercase mt-6 mb-3">donation history</h3>
                     {(wallet.donations?.length ?? 0) > 0 ? (
@@ -370,6 +407,7 @@ export default function AdminDonors() {
                                 <span className="font-data font-bold text-off-white">
                                   {c.reward?.title || 'Unknown'}
                                 </span>
+                                <SpendSource row={c} />
                                 <span
                                   className={`ml-2 font-mono text-sm px-1.5 py-0.5 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : c.status === 'REVERSED' ? 'text-red' : 'text-d-yellow'}`}
                                   style={{
@@ -386,10 +424,17 @@ export default function AdminDonors() {
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className="font-data text-off-white/55">
-                                  -{fmt(c.reward?.cost_cents || 0)}
+                                  {fmt(c.amount_cents)} recorded (price now{' '}
+                                  {fmt(c.reward?.cost_cents ?? 0)})
                                 </span>
                                 {c.status !== 'REVERSED' && (
                                   <button
+                                    disabled={c.status !== 'PENDING'}
+                                    title={
+                                      c.status !== 'PENDING'
+                                        ? 'Only pending claims can be reversed. Mark fulfilled claims pending first.'
+                                        : undefined
+                                    }
                                     onClick={() => handleReverse('claim', c.id)}
                                     className="font-mono text-sm hover:underline"
                                     style={{ color: 'var(--red)' }}
@@ -417,8 +462,9 @@ export default function AdminDonors() {
                             >
                               <div>
                                 <span className="font-data text-off-white">
-                                  vote &middot; {fmt(v.amount_cents)}
+                                  vote allocated &middot; {fmt(v.amount_cents)}
                                 </span>
+                                <SpendSource row={v} />
                                 {v.reversed_at && (
                                   <span
                                     className="ml-2 font-mono text-sm"
@@ -456,8 +502,10 @@ export default function AdminDonors() {
                             >
                               <div>
                                 <span className="font-data text-off-white">
-                                  {c.goal?.title || 'Unknown'} &middot; {fmt(c.amount_cents)}
+                                  {c.goal?.title || 'Unknown'} allocated &middot;{' '}
+                                  {fmt(c.amount_cents)}
                                 </span>
+                                <SpendSource row={c} />
                                 {c.reversed_at && (
                                   <span
                                     className="ml-2 font-mono text-sm"
@@ -492,7 +540,7 @@ export default function AdminDonors() {
                   {(wallet.balance_adjustments?.length ?? 0) > 0 && (
                     <div>
                       <h3 className="font-display text-2xl uppercase mt-6 mb-3">
-                        balance adjustments
+                        Wallet credit adjustments
                       </h3>
                       <div className="space-y-2">
                         {wallet.balance_adjustments!.map((a) => (
@@ -501,16 +549,13 @@ export default function AdminDonors() {
                             className="btrl-panel p-3 flex justify-between items-center text-sm"
                           >
                             <div>
-                              <span
-                                className="font-data font-bold"
-                                style={{
-                                  color: a.amount_cents > 0 ? 'var(--green)' : 'var(--red)',
-                                }}
-                              >
-                                {a.amount_cents > 0 ? '+' : ''}
+                              <span className="font-data font-bold text-off-white">
+                                Wallet credit change: {a.amount_cents > 0 ? '+' : ''}
                                 {fmt(a.amount_cents)}
                               </span>
-                              <span className="ml-2 font-data text-off-white/55">{a.type}</span>
+                              <span className="ml-2 font-data text-off-white/55">
+                                {a.type === 'REFUND' ? 'REFUND (old)' : a.type}
+                              </span>
                               {a.reason && (
                                 <span className="ml-2 font-body text-off-white/55">
                                   &mdash; {a.reason}
@@ -518,7 +563,7 @@ export default function AdminDonors() {
                               )}
                             </div>
                             <span className="font-mono text-xs text-off-white/55">
-                              balance: {fmt(a.balance_after_cents)}
+                              available Wallet credit after: {fmt(a.balance_after_cents)}
                             </span>
                           </div>
                         ))}
@@ -533,7 +578,7 @@ export default function AdminDonors() {
       )}
 
       {modal?.type === 'adjust' && (
-        <Modal title="adjust balance" onClose={() => setModal(null)}>
+        <Modal title="adjust Wallet credit" onClose={() => setModal(null)}>
           <AdjustBalanceForm onSubmit={handleAdjust} onCancel={() => setModal(null)} />
         </Modal>
       )}
@@ -576,13 +621,15 @@ export default function AdminDonors() {
         <Modal title="bulk credit sweep" onClose={() => setModal(null)}>
           <div className="space-y-3 text-sm">
             <p className="font-body text-off-white/70">
-              Zeros the wallet balance for every donor with a positive balance, optionally limited
-              to a balance range. Preview first — nothing is written until you confirm.
+              Zeros available Wallet credit only, optionally limited to an available-credit range.
+              Held Wallet credit and every category's Pool credit remain intact. Preview first —
+              nothing is written until you confirm.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block font-data font-bold text-xs mb-1 text-off-white">
-                  min balance <span className="text-off-white/40 font-normal">(optional)</span>
+                  min available Wallet credit{' '}
+                  <span className="text-off-white/40 font-normal">(optional)</span>
                 </label>
                 <input
                   className="w-full px-3 py-2 text-sm"
@@ -596,7 +643,8 @@ export default function AdminDonors() {
               </div>
               <div>
                 <label className="block font-data font-bold text-xs mb-1 text-off-white">
-                  max balance <span className="text-off-white/40 font-normal">(optional)</span>
+                  max available Wallet credit{' '}
+                  <span className="text-off-white/40 font-normal">(optional)</span>
                 </label>
                 <input
                   className="w-full px-3 py-2 text-sm"
@@ -612,7 +660,7 @@ export default function AdminDonors() {
 
             {sweepResult ? (
               <div className="btrl-panel p-3" style={{ background: 'rgba(92,189,125,.16)' }}>
-                <p className="font-data font-bold" style={{ color: 'var(--green)' }}>
+                <p className="font-data font-bold text-off-white">
                   Swept {sweepResult.donor_count} donor{sweepResult.donor_count !== 1 ? 's' : ''} —{' '}
                   {fmt(sweepResult.total_cents)} zeroed.
                 </p>
@@ -621,11 +669,11 @@ export default function AdminDonors() {
               <div className="btrl-panel p-3">
                 <p className="font-data text-off-white mb-2">
                   This will zero{' '}
-                  <span className="font-bold text-d-yellow">
+                  <span className="font-bold text-off-white">
                     {sweepPreview.donor_count} donor{sweepPreview.donor_count !== 1 ? 's' : ''}
                   </span>{' '}
                   totaling{' '}
-                  <span className="font-bold text-d-yellow">{fmt(sweepPreview.total_cents)}</span>.
+                  <span className="font-bold text-off-white">{fmt(sweepPreview.total_cents)}</span>.
                 </p>
                 {sweepPreview.sample && sweepPreview.sample.length > 0 && (
                   <div className="space-y-1 mb-2">
@@ -675,6 +723,22 @@ export default function AdminDonors() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function SpendSource({ row }: { row: import('../../types').SpendRecord }) {
+  const ids = row.funding_donation_ids ?? (row.donation_id ? [row.donation_id] : []);
+  return (
+    <p className="font-data text-xs text-off-white/55">
+      source: {row.source ?? 'donor'}{' '}
+      {ids.length
+        ? ids.map((id) => (
+            <a key={id} href={`/admin/donations/${id}`} className="underline mr-2">
+              Donation {id}
+            </a>
+          ))
+        : '· legacy Wallet (unlinked)'}
+    </p>
   );
 }
 
@@ -795,9 +859,8 @@ function AdjustBalanceForm({
         <label className="block font-data font-bold mb-1 text-off-white">type</label>
         <select className="px-3 py-2 w-full" value={type} onChange={(e) => setType(e.target.value)}>
           <option value="MANUAL">Manual</option>
-          <option value="REFUND">Refund</option>
+
           <option value="FREEZE_ZERO">Freeze Zero</option>
-          <option value="CHARGEBACK">Chargeback</option>
         </select>
       </div>
       <div>

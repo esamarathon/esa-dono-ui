@@ -214,26 +214,8 @@ describe('Admin donor management', () => {
     expect(res.status).toBe(409);
   });
 
-  it('GET /donors/:id returns wallet', async () => {
-    px.donor.findUnique.mockResolvedValue({
-      id: 'd1',
-      email: 'a@b.com',
-      total_donated: 1000,
-      balance_remaining: 500,
-      role: 'USER',
-      is_frozen: false,
-      donations: [],
-      reward_claims: [],
-      poll_votes: [],
-      fund_contributions: [],
-      balance_adjustments: [],
-    });
-
-    const res = await request(createApp()).get('/api/admin/donors/d1').set(auth);
-
-    expect(res.status).toBe(200);
-    expect(res.body.email).toBe('a@b.com');
-  });
+  // GET donor detail now composes real Pool-credit reads. Its positive contract
+  // is covered through SQLite in staff-workflows.test.ts, not accounting-call mocks.
 
   it('POST /donors/:id/revoke-token clears token', async () => {
     px.donor.update.mockResolvedValue({ id: 'd1', email: 'a@b.com', magic_token: null });

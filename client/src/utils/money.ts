@@ -31,3 +31,19 @@ export function sanitizeMoneyInput(value: string, allowNegative = false): string
 
   return negative ? `-${v}` : v;
 }
+
+export function fmt(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+/** Format the server's destinations without recalculating any allocation or credit. */
+export function reversalText(preview: import('../types').ReversalPreview): string {
+  return (
+    preview.destinations
+      .map(
+        (row) =>
+          `+${fmt(row.amount_cents)} ${row.category} ${row.destination}${row.donation_id ? ` of donation ${row.donation_id}` : ''}${row.credit_id ? ` (original grant ${row.credit_id})` : ''}`,
+      )
+      .join('\n') || 'No credit is returned.'
+  );
+}

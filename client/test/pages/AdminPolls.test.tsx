@@ -5,12 +5,14 @@ const mocks = vi.hoisted(() => ({
   adminClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   refundPollOption: vi.fn(),
   refundGoal: vi.fn(),
+  getReversalPreview: vi.fn(),
 }));
 
 vi.mock('../../src/api/admin', () => ({
   default: mocks.adminClient,
   refundPollOption: mocks.refundPollOption,
   refundGoal: mocks.refundGoal,
+  getReversalPreview: mocks.getReversalPreview,
 }));
 
 import AdminPolls from '../../src/pages/admin/AdminPolls';

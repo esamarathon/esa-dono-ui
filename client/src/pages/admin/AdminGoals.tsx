@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import adminClient, { refundGoal } from '../../api/admin';
+import adminClient, { refundGoal, getReversalPreview } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import ProgressBar from '../../components/ProgressBar';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
+import { AllocationSources, GoalDefaults } from '../../components/StaffAmounts';
+import { reversalText } from '../../utils/money';
 import { apiErrorMessage, type Goal, type Channel } from '../../types';
 
 function fmt(cents: number) {
@@ -69,7 +71,10 @@ export default function AdminGoals() {
     setError('');
     try {
       const data = {
-        ...form,
+        title: form.title,
+        description: form.description,
+        channel_id: form.channel_id,
+        is_active: form.is_active,
         target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
       };
       if (modal === 'create') {
@@ -85,24 +90,33 @@ export default function AdminGoals() {
   };
 
   const handleDelete = async (id: string) => {
-    const goal = goals.find((item) => item.id === id);
-    const warning = goal?.current_cents
-      ? `This will refund ${fmt(goal.current_cents)} to donor wallets, deactivate the goal, and preserve contribution history. This cannot be undone.`
-      : 'This will deactivate the goal and preserve contribution history. This cannot be undone.';
-    if (!confirm(`Remove goal?\n\n${warning}`)) return;
-    await adminClient.delete(`/goals/${id}`);
-    await reload();
+    try {
+      const preview = await getReversalPreview(`/goals/${id}/reversal-preview`);
+      if (
+        !confirm(
+          `Reverse contributions and deactivate goal? History stays. This cannot be undone. Server preview:\n${reversalText(preview)}`,
+        )
+      )
+        return;
+      await adminClient.delete(`/goals/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Remove failed'));
+    }
   };
 
   const handleRefund = async (id: string, title: string) => {
-    if (
-      !confirm(`Refund all contributions to "${title}"? This restores each donor's wallet balance.`)
-    )
-      return;
     try {
+      const preview = await getReversalPreview(`/goals/${id}/reversal-preview`);
+      if (
+        !confirm(
+          `Reverse all contributions to "${title}"? Server preview:\n${reversalText(preview)}`,
+        )
+      )
+        return;
       const result = await refundGoal(id);
       alert(
-        `Refunded ${result.refunded_count} contribution(s) totaling ${fmt(result.refunded_cents)}.`,
+        `Reversed ${result.refunded_count} contribution(s), allocated ${fmt(result.refunded_cents)}.`,
       );
       await reload();
     } catch (e) {
@@ -121,6 +135,7 @@ export default function AdminGoals() {
         </button>
       </div>
 
+      {!modal && error && <p role="alert">{error}</p>}
       <div className="space-y-4">
         {goals.map((g) => (
           <Card key={g.id}>
@@ -157,7 +172,7 @@ export default function AdminGoals() {
                   className="font-mono text-sm tracking-wider uppercase hover:text-off-white"
                   style={{ color: 'var(--d-yellow)' }}
                 >
-                  refund contributions
+                  reverse contributions
                 </button>
                 <button
                   onClick={() => handleDelete(g.id)}
@@ -168,9 +183,11 @@ export default function AdminGoals() {
                 </button>
               </div>
             </div>
-            <ProgressBar value={g.current_cents} max={g.target_cents} />
+            <GoalDefaults id={g.id} channels={channels} />
+            <AllocationSources row={g} />
+            <ProgressBar value={g.current_cents} max={g.target_cents} animateOnChange={false} />
             <div className="flex justify-between font-data text-sm text-off-white/55 mt-1">
-              <span>{fmt(g.current_cents)}</span>
+              <span>{fmt(g.current_cents)} allocated</span>
               <span>{fmt(g.target_cents)}</span>
             </div>
           </Card>
@@ -225,19 +242,9 @@ export default function AdminGoals() {
               active
             </label>
           </div>
-          {modal !== 'create' && (
-            <div className="mb-3 flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="goal_complete"
-                checked={form.is_complete ?? false}
-                onChange={(e) => setForm((d) => ({ ...d, is_complete: e.target.checked }))}
-              />
-              <label htmlFor="goal_complete" className="font-data text-sm text-off-white">
-                mark complete
-              </label>
-            </div>
-          )}
+          <p className="font-body text-sm text-off-white/55">
+            Completion is derived from allocated progress. Deactivate to close early.
+          </p>
           {error && (
             <p className="text-sm mb-2" style={{ color: 'var(--red)' }}>
               {error}

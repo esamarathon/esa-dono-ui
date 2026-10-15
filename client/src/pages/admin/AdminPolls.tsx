@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import adminClient, { refundPollOption } from '../../api/admin';
+import adminClient, { refundPollOption, getReversalPreview } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
+import { AllocationSources } from '../../components/StaffAmounts';
+import { reversalText } from '../../utils/money';
 import { apiErrorMessage, type Poll, type Channel } from '../../types';
 
 function fmt(cents: number) {
@@ -107,20 +109,28 @@ export default function AdminPolls() {
   };
 
   const deleteOption = async (id: string, label: string, allocatedCents: number) => {
-    const warning = allocatedCents
-      ? `This will refund ${fmt(allocatedCents)} to donor wallets, remove the option from the poll, and preserve its vote history. This cannot be undone.`
-      : 'Any allocated votes will be refunded to donor wallets; the option will be removed and its vote history preserved. This cannot be undone.';
-    if (!confirm(`Remove option "${label}"?\n\n${warning}`)) return;
-    await adminClient.delete(`/polls/options/${id}`);
-    await reload();
+    try {
+      const preview = await getReversalPreview(`/polls/options/${id}/reversal-preview`);
+      if (
+        !confirm(
+          `Reverse ${fmt(allocatedCents)} allocated votes and remove "${label}"? History stays. This cannot be undone. Server preview:\n${reversalText(preview)}`,
+        )
+      )
+        return;
+      await adminClient.delete(`/polls/options/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Remove failed'));
+    }
   };
 
   const handleRefundOption = async (id: string, label: string) => {
-    if (!confirm(`Refund all votes for "${label}"? This restores each donor's wallet balance.`))
-      return;
     try {
+      const preview = await getReversalPreview(`/polls/options/${id}/reversal-preview`);
+      if (!confirm(`Reverse all votes for "${label}"? Server preview:\n${reversalText(preview)}`))
+        return;
       const result = await refundPollOption(id);
-      alert(`Refunded ${result.refunded_count} vote(s) totaling ${fmt(result.refunded_cents)}.`);
+      alert(`Reversed ${result.refunded_count} vote(s), allocated ${fmt(result.refunded_cents)}.`);
       await reload();
     } catch (e) {
       setError(apiErrorMessage(e, 'Refund failed'));
@@ -150,6 +160,7 @@ export default function AdminPolls() {
         </button>
       </div>
 
+      {!modal && error && <p role="alert">{error}</p>}
       <div className="space-y-4">
         {polls.map((poll) => (
           <Card key={poll.id}>
@@ -160,11 +171,12 @@ export default function AdminPolls() {
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/55">
-                  total votes: {fmt(poll.total_votes_cents)}
+                  allocated: {fmt(poll.allocated_cents ?? poll.total_votes_cents)}
                 </p>
                 <p className="font-data text-xs text-off-white/40">
                   channel: {channelName(poll.channel_id)}
                 </p>
+                <AllocationSources row={poll} />
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
                 </div>
@@ -236,7 +248,7 @@ export default function AdminPolls() {
                           className="font-mono text-sm hover:underline"
                           style={{ color: 'var(--d-yellow)' }}
                         >
-                          refund votes
+                          reverse votes
                         </button>
                         <button
                           onClick={() => deleteOption(opt.id, opt.label, opt.votes_cents)}

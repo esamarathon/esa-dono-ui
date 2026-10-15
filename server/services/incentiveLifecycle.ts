@@ -12,6 +12,61 @@ import {
 
 type IncentiveKind = 'REWARD' | 'POLL' | 'GOAL';
 
+type Tx = Prisma.TransactionClient;
+const MAX_INT = 2147483647; // Prisma Int / SQLite connector representability, not a policy limit.
+function text(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw httpError(400, `${field} must not be empty`);
+  return value.trim();
+}
+function integer(value: unknown, field: string, minimum: number) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < minimum ||
+    value > MAX_INT
+  )
+    throw httpError(
+      400,
+      `${field} must be representable integer cents/units of at least ${minimum}`,
+    );
+}
+async function validateIdentity(
+  tx: Tx,
+  data: { title?: string; channel_id?: string | null },
+  required = false,
+) {
+  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
+  if (required || data.title !== undefined) data.title = text(data.title, 'title');
+  if (data.channel_id !== undefined && data.channel_id !== null) {
+    if (
+      typeof data.channel_id !== 'string' ||
+      !(await tx.channel.count({ where: { id: data.channel_id } }))
+    )
+      throw httpError(400, 'channel_id must identify a Channel or be null');
+  }
+}
+async function protectMove(tx: Tx, kind: IncentiveKind, id: string) {
+  protectHistory(
+    kind === 'REWARD'
+      ? await tx.rewardClaim.count({ where: { reward_id: id } })
+      : kind === 'POLL'
+        ? await tx.pollVote.count({
+            where: { OR: [{ poll_id: id }, { poll_option: { poll_id: id } }] },
+          })
+        : await tx.fundContribution.count({ where: { goal_id: id } }),
+  );
+}
+function validateReward(data: Partial<RewardData>, required = false) {
+  if (required || data.cost_cents !== undefined) integer(data.cost_cents, 'cost_cents', 1);
+  if (data.quantity_total !== undefined && data.quantity_total !== null)
+    integer(data.quantity_total, 'quantity_total', 0);
+}
+function noManualCompletion(data: { is_complete?: unknown }) {
+  if (data.is_complete !== undefined)
+    throw httpError(400, 'Goal completion is derived. Deactivate the goal to close it early.');
+}
+
 function protectHistory(count: number) {
   if (count > 0) throw httpError(409, 'This has allocation history. Deactivate it instead.');
 }
@@ -50,6 +105,8 @@ export async function removeIncentive(kind: IncentiveKind | 'POLL_OPTION', id: s
         if (!(await tx.fundGoal.findUnique({ where: { id } })))
           throw httpError(404, 'Goal not found');
         protectHistory(await tx.fundContribution.count({ where: { goal_id: id } }));
+        if (await tx.channelDefaultGoal.count({ where: { goal_id: id } }))
+          throw httpError(409, 'Remove this goal from its Default goal lists before deleting it.');
         await tx.fundGoal.delete({ where: { id } });
         return null;
       }
@@ -116,6 +173,17 @@ export async function createPoll(
   data: PollData & Pick<Prisma.PollUncheckedCreateInput, 'options'>,
 ) {
   return withWebhooks(async (tx, emit) => {
+    data = { ...data };
+    await validateIdentity(tx, data, true);
+    if (data.options?.create) {
+      const options = Array.isArray(data.options.create)
+        ? data.options.create
+        : [data.options.create];
+      data.options = {
+        ...data.options,
+        create: options.map((option) => ({ ...option, label: text(option.label, 'label') })),
+      };
+    }
     const created = await tx.poll.create({ data, include: { options: true } });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
@@ -130,8 +198,12 @@ export async function createPoll(
 
 export async function updatePoll(id: string, data: Partial<PollData>) {
   return withWebhooks(async (tx, emit) => {
+    data = { ...data };
+    await validateIdentity(tx, data);
     const prior = await tx.poll.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Poll not found');
+    if (data.channel_id !== undefined && data.channel_id !== prior.channel_id)
+      await protectMove(tx, 'POLL', id);
     const updated = await tx.poll.update({ where: { id }, data, include: { options: true } });
     await publishActivation(emit, 'POLL', prior, updated);
     const oldEndsAt = prior.ends_at;
@@ -152,11 +224,15 @@ export async function updatePoll(id: string, data: Partial<PollData>) {
 
 // Option labels have no incentive message type.
 export async function createPollOption(pollId: string, label: string) {
-  return withWebhooks((tx) => tx.pollOption.create({ data: { poll_id: pollId, label } }));
+  return withWebhooks((tx) =>
+    tx.pollOption.create({ data: { poll_id: pollId, label: text(label, 'label') } }),
+  );
 }
 
 export async function updatePollOption(id: string, label: string) {
-  return withWebhooks((tx) => tx.pollOption.update({ where: { id }, data: { label } }));
+  return withWebhooks((tx) =>
+    tx.pollOption.update({ where: { id }, data: { label: text(label, 'label') } }),
+  );
 }
 
 type GoalData = Pick<
@@ -164,9 +240,13 @@ type GoalData = Pick<
   'title' | 'description' | 'target_cents' | 'is_active' | 'channel_id'
 >;
 
-export async function createGoal(data: GoalData) {
+export async function createGoal(data: GoalData & { is_complete?: unknown }) {
   return withWebhooks(async (tx, emit) => {
-    const created = await tx.fundGoal.create({ data });
+    data = { ...data };
+    noManualCompletion(data);
+    await validateIdentity(tx, data, true);
+    integer(data.target_cents, 'target_cents', 1);
+    const created = await tx.fundGoal.create({ data: { ...data, is_complete: undefined } });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
         ...identity('GOAL', created),
@@ -178,11 +258,34 @@ export async function createGoal(data: GoalData) {
   });
 }
 
-export async function updateGoal(id: string, data: Partial<GoalData> & { is_complete?: boolean }) {
+export async function updateGoal(id: string, data: Partial<GoalData> & { is_complete?: unknown }) {
   return withWebhooks(async (tx, emit) => {
+    data = { ...data };
+    noManualCompletion(data);
+    await validateIdentity(tx, data);
+    if (data.target_cents !== undefined) integer(data.target_cents, 'target_cents', 1);
     const prior = await tx.fundGoal.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Goal not found');
-    const updated = await tx.fundGoal.update({ where: { id }, data });
+    if (data.channel_id !== undefined && data.channel_id !== prior.channel_id) {
+      await protectMove(tx, 'GOAL', id);
+      if (
+        data.channel_id !== null &&
+        (await tx.channelDefaultGoal.count({
+          where: { goal_id: id, channel_id: { not: data.channel_id } },
+        }))
+      )
+        throw httpError(409, 'Remove this goal from its Default goal lists before moving it.');
+    }
+    const updated = await tx.fundGoal.update({
+      where: { id },
+      data: {
+        ...data,
+        is_complete: undefined,
+        ...(data.target_cents !== undefined && data.target_cents !== prior.target_cents
+          ? { is_complete: prior.current_cents >= data.target_cents }
+          : {}),
+      },
+    });
     await publishActivation(emit, 'GOAL', prior, updated);
     if (prior.target_cents !== updated.target_cents) {
       await emit('incentive.value_changed', () =>
@@ -213,8 +316,16 @@ type RewardData = Pick<
 
 export async function updateReward(id: string, data: Partial<RewardData>) {
   const { reward, replacedImage } = await withWebhooks(async (tx, emit) => {
+    data = { ...data };
+    await validateIdentity(tx, data);
+    validateReward(data);
     const prior = await tx.reward.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Reward not found');
+    if (
+      (data.channel_id !== undefined && data.channel_id !== prior.channel_id) ||
+      (data.type !== undefined && data.type !== prior.type)
+    )
+      await protectMove(tx, 'REWARD', id);
     const updated = await tx.reward.update({ where: { id }, data });
     await publishActivation(emit, 'REWARD', prior, updated);
     if (prior.cost_cents !== updated.cost_cents) {
@@ -239,6 +350,9 @@ export async function updateReward(id: string, data: Partial<RewardData>) {
 
 export async function createReward(data: RewardData) {
   return withWebhooks(async (tx, emit) => {
+    data = { ...data };
+    await validateIdentity(tx, data, true);
+    validateReward(data, true);
     const created = await tx.reward.create({ data });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
