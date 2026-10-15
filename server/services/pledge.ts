@@ -51,6 +51,9 @@ function pledgePaymentState(pledge: StoredPledge) {
     pledge.status === 'PAYMENT_REVIEW'
   )
     return pledge.status;
+  // A linked legacy receipt records cash, not original incentive fulfillment.
+  // Historical FULFILLED rows keep their outcome; late receipts stay EXPIRED.
+  if (pledge.format === 'LEGACY' && pledge.fulfilled_by_donation_id) return 'LEGACY_PAID';
   if (pledge.non_payment_confirmed_at && pledge.wallet_hold_status !== 'HELD') return 'NON_PAYMENT';
   if (pledge.checkout_session_status === 'complete') return 'PROCESSING';
   if (pledge.checkout_session_status === 'open') return 'OPEN';

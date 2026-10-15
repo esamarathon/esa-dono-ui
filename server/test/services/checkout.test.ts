@@ -569,11 +569,17 @@ describe('checkout lifecycle on real SQLite', () => {
         customer_email: donor.email,
         metadata: { pledge_token: old.pledge_token },
       };
-      await reconcileCheckoutNotification('checkout.session.async_payment_succeeded', facts);
-      await reconcileCheckoutNotification('checkout.session.completed', facts);
+      expect(
+        await reconcileCheckoutNotification('checkout.session.async_payment_succeeded', facts),
+      ).toMatchObject({ status: 'EXPIRED', payment_state: 'LEGACY_PAID' });
+      expect(
+        await reconcileCheckoutNotification('checkout.session.completed', facts),
+      ).toMatchObject({ status: 'EXPIRED', payment_state: 'LEGACY_PAID' });
       expect(await reconcilePledge(old.pledge_token)).toMatchObject({
+        status: 'EXPIRED',
         payment_state: 'LEGACY_PAID',
         can_edit: false,
+        can_continue: false,
         read_only: true,
       });
       const donation = await prisma.donation.findUniqueOrThrow({
@@ -588,7 +594,32 @@ describe('checkout lifecycle on real SQLite', () => {
         donor_name: 'Old name',
         channel_id: channel.id,
       });
+      expect(await getPledge(old.pledge_token)).toMatchObject({
+        status: 'EXPIRED',
+        fulfilled_by_donation_id: donation.id,
+        checkout_session_id: facts.id,
+        payment_status: 'paid',
+      });
+      expect(await prisma.donation.count({ where: { external_id: facts.id } })).toBe(1);
       expect(await prisma.fundContribution.count({ where: { donation_id: donation.id } })).toBe(0);
+      expect(await prisma.pollVote.count({ where: { donation_id: donation.id } })).toBe(0);
+      expect(await prisma.rewardClaim.count({ where: { donation_id: donation.id } })).toBe(0);
+      await expect(
+        intakeDonation({
+          source: 'stripe',
+          externalId: 'cs_different_old',
+          pledgeToken: old.pledge_token,
+          email: donor.email,
+          donorName: 'Copied',
+          amountCents: 1000,
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+      await expect(
+        reconcileCheckoutNotification('checkout.session.completed', {
+          ...facts,
+          id: 'cs_different_old',
+        }),
+      ).rejects.toMatchObject({ status: 409 });
       expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
         balance_remaining: 1025,
         balance_held_cents: 950,
@@ -596,6 +627,92 @@ describe('checkout lifecycle on real SQLite', () => {
       });
     },
   );
+  it('preserves original legacy fulfillment and its allocation history after the deadline', async () => {
+    const { donor, channel } = await pending();
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'Originally fulfilled incentive', target_cents: 10000 },
+    });
+    goals.push(goal.id);
+    const old = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: crypto.randomUUID(),
+        expires_at: new Date(Date.now() + 7200000),
+        total_cents: 1000,
+        channel_id: channel.id,
+        checkout_session_id: 'cs_historical',
+        items: { create: [{ kind: 'GOAL', target_id: goal.id, amount_cents: 1000 }] },
+      },
+    });
+    tokens.push(old.pledge_token);
+    const facts = {
+      id: 'cs_historical',
+      status: 'complete' as const,
+      payment_status: 'paid' as const,
+      amount_total: 1000,
+      customer_email: donor.email,
+      metadata: { pledge_token: old.pledge_token },
+    };
+    await reconcileCheckoutNotification('checkout.session.completed', facts);
+    await prisma.pendingPledge.update({ where: { id: old.id }, data: { expires_at: new Date(0) } });
+    const history = await getPledge(old.pledge_token);
+    expect(history).toMatchObject({ status: 'FULFILLED' });
+    expect(await reconcilePledge(old.pledge_token)).toMatchObject({
+      format: 'LEGACY',
+      status: 'FULFILLED',
+      payment_state: 'FULFILLED',
+    });
+    await reconcileCheckoutNotification('checkout.session.completed', facts);
+    expect(await getPledge(old.pledge_token)).toEqual(history);
+    expect(await prisma.donation.count({ where: { external_id: facts.id } })).toBe(1);
+    expect(
+      await prisma.fundContribution.findMany({
+        where: { donation_id: history.fulfilled_by_donation_id! },
+      }),
+    ).toMatchObject([{ goal_id: goal.id, amount_cents: 1000 }]);
+  });
+
+  it('keeps a previously stored dev LEGACY_PAID receipt readable and idempotent', async () => {
+    const { donor, channel } = await pending();
+    const receipt = await prisma.donation.create({
+      data: { external_id: 'cs_dev_legacy', donor_id: donor.id, amount_cents: 1000 },
+    });
+    const old = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: crypto.randomUUID(),
+        status: 'LEGACY_PAID',
+        expires_at: new Date(0),
+        channel_id: channel.id,
+        checkout_session_id: receipt.external_id,
+        fulfilled_by_donation_id: receipt.id,
+        payment_status: 'paid',
+      },
+    });
+    tokens.push(old.pledge_token);
+    expect(await reconcilePledge(old.pledge_token)).toMatchObject({
+      status: 'LEGACY_PAID',
+      payment_state: 'LEGACY_PAID',
+      read_only: true,
+    });
+    const facts = {
+      source: 'stripe' as const,
+      externalId: receipt.external_id,
+      pledgeToken: old.pledge_token,
+      email: donor.email,
+      donorName: 'Old name',
+      amountCents: 1000,
+    };
+    expect(await intakeDonation(facts)).toEqual({ duplicate: true });
+    await expect(intakeDonation({ ...facts, externalId: 'cs_dev_copied' })).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(await getPledge(old.pledge_token)).toMatchObject({ status: 'LEGACY_PAID' });
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 25,
+      balance_held_cents: 950,
+      total_donated: 0,
+    });
+  });
+
   it.each(['held', 'released-available', 'released-spent'] as const)(
     'handles a literal D1000/W950/cash50 late payment safely (%s)',
     async (funding) => {
