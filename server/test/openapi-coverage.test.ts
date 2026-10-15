@@ -92,6 +92,48 @@ describe('OpenAPI route coverage', () => {
     });
   });
 
+  it('documents the three optional ESA lookup envelopes separately from bare Tiltify DTOs', async () => {
+    const { default: yaml } = await import('js-yaml');
+    const spec = yaml.load(readFileSync(resolve(__dirname, '..', 'openapi.yaml'), 'utf8'));
+    for (const [kind, param, resource] of [
+      ['rewards', 'reward_id', 'Reward'],
+      ['targets', 'target_id', 'Target'],
+      ['polls', 'poll_id', 'Poll'],
+    ]) {
+      expect(spec).toMatchObject({
+        paths: {
+          [`/tiltify/campaign/{id}/lookup/${kind}/{${param}}`]: {
+            get: {
+              responses: {
+                '200': {
+                  content: {
+                    'application/json': {
+                      schema: { $ref: `#/components/schemas/EsaDono${resource}Lookup` },
+                    },
+                  },
+                },
+                '404': { description: expect.any(String) },
+              },
+            },
+          },
+        },
+        components: {
+          schemas: {
+            [`EsaDono${resource}Lookup`]: {
+              type: 'object',
+              required: ['campaign_id', 'incentive'],
+              additionalProperties: false,
+              properties: {
+                campaign_id: { type: 'string', format: 'uuid', nullable: true },
+                incentive: { $ref: `#/components/schemas/Tiltify${resource}` },
+              },
+            },
+          },
+        },
+      });
+    }
+  });
+
   it('every Express route has a corresponding OpenAPI path', async () => {
     const { default: yaml } = await import('js-yaml');
     const specPath = resolve(__dirname, '..', 'openapi.yaml');

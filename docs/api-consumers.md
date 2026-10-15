@@ -21,6 +21,37 @@ Paths below are relative to `/api`.
 - **esa-observability**: scrapes `GET /metrics` (`config/victoriametrics/promscrape.yml`, job
   `dono-backend`). Its README queries `dono_donated_cents_total`. See `docs/webhooks-and-metrics.md`.
 
+## Optional ESA incentive lookup capability (#189)
+
+The Tiltify-compatible API adds only these optional ESA-specific reads (relative to
+`/api/tiltify/`, retaining the trailing slash on the consumer's base URL):
+
+- `GET campaign/:id/lookup/rewards/:reward_id`
+- `GET campaign/:id/lookup/targets/:target_id`
+- `GET campaign/:id/lookup/polls/:poll_id`
+
+A successful response is `{campaign_id: string | null, incentive: <existing bare DTO>}`.
+`campaign_id` is the incentive's **true owning Channel UUID**, or `null` for shared
+incentives, not the requested context. `:id` must resolve to a known Channel or Event,
+including inactive historical identities. An owned incentive must belong to a Channel
+in that same Event; shared incentives are allowed. An unknown context/resource or an
+owner in another Event returns 404. Lookup reads current amounts, active state, stock
+and approved poll options through the same builders as the existing lists/detail.
+No donor email, staff information, claim answers or other private data is returned.
+
+This is an optional ESA capability for Kollekt to resolve cold or stale cross-Channel
+references after pooled allocations. A legacy source or 404 keeps the consumer's old
+behavior; no new configuration, auth or feature flag is required. Keep these envelopes
+separate from ordinary Tiltify models. Consumers must handle globally unique shared
+incentive ids without duplicate inserts and retain the verified owner when resolving
+cross-Channel metadata. Donation source Channel routing, money and ids never change.
+
+Existing Channel lists remain own plus shared; Event incentive lists remain `[]`.
+Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
+Event or another Channel's poll). Nothing changes overlay list scope. The matching
+Kollekt transport/ingestion fix is coordinated separately; this producer addition alone
+does not establish combined-consumer release readiness.
+
 ## Test and staging tooling (parent folder)
 
 | Caller                      | How it runs                                                    | Endpoints                                                                                                                                                                                                                                                                                                                     |
