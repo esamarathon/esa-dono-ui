@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { getDonor } from '../api/donor';
 import { getFeatureFlags } from '../api/featureFlags';
 import { isSessionActive, endSession } from '../utils/authToken';
-import { useCart } from '../context/CartContext';
+import { useDraftPledge } from '../context/DraftPledgeContext';
 import UserMenu from './UserMenu';
 import type { DonorWallet } from '../types';
 
@@ -16,26 +16,15 @@ export default function Navbar() {
   const [auctionsEnabled, setAuctionsEnabled] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { cart, totalCents, toggleDrawer } = useCart();
-
-  // Brief "juice" pop on the cart badge whenever the cart total actually
-  // changes, so adding/removing an item is felt, not just reflected. Skips
-  // the very first render (a cart restored from sessionStorage shouldn't
-  // pop on page load, only on subsequent changes).
-  const [pop, setPop] = useState(false);
-  const prevSignature = useRef<string | null>(null);
-  useEffect(() => {
-    const signature = `${cart.length}:${totalCents}`;
-    if (prevSignature.current === null) {
-      prevSignature.current = signature;
-      return;
-    }
-    if (prevSignature.current === signature) return;
-    prevSignature.current = signature;
-    setPop(true);
-    const timer = setTimeout(() => setPop(false), 400);
-    return () => clearTimeout(timer);
-  }, [cart.length, totalCents]);
+  const { draft } = useDraftPledge();
+  const resume = draft && !location.pathname.startsWith('/donate');
+  const donatePath = draft
+    ? `${draft.path}?${new URLSearchParams({
+        step: draft.lastStep,
+        tab: draft.tab,
+        ...(draft.channelId ? { channel: draft.channelId } : {}),
+      })}`
+    : '/donate';
 
   useEffect(() => {
     getFeatureFlags()
@@ -106,29 +95,15 @@ export default function Navbar() {
         </NavLink>
       )}
       <NavLink
-        to="/donate"
+        to={donatePath}
         className={({ isActive }) =>
           `font-data font-bold text-sm tracking-wider uppercase text-black no-underline px-3 py-1 rounded-sm hover:opacity-90 ${isActive ? 'opacity-80' : ''}`
         }
         style={{ background: 'var(--d-yellow)' }}
       >
-        contribute
+        {resume ? `resume ${fmt(draft.amountCents)} donation` : 'contribute'}
       </NavLink>
       <div className="ml-auto flex items-center gap-4">
-        <button
-          onClick={toggleDrawer}
-          className="relative font-data font-bold text-base tracking-wider uppercase text-off-white/80 hover:text-off-white flex items-center gap-2"
-        >
-          <span>cart</span>
-          {cart.length > 0 && (
-            <span
-              className={`font-data text-sm font-bold px-3 py-1 rounded-sm ${pop ? 'animate-cart-pop' : ''}`}
-              style={{ background: 'var(--d-yellow)', color: 'black' }}
-            >
-              {cart.length} &middot; {fmt(totalCents)}
-            </span>
-          )}
-        </button>
         {donor ? (
           <UserMenu donor={donor} onLogout={logout} />
         ) : (

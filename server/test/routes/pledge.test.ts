@@ -1,240 +1,296 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
-import crypto from 'crypto';
-
-vi.mock('../../services/pledge.js', () => ({
-  createPledge: vi.fn(),
-  createCheckoutForPledge: vi.fn(),
-}));
-
-import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
+import crypto from 'node:crypto';
+import prisma from '../../lib/prisma.js';
+import { planPledge } from '@dono/shared';
 import pledgeRouter from '../../routes/pledge.js';
+import adminRouter from '../../routes/admin.js';
+import { createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
-
-function createApp() {
+vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
+const donors: string[] = [];
+const channels: string[] = [];
+const drafts: string[] = [];
+const legacy: string[] = [];
+function app() {
   const app = express();
   app.use(express.json());
   app.use('/api/pledge', pledgeRouter);
+  app.use('/api/admin', adminRouter);
   return app;
 }
-
-describe('POST /api/pledge', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+afterEach(async () => {
+  await prisma.pendingPledge.deleteMany({
+    where: { OR: [{ draft_id: { in: drafts } }, { id: { in: legacy } }] },
   });
-
-  it('forwards top_up_cents to createPledge and returns it in the response', async () => {
-    vi.mocked(createPledge).mockResolvedValue({
-      pledge_token: 'pledge-abc',
-      total_cents: 2000,
-      expires_at: new Date().toISOString(),
-    } as any);
-    vi.mocked(createCheckoutForPledge).mockResolvedValue({
-      donate_url: 'https://checkout.stripe.com/cs_test',
-      checkout_session_id: 'cs_test_1',
-      wallet_discount_cents: 0,
-    });
-
-    const res = await request(createApp())
-      .post('/api/pledge')
-      .send({
-        email: 'donor@example.com',
-        comment: 'hello',
-        top_up_cents: 1500,
-        channel_id: 'event-1',
-        items: [{ kind: 'REWARD', target_id: 'reward-1' }],
-      });
-
-    expect(res.status).toBe(200);
-    expect(createPledge).toHaveBeenCalledWith({
-      email: 'donor@example.com',
-      comment: 'hello',
-      top_up_cents: 1500,
-      channel_id: 'event-1',
-      items: [{ kind: 'REWARD', target_id: 'reward-1' }],
-    });
-    expect(res.body.total_cents).toBe(2000);
-    expect(res.body.donate_url).toBe('https://checkout.stripe.com/cs_test');
-    expect(res.body.has_checkout).toBe(true);
-  });
-
-  it('forwards display_name to createPledge (#54)', async () => {
-    vi.mocked(createPledge).mockResolvedValue({
-      pledge_token: 'pledge-abc',
-      total_cents: 500,
-      expires_at: new Date().toISOString(),
-    } as any);
-    vi.mocked(createCheckoutForPledge).mockResolvedValue({
-      donate_url: null,
-      checkout_session_id: null,
-      wallet_discount_cents: 0,
-    });
-
-    await request(createApp())
-      .post('/api/pledge')
-      .send({
-        email: 'donor@example.com',
-        display_name: 'Jane Donor',
-        channel_id: 'event-1',
-        items: [{ kind: 'REWARD', target_id: 'reward-1' }],
-      });
-
-    expect(createPledge).toHaveBeenCalledWith(
-      expect.objectContaining({ display_name: 'Jane Donor' }),
-    );
-  });
-
-  it('omits top_up_cents when not provided', async () => {
-    vi.mocked(createPledge).mockResolvedValue({
-      pledge_token: 'pledge-abc',
-      total_cents: 500,
-      expires_at: new Date().toISOString(),
-    } as any);
-    vi.mocked(createCheckoutForPledge).mockResolvedValue({
-      donate_url: null,
-      checkout_session_id: null,
-      wallet_discount_cents: 0,
-    });
-
-    const res = await request(createApp())
-      .post('/api/pledge')
-      .send({
-        email: 'donor@example.com',
-        channel_id: 'event-1',
-        items: [{ kind: 'REWARD', target_id: 'reward-1' }],
-      });
-
-    expect(res.status).toBe(200);
-    expect(createPledge).toHaveBeenCalledWith({
-      email: 'donor@example.com',
-      top_up_cents: undefined,
-      channel_id: 'event-1',
-      items: [{ kind: 'REWARD', target_id: 'reward-1' }],
-    });
-    expect(res.body.has_checkout).toBe(false);
-  });
-
-  it('returns 400 when createPledge rejects with a status', async () => {
-    vi.mocked(createPledge).mockRejectedValue(
-      Object.assign(new Error('channel_id is required'), {
-        status: 400,
-      }),
-    );
-
-    const res = await request(createApp())
-      .post('/api/pledge')
-      .send({ email: 'donor@example.com', items: [] });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('channel_id is required');
-  });
-
-  it('applies a wallet discount when a valid donor token is provided', async () => {
-    const token = crypto.randomBytes(16).toString('hex');
-    const donor = await prisma.donor.create({
-      data: {
-        email: `pledge-${crypto.randomUUID()}@example.com`,
-        balance_remaining: 1500,
-        magic_token: token,
-        token_expires_at: new Date(Date.now() + 60_000),
-      },
-    });
-    vi.mocked(createPledge).mockResolvedValue({
-      pledge_token: 'pledge-abc',
-      total_cents: 500,
-      expires_at: new Date().toISOString(),
-    } as any);
-    vi.mocked(createCheckoutForPledge).mockResolvedValue({
-      donate_url: null,
-      checkout_session_id: null,
-      wallet_discount_cents: 0,
-    });
-
-    const res = await request(createApp())
-      .post('/api/pledge')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ email: donor.email, channel_id: 'event-1', items: [] });
-
-    expect(res.status).toBe(200);
-    expect(createCheckoutForPledge).toHaveBeenCalledWith(
-      'pledge-abc',
-      expect.objectContaining({ id: donor.id, balance_remaining: 1500 }),
-      donor.email,
-    );
-
-    await prisma.donor.delete({ where: { id: donor.id } });
-  });
+  await prisma.donation.deleteMany({ where: { donor_id: { in: donors } } });
+  await prisma.donor.deleteMany({ where: { id: { in: donors } } });
+  await prisma.channel.deleteMany({ where: { id: { in: channels } } });
+  donors.length = channels.length = drafts.length = legacy.length = 0;
 });
+afterAll(() => prisma.$disconnect());
 
-describe('GET /api/pledge/:token', () => {
-  afterAll(async () => {
-    await prisma.$disconnect();
-  });
-
-  it('returns the pledge status', async () => {
-    const pledge = await prisma.pendingPledge.create({
-      data: {
-        pledge_token: `tok-${crypto.randomUUID()}`,
-        total_cents: 1000,
-        expires_at: new Date(Date.now() + 60_000),
-        items: { create: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }] },
-      },
+describe('pledge HTTP contract on SQLite', () => {
+  it('previews the same live default-goal chain without reserving or changing anything', async () => {
+    const event = await prisma.event.create({
+      data: { name: 'Preview', slug: `preview-${crypto.randomUUID()}` },
     });
-
-    const res = await request(createApp()).get(`/api/pledge/${pledge.pledge_token}`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.pledge_token).toBe(pledge.pledge_token);
-    expect(res.body.total_cents).toBe(1000);
-    expect(res.body.items).toHaveLength(1);
-    expect(res.body.items[0].kind).toBe('REWARD');
-
-    await prisma.pendingPledge.delete({ where: { id: pledge.id } });
+    const own = await createTestChannel(prisma, { event_id: event.id });
+    const primary = await createTestChannel(prisma, { event_id: event.id });
+    const goalIds: string[] = [];
+    try {
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { primary_channel_id: primary.id },
+      });
+      const listed = await prisma.fundGoal.create({
+        data: { title: 'Own list', channel_id: own.id, target_cents: 10000 },
+      });
+      const shared = await prisma.fundGoal.create({
+        data: { title: 'Primary list', target_cents: 5000 },
+      });
+      const closest = await prisma.fundGoal.create({
+        data: { title: 'Closest own', channel_id: own.id, target_cents: 200 },
+      });
+      const foreign = await prisma.fundGoal.create({
+        data: { title: 'Foreign', channel_id: primary.id, target_cents: 100 },
+      });
+      goalIds.push(listed.id, shared.id, closest.id, foreign.id);
+      await prisma.channelDefaultGoal.createMany({
+        data: [
+          { channel_id: own.id, goal_id: listed.id, position: 0 },
+          { channel_id: primary.id, goal_id: foreign.id, position: 0 },
+          { channel_id: primary.id, goal_id: shared.id, position: 1 },
+        ],
+      });
+      const preview = () => request(app()).get(`/api/pledge/default-goal/${own.id}`);
+      expect((await preview()).body).toEqual({ goal: { id: listed.id, title: 'Own list' } });
+      await prisma.fundGoal.update({ where: { id: listed.id }, data: { is_complete: true } });
+      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: primary.id } });
+      expect((await preview()).body).toEqual({ goal: { id: closest.id, title: 'Closest own' } });
+      await prisma.fundGoal.update({ where: { id: closest.id }, data: { is_active: false } });
+      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      await prisma.fundGoal.update({ where: { id: shared.id }, data: { is_active: false } });
+      const response = await preview();
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ goal: null });
+      expect(await prisma.fundGoal.findUnique({ where: { id: closest.id } })).toMatchObject({
+        current_cents: 0,
+      });
+      await prisma.channel.update({ where: { id: own.id }, data: { is_active: false } });
+      expect((await preview()).status).toBe(404);
+      expect((await request(app()).get('/api/pledge/default-goal/missing')).status).toBe(404);
+    } finally {
+      await prisma.channelDefaultGoal.deleteMany({
+        where: { channel_id: { in: [own.id, primary.id] } },
+      });
+      await prisma.fundGoal.deleteMany({ where: { id: { in: goalIds } } });
+      await prisma.event.update({ where: { id: event.id }, data: { primary_channel_id: null } });
+      await prisma.channel.deleteMany({ where: { event_id: event.id } });
+      await prisma.event.delete({ where: { id: event.id } });
+    }
   });
-
-  it('never exposes a donor magic token, even for a fulfilled pledge (account takeover guard, #48)', async () => {
+  it('exposes read-only reconciliation, authenticated cancellation and admin-only Check Stripe without PII', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
     const donor = await prisma.donor.create({
-      data: { email: `pledge-${crypto.randomUUID()}@example.com`, magic_token: 'super-secret-tok' },
-    });
-    const pledge = await prisma.pendingPledge.create({
       data: {
-        pledge_token: `tok-${crypto.randomUUID()}`,
-        total_cents: 1000,
-        expires_at: new Date(Date.now() + 60_000),
-        items: { create: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000 }] },
+        email: `${crypto.randomUUID()}@example.com`,
+        balance_remaining: 975,
+        magic_token: crypto.randomUUID(),
+        token_expires_at: new Date(Date.now() + 60000),
       },
     });
-    const donation = await prisma.donation.create({
+    donors.push(donor.id);
+    const draft_id = crypto.randomUUID();
+    drafts.push(draft_id);
+    const created = await request(app())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${donor.magic_token}`)
+      .send({
+        draft_id,
+        channel_id: channel.id,
+        pledge_amount_cents: 1000,
+        items: [],
+        plan: planPledge({
+          pledge_amount_cents: 1000,
+          selections: [],
+          available_wallet_cents: 975,
+        }),
+      });
+    const token = created.body.pledge_token as string;
+    expect((await request(app()).post(`/api/pledge/${token}/reconcile`)).body).toMatchObject({
+      read_only: true,
+      can_edit: false,
+    });
+    expect((await request(app()).post(`/api/pledge/${token}/cancel`)).status).toBe(403);
+    const cancelled = await request(app())
+      .post(`/api/pledge/${token}/cancel`)
+      .set('Authorization', `Bearer ${donor.magic_token}`);
+    expect(cancelled.body).toMatchObject({
+      payment_state: 'NON_PAYMENT',
+      can_edit: true,
+      can_continue: false,
+    });
+    const continued = await request(app())
+      .post(`/api/pledge/${token}/continue`)
+      .set('Authorization', `Bearer ${donor.magic_token}`);
+    expect(continued.body).toMatchObject({ payment_state: 'NON_PAYMENT', donate_url: null });
+    const row = await prisma.pendingPledge.findUniqueOrThrow({ where: { pledge_token: token } });
+    expect((await request(app()).post(`/api/admin/pledges/${row.id}/check-stripe`)).status).toBe(
+      401,
+    );
+    vi.stubEnv('ADMIN_API_KEY', 'checkout-test');
+    try {
+      const checked = await request(app())
+        .post(`/api/admin/pledges/${row.id}/check-stripe`)
+        .set('Authorization', 'Bearer key_admin_checkout-test');
+      expect(checked.status).toBe(200);
+      expect(checked.body.payment_state).toBe('NON_PAYMENT');
+      expect(JSON.stringify(checked.body)).not.toContain(donor.email);
+      expect(JSON.stringify(checked.body)).not.toContain(donor.magic_token!);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it.each([{ items: [] }, { pledge_amount_cents: 1000, top_up_cents: 0, items: [] }])(
+    'rejects the obsolete donate contract',
+    async (body) => {
+      const res = await request(app()).post('/api/pledge').send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('The donate page was updated. Reload to continue.');
+    },
+  );
+
+  it('resolves authentication before planning, reports corrections without hold, then returns confirmed funding on retry', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const donor = await prisma.donor.create({
       data: {
-        external_id: `ext-${crypto.randomUUID()}`,
-        donor_id: donor.id,
-        amount_cents: 1000,
+        email: `${crypto.randomUUID()}@example.com`,
+        balance_remaining: 975,
+        magic_token: crypto.randomUUID(),
+        token_expires_at: new Date(Date.now() + 60000),
       },
     });
-    await prisma.pendingPledge.update({
-      where: { id: pledge.id },
-      data: { status: 'FULFILLED', fulfilled_by_donation_id: donation.id },
-    });
-
-    const res = await request(createApp()).get(`/api/pledge/${pledge.pledge_token}`);
-
+    donors.push(donor.id);
+    const draft_id = crypto.randomUUID();
+    drafts.push(draft_id);
+    const input = {
+      draft_id,
+      pledge_amount_cents: 1000,
+      items: [],
+      channel_id: channel.id,
+      display_name: ' Reader ',
+      comment: ' Hello ',
+      plan: planPledge({ pledge_amount_cents: 1000, available_wallet_cents: null, selections: [] }),
+    };
+    const changed = await request(app())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${donor.magic_token}`)
+      .send(input);
+    expect(changed.status).toBe(409);
+    expect(changed.body.plan).toMatchObject({ wallet_applied_cents: 950, new_money_cents: 50 });
+    expect(await prisma.pendingPledge.count({ where: { draft_id } })).toBe(0);
+    const res = await request(app())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${donor.magic_token}`)
+      .send({ ...input, plan: changed.body.plan });
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('FULFILLED');
-    expect(res.body).not.toHaveProperty('magic_token');
-    expect(res.body).not.toHaveProperty('is_new_donor');
-    expect(JSON.stringify(res.body)).not.toContain('super-secret-tok');
-
-    await prisma.pendingPledge.delete({ where: { id: pledge.id } });
-    await prisma.donation.delete({ where: { id: donation.id } });
-    await prisma.donor.delete({ where: { id: donor.id } });
+    expect(res.body).toMatchObject({
+      format: 'POOLED',
+      pledge_amount_cents: 1000,
+      wallet_applied_cents: 950,
+      new_money_cents: 50,
+      has_checkout: false,
+    });
+    expect(res.body).not.toHaveProperty('total_cents');
+    expect(res.body).not.toHaveProperty('top_up_cents');
+    expect(res.body).not.toHaveProperty('wallet_discount_cents');
+    const retry = await request(app())
+      .post('/api/pledge')
+      .set('Authorization', `Bearer ${donor.magic_token}`)
+      .send(input);
+    expect(retry.body).toEqual(res.body);
+    const read = await request(app()).get(`/api/pledge/${res.body.pledge_token}`);
+    expect(read.body.plan).toEqual(changed.body.plan);
+    expect(read.body).toMatchObject({
+      comment: 'Hello',
+      display_name: 'Reader',
+      channel_id: channel.id,
+    });
+    expect(JSON.stringify(read.body)).not.toContain(donor.magic_token!);
+    expect(JSON.stringify(read.body)).not.toContain(donor.email);
   });
 
+  it.each(['email-only', 'expired', 'frozen', 'invalid'] as const)(
+    'never uses %s as authority to hold credit',
+    async (auth) => {
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const donor = await prisma.donor.create({
+        data: {
+          email: `${crypto.randomUUID()}@example.com`,
+          balance_remaining: 1000,
+          magic_token: crypto.randomUUID(),
+          token_expires_at: new Date(auth === 'expired' ? 0 : Date.now() + 60000),
+          is_frozen: auth === 'frozen',
+        },
+      });
+      donors.push(donor.id);
+      const draft_id = crypto.randomUUID();
+      drafts.push(draft_id);
+      let req = request(app()).post('/api/pledge');
+      if (auth !== 'email-only')
+        req = req.set('Authorization', `Bearer ${auth === 'invalid' ? 'bad' : donor.magic_token}`);
+      const res = await req.send({
+        email: donor.email,
+        draft_id,
+        pledge_amount_cents: 1000,
+        items: [],
+        channel_id: channel.id,
+        plan: planPledge({
+          pledge_amount_cents: 1000,
+          available_wallet_cents: null,
+          selections: [],
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.wallet_applied_cents).toBe(0);
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 1000,
+        balance_held_cents: 0,
+      });
+    },
+  );
+
+  it('returns historical pledges with an explicit LEGACY discriminant, read-only and without session secrets', async () => {
+    const pledge = await prisma.pendingPledge.create({
+      data: {
+        pledge_token: crypto.randomUUID(),
+        expires_at: new Date(),
+        total_cents: 1000,
+        top_up_cents: 500,
+        donor_email: 'private-marker@example.com',
+        items: { create: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 500 }] },
+      },
+    });
+    legacy.push(pledge.id);
+    const res = await request(app()).get(`/api/pledge/${pledge.pledge_token}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      format: 'LEGACY',
+      total_cents: 1000,
+      top_up_cents: 500,
+      items: [{ kind: 'REWARD' }],
+    });
+    expect(res.body).not.toHaveProperty('plan');
+    expect(res.body).not.toHaveProperty('pledge_amount_cents');
+    expect(JSON.stringify(res.body)).not.toContain('private-marker');
+  });
   it('returns 404 for an unknown token', async () => {
-    const res = await request(createApp()).get('/api/pledge/does-not-exist');
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe('Pledge not found');
+    expect((await request(app()).get('/api/pledge/missing')).status).toBe(404);
   });
 });

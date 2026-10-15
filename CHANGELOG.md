@@ -7,6 +7,89 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-15
+
+Amount-first donations with independent incentive Pools (#151, PRD-0003).
+
+**Release preparation only.** Kollekt claim retirement and prompter rendering remain
+release blockers, and the corrected browser matrix must be rerun. This version bump
+does not clear those gates or authorize deployment.
+
+### Upgrade notes
+
+- **Breaking pledge API change:** `POST /api/pledge` requires
+  `pledge_amount_cents`, a stable `draft_id`, and the reviewed `plan`. Old requests
+  using `top_up_cents` are rejected. A changed plan returns 409 for confirmation;
+  retries with an existing Pending pledge retain its confirmed funding.
+- **Ship the complete release between Events.** Follow the write barrier, checkout
+  drain, database backup, populated migrations, money checks and correction-publication
+  procedure in `docs/deployment.md`. Restore the backup only when the rollback
+  checkpoint proves no later writes; otherwise fix forward.
+- Old OPEN pledges become EXPIRED. A late payment for an old-shape pledge records
+  cash and Wallet credit without fulfilling old incentives; staff see
+  `LEGACY_PAID` while the stored status remains EXPIRED.
+- Historical `wallet-<uuid>` receipts are corrected to zero money. Shipping is
+  extracted only from verified receipt history, outside donation totals; ambiguous
+  history remains manual review. Historical refund/chargeback repairs are not automatic.
+- Subscribe Stripe to checkout expiry, asynchronous payment success/failure and
+  `refund.*`, in addition to completed checkout. Native `donation.updated`
+  subscriptions are opt-in; existing Destinations are not changed automatically.
+- Coordinate the parent test/staging callers and
+  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44). Cold cross-Channel
+  credit references need its owner-aware lookup support. Ordinary Channel incentive
+  lists, overlay scope, donation routing and stable IDs remain unchanged.
+
+### Added
+
+- Amount-first donate flow with independent reward, poll and goal Pools, category
+  meters, explicit overage correction and a message-only path.
+- Browser-local resumable drafts, cross-tab reconciliation and one payable checkout
+  per draft. Wallet funding is held until payment or confirmed non-payment.
+- Proportional poll/goal auto-allocation and ordered own/shared Default goal lists.
+  Unused poll/goal money remains reserved for moderator assignment.
+- Per-Event/category Pool credit, with partial cross-Channel or shared-incentive
+  spending. Several source donations can fund one whole nonphysical reward claim.
+- Admin Payment refunds for eligible unshipped physical claims, with separate
+  shipping, proportional Pool shrink and explicit failed-refund recovery.
+- Moderator Unused-pool assignment/undo and explicit Event End/Undo, with derived
+  credit conversion and reward-credit expiry.
+- Staff donation detail, financial previews, refund worklists, pledge reconciliation,
+  credit history and source-labelled allocations.
+- Separate money, allocation, Wallet, Pool-credit, Unused and refund metrics/stats;
+  full-state opt-in native donation updates and scoped ESA incentive lookups.
+
+### Changed
+
+- Donation money is new cash only. Shipping and incentive allocations are excluded;
+  Wallet-only pledges add no money and pooled fulfillment creates no Wallet credit.
+- Pooled reversals return category Pool credit or moderator Unused pool money.
+  Wallet refunds use the max-rule difference rather than summed category allocations;
+  donations without a pledge retain their legacy accounting.
+- Claims retain confirmed prices. Payment refunds lower money and pledge amounts
+  in place; totals are published whenever counted money changes, not only on status
+  transitions.
+- Allocation changes republish Tiltify donations under the same ID only when their
+  content changes. Multi-source rewards publish one whole entitlement under a stable
+  source carrier.
+- Incentive titles, prices, targets, Channel IDs and stock are validated. Allocation
+  history protects deletion, Channel moves and reward-type changes. Goal completion
+  is derived, not manually toggled.
+
+### Fixed
+
+- Confirmed anonymous display names no longer fall back to private payment-provider
+  names in stored donations or outbound messages.
+- Wallet refunds return credit instead of taking it away; Wallet-funded receipts no
+  longer count the same money twice.
+- Direct physical Wallet claims are rejected before credit, stock or claim changes.
+  The demo seed uses a cash-funded pledge through simulated settled intake instead.
+- Write-in moderation handles all donor/auto funding rows atomically, and paid
+  fulfillment safely redistributes selections invalidated by live text policy.
+- Staff immediately see definite Stripe refund rejection reasons. Moderator/shared
+  responses retain the donor-email privacy boundary.
+- Published OpenAPI response/schema descriptions parse correctly and distinguish
+  pooled remedies from legacy Wallet credit.
+
 ## [0.2.1] — 2026-10-13
 
 ### Fixed
@@ -203,7 +286,8 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.1...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
 [0.2.1]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.1
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0

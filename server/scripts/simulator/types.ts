@@ -81,11 +81,9 @@ export interface Catalog {
    */
   pledgeableRewards: string[];
   /**
-   * rewardRef -> cost_cents, so PLEDGE_CHECKOUT can send amount_cents on a
-   * REWARD cart item — the real donor cart always does (RewardList.tsx),
-   * and the server defaults a REWARD item's stored amount_cents to 0 when a
-   * client omits it (the pledge total itself is computed server-side from
-   * the reward, but the *per-item* amount is whatever the client sent).
+   * rewardRef -> cost_cents for seeded selection generation. The pooled
+   * executor reads live prices/types at review and uses the shared planner;
+   * creation stores confirmed line totals, not a replay log's old estimate.
    */
   rewardCostCents: Record<string, number>;
 }

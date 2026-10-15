@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import webhookRouter from '../../routes/webhook.js';
 import adminRouter from '../../routes/admin.js';
 import { createTestChannel } from '../helpers/fixtures.js';
-import { createPledge } from '../../services/pledge.js';
+import { createLegacyPledge as createPledge } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -289,6 +289,8 @@ describe('Donation routing (resolveDonationRoute via HTTP)', () => {
         data: {
           object: {
             id: sessionId,
+            status: 'complete',
+            payment_status: 'paid',
             amount_total: 1500,
             customer_details: { email: `stripe-${rand()}@example.com`, name: 'Stripe Donor' },
           },

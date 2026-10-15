@@ -62,6 +62,37 @@ describe('AdminDonations', () => {
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
   });
 
+  it('keeps reversed/admin history visible but disables invalid claim transitions with the server reason', async () => {
+    adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data:
+          path === '/claims'
+            ? [
+                {
+                  ...claim,
+                  status: 'REVERSED',
+                  amount_cents: 500,
+                  funding_donation_ids: ['d1', 'd2'],
+                  toggle_disabled_reason: 'Only pending or fulfilled claims can change status',
+                },
+              ]
+            : [],
+      }),
+    );
+    render(<AdminDonations />);
+    fireEvent.click(await screen.findByRole('button', { name: 'claims' }));
+    expect(await screen.findByText('REVERSED')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'mark fulfilled' })).toBeDisabled();
+    expect(
+      screen.getByText('Only pending or fulfilled claims can change status'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Donation d2' })).toHaveAttribute(
+      'href',
+      '/admin/donations/d2',
+    );
+    expect(adminClient.patch).not.toHaveBeenCalled();
+  });
+
   it('filters donations by status via the status pills (#63)', async () => {
     adminClient.get.mockImplementation(
       (path: string, config?: { params?: { status?: string } }) => {
@@ -82,7 +113,7 @@ describe('AdminDonations', () => {
     expect(screen.queryByText('Alice')).not.toBeInTheDocument();
   });
 
-  it('changes a donation status via the status dropdown (#63)', async () => {
+  it('links to the detail workflow instead of allowing manual payment status changes', async () => {
     adminClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/donations' ? [donation] : [] }),
     );
@@ -92,9 +123,12 @@ describe('AdminDonations', () => {
 
     expect(await screen.findByText('Alice')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('COMPLETED'), { target: { value: 'REFUNDED' } });
-
-    expect(adminClient.patch).toHaveBeenCalledWith('/donations/d1/status', { status: 'REFUNDED' });
+    expect(screen.queryByDisplayValue('COMPLETED')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Alice' })).toHaveAttribute(
+      'href',
+      '/admin/donations/d1',
+    );
+    expect(adminClient.patch).not.toHaveBeenCalled();
   });
 
   it('shows a channel name for assigned donations and "unassigned" otherwise (#115)', async () => {

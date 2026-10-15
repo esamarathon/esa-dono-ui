@@ -5,7 +5,8 @@ import Modal from './Modal';
 import LoadingSpinner from './LoadingSpinner';
 import StatusBadge from './StatusBadge';
 import ShareLinkButton from './ShareLinkButton';
-import { apiErrorMessage, type Channel, type Event } from '../types';
+import { apiErrorMessage, type Channel, type Event, type Goal } from '../types';
+import { fmt } from '../utils/money';
 
 interface ChannelForm {
   id?: string;
@@ -13,9 +14,10 @@ interface ChannelForm {
   slug: string;
   event_id: string;
   is_active: boolean;
+  default_goals: string[];
 }
 
-const EMPTY: ChannelForm = { name: '', slug: '', event_id: '', is_active: true };
+const EMPTY: ChannelForm = { name: '', slug: '', event_id: '', is_active: true, default_goals: [] };
 
 const SLUG_HELP =
   'Changing a slug breaks overlay bindings and published links, so it is blocked while active.';
@@ -29,6 +31,7 @@ type ChannelModal = 'create' | Channel | null;
 export default function ChannelsManager({ client }: { client: AxiosInstance }) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ChannelModal>(null);
   const [form, setForm] = useState<ChannelForm>(EMPTY);
@@ -39,6 +42,7 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       Promise.all([
         client.get('/channels').then((r) => setChannels(r.data)),
         client.get('/events').then((r) => setEvents(r.data)),
+        client.get('/goals').then((r) => setGoals(r.data)),
       ]).then(() => undefined),
     [client],
   );
@@ -52,7 +56,14 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
     setError('');
   };
   const openEdit = (s: Channel) => {
-    setForm({ id: s.id, name: s.name, slug: s.slug, event_id: s.event_id, is_active: s.is_active });
+    setForm({
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      event_id: s.event_id,
+      is_active: s.is_active,
+      default_goals: s.default_goals ?? [],
+    });
     setModal(s);
     setError('');
   };
@@ -64,6 +75,7 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       ...(form.slug ? { slug: form.slug } : {}),
       ...(form.event_id ? { event_id: form.event_id } : {}),
       is_active: form.is_active,
+      ...(modal !== 'create' ? { default_goals: form.default_goals } : {}),
     };
     try {
       if (modal === 'create') await client.post('/channels', payload);
@@ -83,6 +95,14 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
   };
 
   const eventName = (id: string) => events.find((e) => e.id === id)?.name ?? '—';
+  const eligible = (g: Goal | undefined) => !!g?.is_active && !g.is_complete;
+  const recipient = form.default_goals.find((id) => eligible(goals.find((g) => g.id === id)));
+  const move = (index: number, delta: number) =>
+    setForm((f) => {
+      const ids = [...f.default_goals];
+      [ids[index], ids[index + delta]] = [ids[index + delta]!, ids[index]!];
+      return { ...f, default_goals: ids };
+    });
 
   if (loading) return <LoadingSpinner />;
 
@@ -112,6 +132,12 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={s.is_active} />
+                  {s.has_eligible_default === false && (
+                    <span className="font-mono text-xs ml-2">no eligible default goal</span>
+                  )}
+                  <p className="font-body text-sm text-off-white/55">
+                    Current goal-Pool recipient: {s.default_goal?.title ?? 'none'}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -181,6 +207,86 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
               ))}
             </select>
           </div>
+          {modal !== 'create' && (
+            <section className="mb-4 space-y-2">
+              <h3 className="font-display text-xl">Default goal list</h3>
+              <ol>
+                {form.default_goals.map((id, index) => {
+                  const goal = goals.find((g) => g.id === id);
+                  return (
+                    <li key={id} className="btrl-panel p-2 font-body text-sm space-y-1">
+                      <span>{goal?.title ?? id}</span>
+                      <p>
+                        {eligible(goal)
+                          ? 'open'
+                          : goal?.is_complete
+                            ? 'complete'
+                            : 'inactive / unavailable'}{' '}
+                        · allocated {fmt(goal?.current_cents ?? 0)} / target{' '}
+                        {fmt(goal?.target_cents ?? 0)}
+                      </p>
+                      {recipient === id && <p>receives goal-Pool money now</p>}
+                      <div className="flex gap-3">
+                        <button
+                          disabled={index === 0}
+                          aria-label={`Move ${goal?.title ?? id} up`}
+                          onClick={() => move(index, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          disabled={index === form.default_goals.length - 1}
+                          aria-label={`Move ${goal?.title ?? id} down`}
+                          onClick={() => move(index, 1)}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              default_goals: f.default_goals.filter((entry) => entry !== id),
+                            }))
+                          }
+                        >
+                          remove from list
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+              <select
+                aria-label="Add goal"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value)
+                    setForm((f) => ({ ...f, default_goals: [...f.default_goals, e.target.value] }));
+                }}
+              >
+                <option value="">Add goal…</option>
+                {goals
+                  .filter(
+                    (g) =>
+                      eligible(g) &&
+                      (g.channel_id == null || g.channel_id === form.id) &&
+                      !form.default_goals.includes(g.id),
+                  )
+                  .map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.title}
+                    </option>
+                  ))}
+              </select>
+              {!recipient && (
+                <p role="note">
+                  No eligible list entry. Automatic fallback now:{' '}
+                  {modal.fallback_goal?.title ?? 'none'}. The live recipient is checked again at
+                  payment completion.
+                </p>
+              )}
+            </section>
+          )}
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

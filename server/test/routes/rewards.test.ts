@@ -70,6 +70,35 @@ describe('Rewards routes', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
   });
 
+  it('POST /:id/claim rejects physical rewards funded by Wallet credit without changing funds or stock', async () => {
+    const { donor, token } = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: { title: 'Physical reward', type: 'PHYSICAL', cost_cents: 1000, quantity_total: 2 },
+    });
+    try {
+      const res = await request(createApp())
+        .post(`/api/rewards/${reward.id}/claim`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ claim_data: { name: 'Alice' } });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(
+        'Physical rewards require a cash-funded pledge through Stripe checkout',
+      );
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 5000,
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 0,
+      });
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
   it('POST /:id/claim returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
     const reward = await prisma.reward.create({

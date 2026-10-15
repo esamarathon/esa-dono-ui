@@ -1,15 +1,60 @@
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
+import { pledgePaymentState } from '../services/pledge.js';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
-import { countedDonation, countsTowardTotals } from '../lib/donationTotals.js';
+import { readAccountingStatsTx } from '../services/accountingStats.js';
+import {
+  readStaffDonationTx,
+  readStaffClaimsTx,
+  donationActionReasonsTx,
+  incentiveAllocationTx,
+} from '../services/staffRead.js';
+import { readPoolCreditSummaryTx } from '../services/poolCredit.js';
+import { readRewardFundingTx } from '../services/rewardFunding.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
-import { httpError, sendError } from '../lib/httpError.js';
+import { handle, sendError } from '../lib/httpError.js';
+import { previewEventEndTx, endEventTx, undoEventEndTx } from '../services/eventEnd.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
-import { processDonation } from '../services/donation.js';
-import { refundGoalContributions, refundPollOptionVotes } from '../services/refund.js';
+import { intakeDonation } from '../services/donation.js';
+import { reconcilePledge } from '../services/checkout.js';
+import {
+  previewPaymentRefundTx,
+  requestPaymentRefund,
+  listPaymentRefundsTx,
+  getPaymentRefundTx,
+  retryPaymentRefund,
+  resolvePaymentRefundItem,
+  resolvePaymentRefundShipping,
+} from '../services/paymentRefund.js';
+import {
+  createReward,
+  updateReward,
+  createPoll,
+  updatePoll,
+  createPollOption,
+  updatePollOption,
+  createGoal,
+  updateGoal,
+  removeIncentive,
+  reverseAndDeactivate,
+} from '../services/incentiveLifecycle.js';
+import {
+  adjustWalletCreditTx,
+  refundGoalContributions,
+  refundPollOptionVotes,
+  reverseSpendTx,
+  setDonationStatusTx,
+  sweepWalletCreditsTx,
+  previewDonationReversalTx,
+  setClaimStatusTx,
+  acknowledgeChargebackClaimTx,
+  previewSpendReversalTx,
+  previewIncentiveReversalTx,
+} from '../services/reversal.js';
 import {
   closeAuctionTx,
   cancelAuctionTx,
@@ -23,10 +68,6 @@ import { withWebhooks } from '../services/webhooks/outbox.js';
 import { wakeDispatcher } from '../services/webhooks/dispatcher.js';
 import {
   isWebhookMessageType,
-  buildIncentiveCreatedPayload,
-  buildIncentiveEnabledPayload,
-  buildIncentiveDisabledPayload,
-  buildIncentiveValueChangedPayload,
   PAYLOAD_FORMATS,
   TILTIFY_DEFAULT_EXCHANGE,
 } from '../services/webhooks/delivery.js';
@@ -35,63 +76,47 @@ const router = Router();
 router.use(adminAuth);
 
 // Stats
-router.get('/stats', async (req, res) => {
-  const [
-    donorCount,
-    donationCount,
-    claimCount,
-    totalRaised,
-    pledgeCount,
-    channels,
-    unallocatedCredits,
-  ] = await Promise.all([
-    prisma.donor.count(),
-    prisma.donation.count(),
-    prisma.rewardClaim.count(),
-    // Money totals: completed and wallet-refunded, not chargebacks (lib/donationTotals.ts).
-    prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
-    prisma.pendingPledge.count(),
-    prisma.channel.findMany({ orderBy: { created_at: 'asc' } }),
-    // Aggregate of Donor.balance_remaining (#59): credited but not yet spent
-    // on a reward/poll/goal — i.e. the platform's total outstanding
-    // liability to donors, not visible anywhere except by summing every
-    // donor individually.
-    prisma.donor.aggregate({ _sum: { balance_remaining: true } }),
-  ]);
-
-  const perChannel = await Promise.all(
-    channels.map(async (channel) => {
-      const [sum, count] = await Promise.all([
-        prisma.donation.aggregate({
-          where: { channel_id: channel.id, ...countedDonation },
-          _sum: { amount_cents: true },
-        }),
-        prisma.donation.count({ where: { channel_id: channel.id } }),
-      ]);
-      return {
-        id: channel.id,
-        name: channel.name,
-        slug: channel.slug,
-        event_id: channel.event_id,
-        raised_cents: sum._sum.amount_cents ?? 0,
-        donations: count,
-      };
-    }),
-  );
-
-  res.json({
-    donors: donorCount,
-    donations: donationCount,
-    claims: claimCount,
-    pledges: pledgeCount,
-    total_raised_cents: totalRaised._sum.amount_cents ?? 0,
-    unallocated_credits_cents: unallocatedCredits._sum.balance_remaining ?? 0,
-    channels: perChannel,
-  });
+router.get('/stats', async (_req, res) => {
+  const stats = await prisma.$transaction((tx) => readAccountingStatsTx(tx));
+  res.json(stats.admin);
 });
 
 // Channels and Events (routes/identityRoutes.ts)
 mountIdentityRoutes(router);
+
+// Admin-only: deliberately outside the shared identity mount.
+router.get(
+  '/events/:id/end-preview',
+  handle('[admin/events]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewEventEndTx(tx, req.params.id!)));
+  }),
+);
+router.get(
+  '/events/:id/undo-end-preview',
+  handle('[admin/events]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewEventEndTx(tx, req.params.id!, true)));
+  }),
+);
+router.post(
+  '/events/:id/end',
+  handle('[admin/events]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        endEventTx(tx, req.params.id!, req.body?.slug, req.donor?.email || 'admin'),
+      ),
+    );
+  }),
+);
+router.post(
+  '/events/:id/undo-end',
+  handle('[admin/events]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        undoEventEndTx(tx, req.params.id!, req.body?.slug, req.donor?.email || 'admin'),
+      ),
+    );
+  }),
+);
 
 // Donations
 const DONATION_STATUSES = ['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'];
@@ -110,8 +135,32 @@ router.get('/donations', async (req, res) => {
     },
     orderBy: { created_at: 'desc' },
   });
-  res.json(donations);
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        donations.map(async (donation) => ({
+          ...donation,
+          ...(await readStaffDonationTx(tx, donation.id)),
+          donor: donation.donor,
+        })),
+      ),
+    ),
+  );
 });
+router.get(
+  '/donations/:id',
+  handle('[admin/donation]', async (req, res) => {
+    const detail = await prisma.$transaction(async (tx) => ({
+      ...(await readStaffDonationTx(tx, req.params.id!)),
+      action_disabled_reasons: await donationActionReasonsTx(tx, req.params.id!),
+    }));
+    const donor = await prisma.donor.findUnique({
+      where: { id: detail.donor_id },
+      select: { email: true },
+    });
+    res.json({ ...detail, donor });
+  }),
+);
 
 /**
  * PATCH /admin/donations/:id/channel (PRD-0002 §E6)
@@ -127,77 +176,38 @@ router.patch('/donations/:id/channel', async (req, res) => {
 
 /**
  * PATCH /admin/donations/:id/status (#63)
- * Sets a donation's lifecycle status. Moving into REFUNDED/CHARGEBACK claws
- * back whatever of the donation's amount is still sitting in the donor's
- * unspent balance_remaining (capped there — already-spent credit is not
- * cascaded through claims/votes/goals; use reverse-spend for that), records
- * a linked BalanceAdjustment, and stamps Donation.refund_id. Once a donation
- * has a refund_id it is terminal: no further status changes are allowed.
+ * The common module applies the pooled/NULL-D legacy Wallet refund or chargeback
+ * rule, reverses allocations and publishes atomically. Both statuses are terminal.
  */
+
+router.get('/donations/:id/reversal-preview', async (req, res) => {
+  const { status } = req.query;
+  if (status !== 'REFUNDED' && status !== 'CHARGEBACK')
+    return res.status(400).json({ error: 'Invalid status' });
+  try {
+    res.json(
+      await prisma.$transaction((tx) => previewDonationReversalTx(tx, req.params.id, status)),
+    );
+  } catch (e) {
+    sendError(res, e, '[admin/donations/reversal-preview]');
+  }
+});
 
 router.patch('/donations/:id/status', async (req, res) => {
   const { status, reason } = req.body;
-  if (!DONATION_STATUSES.includes(status)) {
+  if (!['REFUNDED', 'CHARGEBACK'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
   try {
-    // One transaction, reading inside it: the checks, the balance clawback, the
-    // status and the totals messages see one state (a double submit cannot claw
-    // back twice).
-    const updated = await withWebhooks(async (tx, _emit, tiltify) => {
-      const donation = await tx.donation.findUnique({
-        where: { id: req.params.id },
-        include: { donor: true },
-      });
-      if (!donation) throw httpError(404, 'Donation not found');
-      if (donation.refund_id) {
-        throw httpError(400, 'Donation is refunded/charged back and cannot change status');
-      }
-      if (donation.status === status) {
-        throw httpError(400, 'Donation already has this status');
-      }
-
-      let refundId: string | undefined;
-      if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-        // BalanceAdjustment.type uses the existing REFUND/CHARGEBACK vocabulary
-        // (adjust-balance, reverse-spend, sweep-credits), not the past-tense
-        // Donation.status value.
-        const adjustmentType = status === 'REFUNDED' ? 'REFUND' : 'CHARGEBACK';
-        const clawback = Math.min(donation.amount_cents, donation.donor.balance_remaining);
-        await tx.donor.update({
-          where: { id: donation.donor_id },
-          data: { balance_remaining: { decrement: clawback } },
-        });
-        const adjustment = await tx.balanceAdjustment.create({
-          data: {
-            donor_id: donation.donor_id,
-            amount_cents: -clawback,
-            balance_after_cents: donation.donor.balance_remaining - clawback,
-            type: adjustmentType,
-            reason: reason || `Donation ${status.toLowerCase()}`,
-            reference_id: donation.id,
-            created_by: 'admin',
-          },
-        });
-        refundId = adjustment.id;
-      }
-      const row = await tx.donation.update({
-        where: { id: donation.id },
-        data: { status, ...(refundId ? { refund_id: refundId } : {}) },
-        include: {
-          donor: { select: { email: true } },
-          channel: { select: { id: true, name: true, slug: true, event_id: true } },
-        },
-      });
-      // Publish the totals only when they move (PRD-0002 §T7): a chargeback lowers
-      // them; a refund goes to the donor's wallet and does not (lib/donationTotals.ts).
-      if (countsTowardTotals(donation.status) !== countsTowardTotals(status)) {
-        await tiltify.totals(row.channel_id);
-      }
-      return row;
+    const updated = await withWebhooks((tx, _emit, publisher) =>
+      setDonationStatusTx(tx, req.params.id, status, reason, 'admin', publisher),
+    );
+    const donor = await prisma.donor.findUnique({
+      where: { id: updated.donor_id },
+      select: { email: true },
     });
-    res.json(updated);
+    res.json({ ...updated, donor });
   } catch (e) {
     sendError(res, e, '[admin/donations/status]');
   }
@@ -205,21 +215,13 @@ router.patch('/donations/:id/status', async (req, res) => {
 
 // Claims
 router.get('/claims', async (req, res) => {
-  const claims = await prisma.rewardClaim.findMany({
-    include: { reward: true, donor: { select: { email: true } } },
-    orderBy: { created_at: 'desc' },
+  const claims = await prisma.$transaction((tx) => readStaffClaimsTx(tx));
+  const donors = await prisma.donor.findMany({
+    where: { id: { in: claims.map((c) => c.donor_id) } },
+    select: { id: true, email: true },
   });
-  res.json(
-    claims.map((c) => {
-      let parsed = null;
-      try {
-        parsed = c.claim_data ? JSON.parse(c.claim_data) : null;
-      } catch {
-        /* ignore */
-      }
-      return { ...c, claim_data: parsed };
-    }),
-  );
+  const identities = new Map(donors.map((d) => [d.id, { email: d.email }]));
+  res.json(claims.map((claim) => ({ ...claim, donor: identities.get(claim.donor_id) })));
 });
 
 router.patch('/claims/:id', async (req, res) => {
@@ -227,17 +229,120 @@ router.patch('/claims/:id', async (req, res) => {
   if (!['PENDING', 'FULFILLED'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
-  const claim = await prisma.rewardClaim.update({
-    where: { id: req.params.id },
-    data: { status },
-    include: { reward: true, donor: { select: { email: true } } },
-  });
-  res.json(claim);
+  try {
+    const claim = await withWebhooks((tx, _emit, publisher) =>
+      setClaimStatusTx(tx, req.params.id, status, publisher),
+    );
+    const donor = await prisma.donor.findUnique({
+      where: { id: claim.donor_id },
+      select: { email: true },
+    });
+    res.json({ ...claim, donor });
+  } catch (e) {
+    sendError(res, e, '[admin/claims/status]');
+  }
 });
+
+router.post('/claims/:id/acknowledge-chargeback', async (req, res) => {
+  try {
+    res.json(
+      await withWebhooks((tx) =>
+        acknowledgeChargebackClaimTx(
+          tx,
+          req.params.id,
+          req.donor?.email ?? 'admin',
+          req.body?.note,
+        ),
+      ),
+    );
+  } catch (e) {
+    sendError(res, e, '[admin/claims/acknowledge-chargeback]');
+  }
+});
+
+// Payment refunds are admin-only, never mounted on identity/moderator routers.
+router.get(
+  '/claims/:id/payment-refund-preview',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => previewPaymentRefundTx(tx, req.params.id!)));
+  }),
+);
+router.post(
+  '/claims/:id/payment-refund',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await requestPaymentRefund(req.params.id!, req.donor?.email || 'admin'));
+  }),
+);
+router.get(
+  '/payment-refunds',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    const { status, donation_id } = req.query;
+    if (
+      (status !== undefined && typeof status !== 'string') ||
+      (donation_id !== undefined && typeof donation_id !== 'string')
+    )
+      return res.status(400).json({ error: 'Invalid Payment refund filter' });
+    res.json(
+      await prisma.$transaction((tx) =>
+        listPaymentRefundsTx(tx, {
+          status,
+          donation_id,
+          offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
+          limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+        }),
+      ),
+    );
+  }),
+);
+router.get(
+  '/payment-refunds/:id',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => getPaymentRefundTx(tx, req.params.id!)));
+  }),
+);
+router.post(
+  '/payment-refunds/:id/retry',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(await retryPaymentRefund(req.params.id!));
+  }),
+);
+router.post(
+  '/payment-refunds/:id/resolve-item',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(
+      await resolvePaymentRefundItem(
+        req.params.id!,
+        req.body?.resolution,
+        req.donor?.email || 'admin',
+      ),
+    );
+  }),
+);
+router.post(
+  '/payment-refunds/:id/resolve-shipping',
+  handle('[admin/payment-refunds]', async (req, res) => {
+    res.json(
+      await resolvePaymentRefundShipping(
+        req.params.id!,
+        req.body?.resolution,
+        req.donor?.email || 'admin',
+      ),
+    );
+  }),
+);
 
 // Rewards CRUD
 router.get('/rewards', async (req, res) => {
-  res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.reward.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'reward', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/rewards', async (req, res) => {
@@ -252,31 +357,16 @@ router.post('/rewards', async (req, res) => {
     image_url,
     channel_id,
   } = req.body;
-  const reward = await withWebhooks(async (tx, emit) => {
-    const created = await tx.reward.create({
-      data: {
-        title,
-        description,
-        type,
-        cost_cents,
-        quantity_total: quantity_total ?? null,
-        is_active: is_active ?? true,
-        custom_type_label,
-        image_url: image_url || null,
-        channel_id: channel_id || null,
-      },
-    });
-    await emit('incentive.created', () =>
-      buildIncentiveCreatedPayload({
-        incentiveKind: 'REWARD',
-        incentiveId: created.id,
-        channelId: created.channel_id,
-        title: created.title,
-        isActive: created.is_active,
-        costCents: created.cost_cents,
-      }),
-    );
-    return created;
+  const reward = await createReward({
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active: is_active ?? true,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id: channel_id ?? null,
   });
   res.json(reward);
 });
@@ -293,91 +383,26 @@ router.put('/rewards/:id', async (req, res) => {
     image_url,
     channel_id,
   } = req.body;
-  const prior = await prisma.reward.findUnique({ where: { id: req.params.id } });
-  if (!prior) return res.status(404).json({ error: 'Reward not found' });
-
-  if (prior.image_url !== (image_url || null)) {
-    await deleteUploadByUrl(prior.image_url);
-  }
-  const reward = await withWebhooks(async (tx, emit) => {
-    const updated = await tx.reward.update({
-      where: { id: req.params.id },
-      data: {
-        title,
-        description,
-        type,
-        cost_cents,
-        quantity_total: quantity_total ?? null,
-        is_active,
-        custom_type_label,
-        image_url: image_url || null,
-        channel_id: channel_id || null,
-      },
-    });
-
-    if (!prior.is_active && updated.is_active) {
-      await emit('incentive.enabled', () =>
-        buildIncentiveEnabledPayload({
-          incentiveKind: 'REWARD',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    } else if (prior.is_active && !updated.is_active) {
-      await emit('incentive.disabled', () =>
-        buildIncentiveDisabledPayload({
-          incentiveKind: 'REWARD',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    }
-
-    if (prior.cost_cents !== updated.cost_cents) {
-      const changedFields = ['cost_cents'];
-      await emit('incentive.value_changed', () =>
-        buildIncentiveValueChangedPayload({
-          incentiveKind: 'REWARD',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-          changedFields,
-          oldCostCents: prior.cost_cents,
-          newCostCents: updated.cost_cents,
-        }),
-      );
-    }
-    return updated;
+  const reward = await updateReward(req.params.id, {
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id,
   });
   res.json(reward);
 });
 
 router.delete('/rewards/:id', async (req, res) => {
   try {
-    const claims = await prisma.rewardClaim.count({ where: { reward_id: req.params.id } });
-    if (claims > 0) {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    const existing = await prisma.reward.findUnique({
-      where: { id: req.params.id },
-      select: { image_url: true },
-    });
-    await prisma.reward.delete({ where: { id: req.params.id } });
-    await deleteUploadByUrl(existing?.image_url);
+    await removeIncentive('REWARD', req.params.id);
     res.json({ success: true });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === 'P2025') return res.status(404).json({ error: 'Reward not found' });
-    if (code === 'P2003') {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    throw err;
+    sendError(res, err, '[admin/rewards]');
   }
 });
 
@@ -427,7 +452,8 @@ router.post('/simulate-donation', async (req, res) => {
       externalId = `sim-${crypto.randomUUID()}`;
     }
 
-    const result = await processDonation({
+    const result = await intakeDonation({
+      source: 'admin',
       externalId,
       email,
       donorName: donor_name || 'Anonymous',
@@ -508,6 +534,7 @@ router.get('/donors/:id', async (req, res) => {
       email: true,
       total_donated: true,
       balance_remaining: true,
+      balance_held_cents: true,
       role: true,
       is_frozen: true,
       created_at: true,
@@ -520,7 +547,17 @@ router.get('/donors/:id', async (req, res) => {
     },
   });
   if (!donor) return res.status(404).json({ error: 'Donor not found' });
-  res.json(donor);
+  const pool_credits = await prisma.$transaction((tx) => readPoolCreditSummaryTx(tx, donor.id));
+  const reward_claims = await prisma.$transaction((tx) =>
+    Promise.all(
+      donor.reward_claims.map(async (claim) => ({
+        ...claim,
+        source: 'donor',
+        funding_donation_ids: (await readRewardFundingTx(tx, claim)).donation_ids,
+      })),
+    ),
+  );
+  res.json({ ...donor, reward_claims, pool_credits });
 });
 
 router.patch('/donors/:id/role', async (req, res) => {
@@ -572,38 +609,18 @@ router.post('/donors/:id/adjust-balance', async (req, res) => {
   if (!['REFUND', 'FREEZE_ZERO', 'MANUAL', 'CHARGEBACK'].includes(type)) {
     return res.status(400).json({ error: 'Invalid adjustment type' });
   }
-  const donor = await prisma.donor.findUnique({ where: { id: req.params.id } });
-  if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-  const balanceAfter = donor.balance_remaining + cents;
-  if (balanceAfter < 0) {
-    return res.status(400).json({ error: 'Adjustment would result in negative balance' });
+  try {
+    const result = await prisma.$transaction((tx) =>
+      adjustWalletCreditTx(tx, req.params.id, cents, type, reason, 'admin'),
+    );
+    const donor = await prisma.donor.findUnique({
+      where: { id: req.params.id },
+      select: { email: true },
+    });
+    res.json({ ...result, email: donor?.email });
+  } catch (e) {
+    sendError(res, e, '[admin/adjust-balance]');
   }
-
-  await prisma.$transaction([
-    prisma.donor.update({
-      where: { id: donor.id },
-      data: { balance_remaining: { increment: cents } },
-    }),
-    prisma.balanceAdjustment.create({
-      data: {
-        donor_id: donor.id,
-        amount_cents: cents,
-        balance_after_cents: balanceAfter,
-        type,
-        reason: reason || null,
-        created_by: 'admin',
-      },
-    }),
-  ]);
-
-  res.json({
-    success: true,
-    email: donor.email,
-    balance_before: donor.balance_remaining,
-    balance_after: balanceAfter,
-    adjustment: cents,
-  });
 });
 
 /**
@@ -643,224 +660,74 @@ router.post('/donors/sweep-credits', async (req, res) => {
     where.balance_remaining.lte = max;
   }
 
-  const donors = await prisma.donor.findMany({
-    where,
-    select: {
-      id: true,
-      balance_remaining: true,
-      donations: {
-        orderBy: { created_at: 'desc' },
-        take: 1,
-        select: { donor_name: true },
-      },
-    },
-  });
-
-  const totalCents = donors.reduce((sum, d) => sum + d.balance_remaining, 0);
-
-  if (confirm !== true) {
-    return res.json({
-      preview: true,
-      donor_count: donors.length,
-      total_cents: totalCents,
-      sample: donors.slice(0, 10).map((d) => ({
-        id: d.id,
-        balance_remaining: d.balance_remaining,
-        donor_name: d.donations[0]?.donor_name ?? null,
-      })),
-    });
-  }
-
-  if (donors.length > 0) {
-    await prisma.$transaction(
-      donors.flatMap((d) => {
-        const displayName = d.donations[0]?.donor_name || 'Anonymous';
-        return [
-          prisma.donor.update({
-            where: { id: d.id },
-            data: { balance_remaining: { decrement: d.balance_remaining } },
-          }),
-          prisma.balanceAdjustment.create({
-            data: {
-              donor_id: d.id,
-              amount_cents: -d.balance_remaining,
-              balance_after_cents: 0,
-              type: 'FREEZE_ZERO',
-              reason: `Bulk credit sweep (${displayName})`,
-              created_by: 'admin',
-            },
-          }),
-        ];
-      }),
+  try {
+    const result = await prisma.$transaction((tx) =>
+      sweepWalletCreditsTx(tx, where, confirm === true, 'admin'),
     );
+    res.json(result);
+  } catch (e) {
+    sendError(res, e, '[admin/sweep-credits]');
   }
-
-  res.json({ success: true, donor_count: donors.length, total_cents: totalCents });
 });
 
+router.get(
+  '/donors/:id/reverse-spend-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    if (typeof req.query.spend_type !== 'string' || typeof req.query.spend_id !== 'string')
+      return res.status(400).json({ error: 'spend_type and spend_id required' });
+    res.json(
+      await prisma.$transaction((tx) =>
+        previewSpendReversalTx(
+          tx,
+          req.params.id!,
+          req.query.spend_type as string,
+          req.query.spend_id as string,
+        ),
+      ),
+    );
+  }),
+);
+router.get(
+  '/goals/:id/reversal-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) => previewIncentiveReversalTx(tx, 'goal', req.params.id!)),
+    );
+  }),
+);
+router.get(
+  '/polls/options/:id/reversal-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) => previewIncentiveReversalTx(tx, 'option', req.params.id!)),
+    );
+  }),
+);
 router.post('/donors/:id/reverse-spend', async (req, res) => {
   const { spend_type, spend_id } = req.body;
   if (!spend_type || !spend_id) {
     return res.status(400).json({ error: 'spend_type and spend_id required' });
   }
-
-  const donor = await prisma.donor.findUnique({ where: { id: req.params.id } });
-  if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-  if (spend_type === 'claim') {
-    const claim = await prisma.rewardClaim.findUnique({
-      where: { id: spend_id },
-      include: { reward: true },
-    });
-    if (!claim || claim.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Claim not found' });
-    if (claim.status === 'REVERSED')
-      return res.status(400).json({ error: 'Claim already reversed' });
-    if (claim.status === 'FULFILLED')
-      return res
-        .status(400)
-        .json({ error: 'Cannot reverse fulfilled claim; mark it as PENDING first' });
-
-    const refundCents = claim.reward.cost_cents;
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: refundCents } },
-      }),
-      prisma.rewardClaim.update({
-        where: { id: claim.id },
-        data: { status: 'REVERSED', reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      prisma.reward.update({
-        where: { id: claim.reward_id },
-        data: { quantity_claimed: { decrement: 1 } },
-      }),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: refundCents,
-          balance_after_cents: donor.balance_remaining + refundCents,
-          type: 'REFUND',
-          reason: 'Reversed reward claim',
-          reference_id: claim.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else if (spend_type === 'vote') {
-    const vote = await prisma.pollVote.findUnique({ where: { id: spend_id } });
-    if (!vote || vote.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Vote not found' });
-    if (vote.reversed_at) return res.status(400).json({ error: 'Vote already reversed' });
-
-    const option = await prisma.pollOption.findUnique({ where: { id: vote.poll_option_id } });
-    // Only decrement the public tally if the option was actually credited
-    // (ACTIVE). A vote funding a still-PENDING_APPROVAL custom entry has
-    // votes_cents === 0 on the option, so skip the decrement to avoid going
-    // negative; mark the option REJECTED instead so it stays excluded.
-    const wasActive = option?.status === 'ACTIVE';
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: vote.amount_cents } },
-      }),
-      prisma.pollVote.update({
-        where: { id: vote.id },
-        data: { reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      ...(option
-        ? [
-            wasActive
-              ? prisma.pollOption.update({
-                  where: { id: option.id },
-                  data: { votes_cents: { decrement: vote.amount_cents } },
-                })
-              : prisma.pollOption.update({
-                  where: { id: option.id },
-                  data: { status: 'REJECTED' },
-                }),
-          ]
-        : []),
-      ...(wasActive
-        ? [
-            prisma.poll.update({
-              where: { id: vote.poll_id },
-              data: { total_votes_cents: { decrement: vote.amount_cents } },
-            }),
-          ]
-        : []),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: vote.amount_cents,
-          balance_after_cents: donor.balance_remaining + vote.amount_cents,
-          type: 'REFUND',
-          reason: 'Reversed poll vote',
-          reference_id: vote.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else if (spend_type === 'contribution') {
-    const contrib = await prisma.fundContribution.findUnique({ where: { id: spend_id } });
-    if (!contrib || contrib.donor_id !== donor.id)
-      return res.status(404).json({ error: 'Contribution not found' });
-    if (contrib.reversed_at)
-      return res.status(400).json({ error: 'Contribution already reversed' });
-
-    const goal = await prisma.fundGoal.findUnique({ where: { id: contrib.goal_id } });
-    const newTotal = goal ? goal.current_cents - contrib.amount_cents : 0;
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: contrib.amount_cents } },
-      }),
-      prisma.fundContribution.update({
-        where: { id: contrib.id },
-        data: { reversed_at: new Date(), reversed_by: 'admin' },
-      }),
-      ...(goal
-        ? [
-            prisma.fundGoal.update({
-              where: { id: goal.id },
-              data: {
-                current_cents: { decrement: contrib.amount_cents },
-                is_complete: newTotal <= 0 ? false : undefined,
-              },
-            }),
-          ]
-        : []),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: contrib.amount_cents,
-          balance_after_cents: donor.balance_remaining + contrib.amount_cents,
-          type: 'REFUND',
-          reason: 'Reversed fund contribution',
-          reference_id: contrib.id,
-          created_by: 'admin',
-        },
-      }),
-    ]);
-  } else {
-    return res
-      .status(400)
-      .json({ error: 'Invalid spend_type. Must be claim, vote, or contribution' });
+  try {
+    await withWebhooks((tx, _emit, publisher) =>
+      reverseSpendTx(tx, req.params.id, spend_type, spend_id, 'admin', publisher),
+    );
+    res.json({ success: true });
+  } catch (e) {
+    sendError(res, e, '[admin/reverse-spend]');
   }
-
-  res.json({ success: true });
 });
 
 // Polls CRUD
 router.get('/polls', async (req, res) => {
   res.json(
-    await prisma.poll.findMany({
-      include: { options: true },
-      orderBy: { created_at: 'desc' },
-    }),
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (
+          await tx.poll.findMany({ include: { options: true }, orderBy: { created_at: 'desc' } })
+        ).map(async (row) => ({ ...row, ...(await incentiveAllocationTx(tx, 'poll', row.id)) })),
+      ),
+    ),
   );
 });
 
@@ -876,34 +743,18 @@ router.post('/polls', async (req, res) => {
     auto_approve,
     channel_id,
   } = req.body;
-  const poll = await withWebhooks(async (tx, emit) => {
-    const created = await tx.poll.create({
-      data: {
-        title,
-        description,
-        is_active: is_active ?? true,
-        ends_at: ends_at ? new Date(ends_at) : null,
-        allow_custom_entries: allow_custom_entries ?? false,
-        max_entry_chars: max_entry_chars ?? null,
-        auto_approve: auto_approve ?? true,
-        channel_id: channel_id || null,
-        options: options?.length
-          ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
-          : undefined,
-      },
-      include: { options: true },
-    });
-    await emit('incentive.created', () =>
-      buildIncentiveCreatedPayload({
-        incentiveKind: 'POLL',
-        incentiveId: created.id,
-        channelId: created.channel_id,
-        title: created.title,
-        isActive: created.is_active,
-        endsAt: created.ends_at,
-      }),
-    );
-    return created;
+  const poll = await createPoll({
+    title,
+    description,
+    is_active: is_active ?? true,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id: channel_id ?? null,
+    options: options?.length
+      ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+      : undefined,
   });
   res.json(poll);
 });
@@ -920,102 +771,42 @@ router.put('/polls/:id', async (req, res) => {
     channel_id,
   } = req.body;
 
-  const prior = await prisma.poll.findUnique({ where: { id: req.params.id } });
-  if (!prior) return res.status(404).json({ error: 'Poll not found' });
-
-  const poll = await withWebhooks(async (tx, emit) => {
-    const updated = await tx.poll.update({
-      where: { id: req.params.id },
-      data: {
-        title,
-        description,
-        is_active,
-        ends_at: ends_at ? new Date(ends_at) : null,
-        allow_custom_entries: allow_custom_entries ?? false,
-        max_entry_chars: max_entry_chars ?? null,
-        auto_approve: auto_approve ?? true,
-        channel_id: channel_id || null,
-      },
-      include: { options: true },
-    });
-
-    if (!prior.is_active && updated.is_active) {
-      await emit('incentive.enabled', () =>
-        buildIncentiveEnabledPayload({
-          incentiveKind: 'POLL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    } else if (prior.is_active && !updated.is_active) {
-      await emit('incentive.disabled', () =>
-        buildIncentiveDisabledPayload({
-          incentiveKind: 'POLL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    }
-
-    const oldEndsAt = prior.ends_at ? new Date(prior.ends_at) : null;
-    const newEndsAt = updated.ends_at ? new Date(updated.ends_at) : null;
-    const oldEndsMs = oldEndsAt ? oldEndsAt.getTime() : null;
-    const newEndsMs = newEndsAt ? newEndsAt.getTime() : null;
-    if (oldEndsMs !== newEndsMs) {
-      const changedFields = ['ends_at'];
-      await emit('incentive.value_changed', () =>
-        buildIncentiveValueChangedPayload({
-          incentiveKind: 'POLL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-          changedFields,
-          oldEndsAt,
-          newEndsAt,
-        }),
-      );
-    }
-    return updated;
+  const poll = await updatePoll(req.params.id, {
+    title,
+    description,
+    is_active,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id,
   });
   res.json(poll);
 });
 
 router.delete('/polls/:id', async (req, res) => {
-  await prisma.poll.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('POLL', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[admin/polls]');
+  }
 });
 
 router.post('/polls/:id/options', async (req, res) => {
-  const option = await prisma.pollOption.create({
-    data: { poll_id: req.params.id, label: req.body.label },
-  });
+  const option = await createPollOption(req.params.id, req.body.label);
   res.json(option);
 });
 
 router.patch('/polls/options/:id', async (req, res) => {
   const { label } = req.body;
-  if (!label || !String(label).trim()) {
-    return res.status(400).json({ error: 'label is required' });
-  }
-  const option = await prisma.pollOption.update({
-    where: { id: req.params.id },
-    data: { label: String(label).trim() },
-  });
+  const option = await updatePollOption(req.params.id, label);
   res.json(option);
 });
 
 router.delete('/polls/options/:id', async (req, res) => {
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      const refund = await refundPollOptionVotes(tx, req.params.id);
-      await tx.pollOption.update({
-        where: { id: req.params.id },
-        data: { status: 'REJECTED' },
-      });
-      return refund;
-    });
+    const result = await reverseAndDeactivate('POLL_OPTION', req.params.id, 'admin');
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -1025,7 +816,9 @@ router.delete('/polls/options/:id', async (req, res) => {
 
 router.post('/polls/options/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) => refundPollOptionVotes(tx, req.params.id));
+    const result = await withWebhooks((tx, _emit, publisher) =>
+      refundPollOptionVotes(tx, req.params.id, 'admin', publisher),
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -1034,19 +827,127 @@ router.post('/polls/options/:id/refund', async (req, res) => {
 });
 
 // Pledges
-router.get('/pledges', async (req, res) => {
-  const pledges = await prisma.pendingPledge.findMany({
-    include: {
-      items: true,
-      fulfilled_by: {
-        include: { donor: { select: { email: true } } },
-      },
-    },
-    orderBy: { created_at: 'desc' },
-    take: 100,
-  });
-  res.json(pledges);
+router.post('/pledges/:id/check-stripe', async (req, res) => {
+  try {
+    const pledge = await prisma.pendingPledge.findUnique({ where: { id: req.params.id } });
+    if (!pledge) return res.status(404).json({ error: 'Pledge not found' });
+    res.json(await reconcilePledge(pledge.pledge_token));
+  } catch (error) {
+    sendError(res, error, '[admin/check-stripe]');
+  }
 });
+router.get(
+  '/pledges',
+  handle('[admin/pledges]', async (req, res) => {
+    const statuses = typeof req.query.status === 'string' ? req.query.status.split(',') : [];
+    if (
+      (req.query.status !== undefined && typeof req.query.status !== 'string') ||
+      statuses.some(
+        (s) => !['OPEN', 'FULFILLED', 'EXPIRED', 'CANCELLED', 'PAYMENT_REVIEW'].includes(s),
+      )
+    )
+      return res.status(400).json({ error: 'Invalid pledge status filter' });
+    const paymentState = req.query.payment_state;
+    if (
+      paymentState !== undefined &&
+      (typeof paymentState !== 'string' ||
+        ![
+          'READY',
+          'OPEN',
+          'PROCESSING',
+          'UNKNOWN',
+          'NON_PAYMENT',
+          'FULFILLED',
+          'LEGACY_PAID',
+          'PAYMENT_REVIEW',
+        ].includes(paymentState))
+    )
+      return res.status(400).json({ error: 'Invalid pledge payment-state filter' });
+    const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+    const limit = req.query.limit === undefined ? 100 : Number(req.query.limit);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 200 ||
+      (req.query.overdue !== undefined && !['true', 'false'].includes(String(req.query.overdue)))
+    )
+      return res.status(400).json({ error: 'Invalid pledge pagination/filter' });
+    const now = new Date();
+    const overdue: Prisma.PendingPledgeWhereInput = {
+      status: 'OPEN',
+      expires_at: { lt: now },
+      OR: [{ checkout_session_status: null }, { checkout_session_status: { not: 'complete' } }],
+    };
+    const where: Prisma.PendingPledgeWhereInput = {
+      AND: [
+        ...(statuses.length ? [{ status: { in: statuses } }] : []),
+        ...(paymentState === 'LEGACY_PAID' ? [{ format: 'LEGACY' }] : []),
+        ...(req.query.overdue === 'true'
+          ? [overdue]
+          : req.query.overdue === 'false'
+            ? [{ NOT: overdue }]
+            : []),
+      ],
+    };
+    const [storedTotal, candidates] = await prisma.$transaction(async (tx) =>
+      Promise.all([
+        tx.pendingPledge.count({ where }),
+        tx.pendingPledge.findMany({
+          where,
+          include: {
+            items: true,
+            fulfilled_by: { include: { donor: { select: { email: true } } } },
+          },
+          orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+          take: paymentState === undefined ? limit : undefined,
+          skip: paymentState === undefined ? offset : undefined,
+        }),
+      ]),
+    );
+    // Canonical payment outcomes can differ from stored status (late LEGACY cash
+    // keeps EXPIRED). Filter the shared projection BEFORE paginating/counting it.
+    const matching =
+      paymentState === undefined
+        ? candidates
+        : candidates.filter((pledge) => pledgePaymentState(pledge) === paymentState);
+    const total = paymentState === undefined ? storedTotal : matching.length;
+    const pledges = paymentState === undefined ? matching : matching.slice(offset, offset + limit);
+    res.set('X-Total-Count', String(total));
+    res.json(
+      await Promise.all(
+        pledges.map(async (pledge) => ({
+          ...pledge,
+          payment_state: pledgePaymentState(pledge),
+          overdue:
+            pledge.status === 'OPEN' &&
+            pledge.expires_at < now &&
+            pledge.checkout_session_status !== 'complete',
+          admin_review_required: pledge.status === 'PAYMENT_REVIEW',
+          wallet_held_cents: pledge.wallet_hold_status === 'HELD' ? pledge.held_wallet_cents : 0,
+          shipping_cents: pledge.fulfilled_by?.shipping_cents ?? null,
+          items: await Promise.all(
+            pledge.items.map(async (item) => {
+              const reward =
+                item.kind === 'REWARD'
+                  ? await prisma.reward.findUnique({
+                      where: { id: item.target_id },
+                      select: { cost_cents: true, title: true },
+                    })
+                  : null;
+              return {
+                ...item,
+                current_price_cents: reward?.cost_cents ?? null,
+                label: reward?.title ?? item.target_id,
+              };
+            }),
+          ),
+        })),
+      ),
+    );
+  }),
+);
 router.get('/blocked-words', async (req, res) => {
   const words = await prisma.blockedWord.findMany({ orderBy: { word: 'asc' } });
   res.json(words);
@@ -1072,32 +973,27 @@ router.delete('/blocked-words/:id', async (req, res) => {
 
 // Goals CRUD
 router.get('/goals', async (req, res) => {
-  res.json(await prisma.fundGoal.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.fundGoal.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'goal', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, channel_id } = req.body;
-  const goal = await withWebhooks(async (tx, emit) => {
-    const created = await tx.fundGoal.create({
-      data: {
-        title,
-        description,
-        target_cents,
-        is_active: is_active ?? true,
-        channel_id: channel_id || null,
-      },
-    });
-    await emit('incentive.created', () =>
-      buildIncentiveCreatedPayload({
-        incentiveKind: 'GOAL',
-        incentiveId: created.id,
-        channelId: created.channel_id,
-        title: created.title,
-        isActive: created.is_active,
-        targetCents: created.target_cents,
-      }),
-    );
-    return created;
+  const { title, description, target_cents, is_active, channel_id, is_complete } = req.body;
+  const goal = await createGoal({
+    is_complete,
+    title,
+    description,
+    target_cents,
+    is_active: is_active ?? true,
+    channel_id: channel_id ?? null,
   });
   res.json(goal);
 });
@@ -1105,84 +1001,20 @@ router.post('/goals', async (req, res) => {
 router.put('/goals/:id', async (req, res) => {
   const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
 
-  const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
-  if (!prior) return res.status(404).json({ error: 'Goal not found' });
-
-  const goal = await withWebhooks(async (tx, emit) => {
-    const updated = await tx.fundGoal.update({
-      where: { id: req.params.id },
-      data: {
-        title,
-        description,
-        target_cents,
-        is_active,
-        is_complete,
-        channel_id: channel_id || null,
-      },
-    });
-
-    if (!prior.is_active && updated.is_active) {
-      await emit('incentive.enabled', () =>
-        buildIncentiveEnabledPayload({
-          incentiveKind: 'GOAL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    } else if (prior.is_active && !updated.is_active) {
-      await emit('incentive.disabled', () =>
-        buildIncentiveDisabledPayload({
-          incentiveKind: 'GOAL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-        }),
-      );
-    }
-
-    if (prior.target_cents !== updated.target_cents) {
-      const changedFields = ['target_cents'];
-      await emit('incentive.value_changed', () =>
-        buildIncentiveValueChangedPayload({
-          incentiveKind: 'GOAL',
-          incentiveId: updated.id,
-          channelId: updated.channel_id,
-          title: updated.title,
-          changedFields,
-          oldTargetCents: prior.target_cents,
-          newTargetCents: updated.target_cents,
-        }),
-      );
-    }
-    return updated;
+  const goal = await updateGoal(req.params.id, {
+    title,
+    description,
+    target_cents,
+    is_active,
+    is_complete,
+    channel_id,
   });
   res.json(goal);
 });
 
 router.delete('/goals/:id', async (req, res) => {
   try {
-    const prior = await prisma.fundGoal.findUnique({ where: { id: req.params.id } });
-    if (!prior) return res.status(404).json({ error: 'Goal not found' });
-
-    const result = await withWebhooks(async (tx, emit) => {
-      const refund = await refundGoalContributions(tx, req.params.id);
-      await tx.fundGoal.update({
-        where: { id: req.params.id },
-        data: { is_active: false },
-      });
-      if (prior.is_active) {
-        await emit('incentive.disabled', () =>
-          buildIncentiveDisabledPayload({
-            incentiveKind: 'GOAL',
-            incentiveId: prior.id,
-            channelId: prior.channel_id,
-            title: prior.title,
-          }),
-        );
-      }
-      return refund;
-    });
+    const result = await reverseAndDeactivate('GOAL', req.params.id, 'admin');
 
     res.json({ success: true, ...result });
   } catch (err) {
@@ -1193,7 +1025,9 @@ router.delete('/goals/:id', async (req, res) => {
 
 router.post('/goals/:id/refund', async (req, res) => {
   try {
-    const result = await prisma.$transaction((tx) => refundGoalContributions(tx, req.params.id));
+    const result = await withWebhooks((tx, _emit, publisher) =>
+      refundGoalContributions(tx, req.params.id, 'admin', publisher),
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;

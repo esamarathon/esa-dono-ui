@@ -268,8 +268,30 @@ curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: applicati
   -d '{"claim_data":{}}' > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_DISC/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
   -d '{"claim_data":{}}' > /dev/null
-curl -sf -X POST "$BASE/api/rewards/$R_SHIRT/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE" \
-  -d '{"claim_data":{"name":"Dave Smith","address":"123 Main St","city":"Portland","country":"US"}}' > /dev/null
+# Physical rewards cannot use Dave's existing Wallet. Confirm a cash-only
+# pledge without donor authentication, then use the ADMIN simulated settled-
+# intake boundary. This demo does NOT exercise Stripe or shipping collection.
+SHIRT_BODY=$(jq -n --arg channel "$C_MAIN" --arg reward "$R_SHIRT" \
+  '{draft_id:("demo-physical-" + $reward),pledge_amount_cents:2500,
+    email:"dave@example.com",display_name:"Dave",channel_id:$channel,plan:{},
+    items:[{kind:"REWARD",target_id:$reward,quantity:1,
+      data:{name:"Dave Smith",address:"123 Main St",city:"Portland",country:"US"}}]}')
+SHIRT_STATUS=$(curl -sS -o "$IMG_DIR/shirt-review.json" -w '%{http_code}' \
+  -X POST "$BASE/api/pledge" -H "Content-Type: application/json" -d "$SHIRT_BODY")
+[ "$SHIRT_STATUS" = 409 ] || { echo "Physical demo pledge did not return a corrected review" >&2; exit 1; }
+SHIRT_BODY=$(jq --slurpfile review "$IMG_DIR/shirt-review.json" \
+  '.plan = $review[0].plan | .items = $review[0].items' <<< "$SHIRT_BODY")
+SHIRT_PLEDGE=$(curl -sf -X POST "$BASE/api/pledge" \
+  -H "Content-Type: application/json" -d "$SHIRT_BODY")
+jq -e '.format == "POOLED" and .pledge_amount_cents == 2500 and
+  .new_money_cents == 2500 and .wallet_applied_cents == 0 and
+  .requires_shipping == true and (.pledge_token | type == "string")' \
+  <<< "$SHIRT_PLEDGE" > /dev/null
+SHIRT_PAYMENT=$(jq -n --argjson pledge "$SHIRT_PLEDGE" \
+  '{email:"dave@example.com",donor_name:"Dave",amount_cents:$pledge.new_money_cents,
+    pledge_token:$pledge.pledge_token,external_id:("demo-physical-" + $pledge.pledge_token)}')
+curl -sf -X POST "$BASE/api/admin/simulate-donation" \
+  -H "Content-Type: application/json" -H "$AUTH" -d "$SHIRT_PAYMENT" > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_GAME/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE" \
   -d '{"claim_data":{"your_game_pick":"Outer Wilds"}}' > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" \

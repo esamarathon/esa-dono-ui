@@ -4,7 +4,8 @@ import Card from '../../components/Card';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import ChannelPill from '../../components/ChannelPill';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
-import type { AdminDonation } from '../../types';
+import { apiErrorMessage, type AdminDonation } from '../../types';
+import { NotMoneyNote } from '../../components/StaffAmounts';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -13,6 +14,16 @@ function fmt(cents: number) {
 export default function ModeratorDonations() {
   const [donations, setDonations] = useState<AdminDonation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const undo = async (category: 'poll' | 'goal', id: string) => {
+    setError('');
+    try {
+      await moderatorClient.post(`/unused-pool-money/${category}/${id}/undo`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Undo failed'));
+    }
+  };
   const { channels, selectedChannelId } = useModeratorChannelFilter();
 
   const reload = () => moderatorClient.get('/donations').then((r) => setDonations(r.data));
@@ -43,7 +54,7 @@ export default function ModeratorDonations() {
   };
 
   const channelName = (d: AdminDonation) => {
-    if (!d.channel) return 'shared';
+    if (!d.channel) return 'unassigned';
     return channels.find((e) => e.id === d.channel?.id)?.name ?? 'unknown channel';
   };
 
@@ -57,6 +68,8 @@ export default function ModeratorDonations() {
     <div>
       <h1 className="font-display text-4xl uppercase mb-6">donations</h1>
 
+      {error && <p role="alert">{error}</p>}
+      <NotMoneyNote />
       <div className="space-y-4">
         {filteredDonations.map((d) => (
           <Card key={d.id}>
@@ -68,36 +81,52 @@ export default function ModeratorDonations() {
                   </h3>
                   <ChannelPill label={channelName(d)} />
                 </div>
+                <span className="font-data text-xs text-off-white/55">Money</span>
                 <p className="font-data font-bold text-sm text-d-yellow mt-1">
                   {fmt(d.amount_cents)}
                 </p>
+                <p className="font-data text-sm">
+                  Pledge amount: {d.pledge_amount_cents == null ? '—' : fmt(d.pledge_amount_cents)}
+                </p>
+                {d.status && d.status !== 'COMPLETED' && (
+                  <span className="font-mono">{d.status}</span>
+                )}
                 {d.comment && (
                   <p className="font-body text-sm text-off-white/55 mt-1 break-words">
                     &ldquo;{d.comment}&rdquo;
                   </p>
                 )}
-                {(d.pledge_items?.length ?? 0) > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {d.pledge_items!.map((item, i) => (
-                      <span
-                        key={i}
-                        className="font-data text-xs px-2 py-0.5 rounded-sm"
-                        style={{ background: 'rgba(115,78,158,.3)', color: 'var(--off-white)' }}
-                        title={`${item.kind} · ${fmt(item.amount_cents)}`}
-                      >
-                        {item.label} &middot; {fmt(item.amount_cents)}
-                      </span>
+                {(['reward', 'poll', 'goal'] as const).map((category) => (
+                  <section key={category} className="mt-2 font-data text-sm">
+                    <h4>{category} allocations (live)</h4>
+                    {d.allocations?.[category].map((row) => (
+                      <div key={row.id} className="flex flex-wrap gap-2">
+                        <span>
+                          {row.label} · {fmt(row.amount_cents)}
+                        </span>
+                        <span className="font-mono">{row.source}</span>
+                        {row.source === 'moderator' && (
+                          <>
+                            <span>
+                              {row.allocated_by} ·{' '}
+                              {row.allocated_at ? new Date(row.allocated_at).toLocaleString() : ''}
+                            </span>
+                            {category !== 'reward' && (
+                              <button className="underline" onClick={() => undo(category, row.id)}>
+                                undo
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     ))}
-                    {!!d.top_up_cents && (
-                      <span
-                        className="font-data text-xs px-2 py-0.5 rounded-sm"
-                        style={{ background: 'rgba(208,152,70,.16)', color: 'var(--d-yellow)' }}
-                      >
-                        additional contribution &middot; {fmt(d.top_up_cents)}
+                    {category !== 'reward' && (
+                      <span>
+                        Unused pool money ({category}): {fmt(d.unused_cents?.[category] ?? 0)}
                       </span>
                     )}
-                  </div>
-                )}
+                  </section>
+                ))}
                 <p className="font-data text-xs text-off-white/40 mt-1">
                   {new Date(d.created_at).toLocaleString()}
                 </p>
