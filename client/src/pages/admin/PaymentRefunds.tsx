@@ -57,6 +57,7 @@ export function ClaimPaymentRefund({
 }) {
   const [preview, setPreview] = useState<PaymentRefundPreview | null>(null);
   const [open, setOpen] = useState(false);
+  const [rejection, setRejection] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -77,7 +78,13 @@ export function ClaimPaymentRefund({
     setBusy(true);
     setError('');
     try {
-      await adminClient.post(`/claims/${claimId}/payment-refund`);
+      const { data } = await adminClient.post<PaymentRefundRecord>(
+        `/claims/${claimId}/payment-refund`,
+      );
+      if (data.resolution === 'REJECTED') {
+        setRejection(data.failure_reason ?? 'Stripe did not provide a reason');
+        return;
+      }
       setOpen(false);
       await onChanged();
     } catch (e) {
@@ -96,7 +103,10 @@ export function ClaimPaymentRefund({
       <button
         className="btrl-button btrl-button-outline"
         disabled={!preview?.eligible || busy}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setRejection(null);
+          setOpen(true);
+        }}
       >
         Cancel with Payment refund
       </button>
@@ -106,22 +116,35 @@ export function ClaimPaymentRefund({
       {error && <p role="alert">{error}</p>}
       {open && preview?.eligible && (
         <Modal title="Cancel with Payment refund" onClose={() => !busy && setOpen(false)}>
-          <p>
-            Server preview. Only this physical claim is cancelled. Other reward entitlements stay
-            intact.
-          </p>
-          <p>
-            Item return: {fmt(preview.item_cents)} · Shipping return (outside totals):{' '}
-            {fmt(preview.shipping_cents)}
-          </p>
-          <PoolShrink plan={preview.pool_shrink} />
-          <p>
-            Stripe acceptance applies these changes before final settlement. A later failure needs
-            explicit item and shipping recovery.
-          </p>
-          <button className="btrl-button" disabled={busy} onClick={confirm}>
-            confirm Payment refund
-          </button>
+          {rejection ? (
+            <>
+              <p role="alert">
+                Payment refund rejected: {rejection}. The claim and money are unchanged.
+              </p>
+              <button className="btrl-button" onClick={() => setOpen(false)}>
+                Close and review
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                Server preview. Only this physical claim is cancelled. Other reward entitlements
+                stay intact.
+              </p>
+              <p>
+                Item return: {fmt(preview.item_cents)} · Shipping return (outside totals):{' '}
+                {fmt(preview.shipping_cents)}
+              </p>
+              <PoolShrink plan={preview.pool_shrink} />
+              <p>
+                Stripe acceptance applies these changes before final settlement. A later failure
+                needs explicit item and shipping recovery.
+              </p>
+              <button className="btrl-button" disabled={busy} onClick={confirm}>
+                confirm Payment refund
+              </button>
+            </>
+          )}
         </Modal>
       )}
     </div>

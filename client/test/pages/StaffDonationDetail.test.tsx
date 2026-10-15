@@ -6,6 +6,7 @@ vi.mock('../../src/api/admin', () => ({ default: api }));
 import AdminDonationDetail from '../../src/pages/admin/AdminDonationDetail';
 import AdminLayout from '../../src/pages/admin/AdminLayout';
 import PaymentRefunds from '../../src/pages/admin/PaymentRefunds';
+import type { PaymentRefundRecord } from '../../src/types';
 const detail = {
   id: 'd',
   donor_name: 'Alice',
@@ -84,93 +85,232 @@ it('routed detail shows source rows, server-disabled cash0 action and confirms a
   );
   expect(localStorage.getItem('donation_draft_v1')).toBe('unrelated-browser-draft');
 });
-it('previews a physical cancellation with shipping and ended/completed target shrink before requesting it', async () => {
-  const plan = {
-    donation_id: 'd',
-    claim_id: 'c',
-    money_before_cents: 800,
-    money_after_cents: 400,
-    pledge_before_cents: 1000,
-    pledge_after_cents: 600,
-    wallet_applied_cents: 200,
-    categories: {
-      reward: {
-        before_cents: 1000,
-        after_cents: 600,
-        unused_consumed_cents: 400,
-        reduced_cents: 0,
+it.each([
+  { status: 'REQUESTED', resolution: null },
+  { status: 'PENDING', resolution: null },
+  { status: 'REQUIRES_ACTION', resolution: null },
+  { status: 'SUCCEEDED', resolution: null },
+  { status: 'FAILED', resolution: null },
+  { status: 'RESOLVED', resolution: 'WALLET_CREDIT' },
+  { status: 'RESOLVED', resolution: 'RETURNED_OUTSIDE_APP' },
+  { status: 'RESOLVED', resolution: 'SETTLED_BY_DISPUTE' },
+])(
+  'previews a physical cancellation and refreshes/locks for $status / $resolution',
+  async ({ status, resolution }) => {
+    const plan = {
+      donation_id: 'd',
+      claim_id: 'c',
+      money_before_cents: 800,
+      money_after_cents: 400,
+      pledge_before_cents: 1000,
+      pledge_after_cents: 600,
+      wallet_applied_cents: 200,
+      categories: {
+        reward: {
+          before_cents: 1000,
+          after_cents: 600,
+          unused_consumed_cents: 400,
+          reduced_cents: 0,
+        },
+        poll: {
+          before_cents: 1000,
+          after_cents: 600,
+          unused_consumed_cents: 0,
+          reduced_cents: 400,
+        },
+        goal: {
+          before_cents: 1000,
+          after_cents: 600,
+          unused_consumed_cents: 0,
+          reduced_cents: 400,
+        },
       },
-      poll: { before_cents: 1000, after_cents: 600, unused_consumed_cents: 0, reduced_cents: 400 },
-      goal: { before_cents: 1000, after_cents: 600, unused_consumed_cents: 0, reduced_cents: 400 },
-    },
-    affected_targets: [
-      {
-        target_id: 'p',
-        label: 'Ended poll',
-        before_cents: 1000,
-        after_cents: 600,
-        ended: true,
-        completed: false,
-      },
-      {
-        target_id: 'g',
-        label: 'Completed goal',
-        before_cents: 1000,
-        after_cents: 600,
-        ended: false,
-        completed: true,
-      },
-    ],
-    components: [],
-  };
-  api.get.mockImplementation((path: string) =>
-    Promise.resolve({
-      data:
-        path === '/donations/d'
-          ? {
-              ...detail,
-              amount_cents: 800,
-              wallet_applied_cents: 200,
-              allocations: {
-                ...detail.allocations,
-                reward: [
-                  {
-                    id: 'c',
-                    label: 'Physical shirt',
-                    channel: 'shared',
-                    amount_cents: 400,
-                    recorded_amount_cents: 400,
-                    current_price_cents: 9000,
-                    source: 'donor',
-                    status: 'PENDING',
+      affected_targets: [
+        {
+          target_id: 'p',
+          label: 'Ended poll',
+          before_cents: 1000,
+          after_cents: 600,
+          ended: true,
+          completed: false,
+        },
+        {
+          target_id: 'g',
+          label: 'Completed goal',
+          before_cents: 1000,
+          after_cents: 600,
+          ended: false,
+          completed: true,
+        },
+      ],
+      components: [],
+    };
+    api.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data:
+          path === '/donations/d'
+            ? {
+                ...detail,
+                amount_cents: 800,
+                wallet_applied_cents: 200,
+                allocations: {
+                  ...detail.allocations,
+                  reward: [
+                    {
+                      id: 'c',
+                      label: 'Physical shirt',
+                      channel: 'shared',
+                      amount_cents: 400,
+                      recorded_amount_cents: 400,
+                      current_price_cents: 9000,
+                      source: 'donor',
+                      status: 'PENDING',
+                    },
+                  ],
+                },
+              }
+            : api.post.mock.calls.length
+              ? { eligible: false, reason: 'This claim already has a Payment refund' }
+              : { eligible: true, item_cents: 400, shipping_cents: 200, pool_shrink: plan },
+      }),
+    );
+    api.post.mockResolvedValue({ data: { status, resolution } });
+    render(
+      <MemoryRouter initialEntries={['/admin/donations/d']}>
+        <Routes>
+          <Route path="/admin/donations/:id" element={<AdminDonationDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Show reward allocation/ }));
+    const request = await screen.findByRole('button', { name: 'Cancel with Payment refund' });
+    await waitFor(() => expect(request).not.toBeDisabled());
+    fireEvent.click(request);
+    expect(
+      screen.getByText('Item return: $4.00 · Shipping return (outside totals): $2.00'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Ended poll: \$10.00 → \$6.00/)).toBeInTheDocument();
+    expect(screen.getByText(/Completed goal: \$10.00 → \$6.00/)).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'confirm Payment refund' }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/claims/c/payment-refund'));
+    expect(await screen.findByText('This claim already has a Payment refund')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Cancel with Payment refund' })).toBeDisabled();
+    expect(
+      screen.queryByRole('heading', { name: 'Cancel with Payment refund' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  },
+);
+
+it.each([
+  { failureReason: 'charge_disputed', reason: 'charge_disputed' },
+  { failureReason: null, reason: 'Stripe did not provide a reason' },
+])(
+  'shows a definite Payment refund rejection ($failureReason) immediately without cancelling the claim or changing money',
+  async ({ failureReason, reason }) => {
+    api.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data:
+          path === '/donations/d'
+            ? {
+                ...detail,
+                amount_cents: 800,
+                wallet_applied_cents: 200,
+                allocations: {
+                  ...detail.allocations,
+                  reward: [
+                    {
+                      id: 'c',
+                      label: 'Physical shirt',
+                      channel: 'Main',
+                      amount_cents: 400,
+                      recorded_amount_cents: 400,
+                      current_price_cents: 400,
+                      source: 'donor',
+                      status: 'PENDING',
+                    },
+                  ],
+                },
+              }
+            : {
+                eligible: true,
+                reason: null,
+                claim_id: 'c',
+                donation_id: 'd',
+                item_cents: 400,
+                shipping_cents: 200,
+                pool_shrink: {
+                  money_before_cents: 800,
+                  money_after_cents: 400,
+                  pledge_before_cents: 1000,
+                  pledge_after_cents: 600,
+                  wallet_applied_cents: 200,
+                  categories: {
+                    reward: { before_cents: 1000, after_cents: 600 },
+                    poll: { before_cents: 1000, after_cents: 600 },
+                    goal: { before_cents: 1000, after_cents: 600 },
                   },
-                ],
+                  affected_targets: [],
+                  components: [],
+                },
               },
-            }
-          : { eligible: true, item_cents: 400, shipping_cents: 200, pool_shrink: plan },
-    }),
-  );
-  api.post.mockResolvedValue({ data: { status: 'REQUESTED' } });
-  render(
-    <MemoryRouter initialEntries={['/admin/donations/d']}>
-      <Routes>
-        <Route path="/admin/donations/:id" element={<AdminDonationDetail />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-  fireEvent.click(await screen.findByRole('button', { name: /Show reward allocation/ }));
-  const request = await screen.findByRole('button', { name: 'Cancel with Payment refund' });
-  await waitFor(() => expect(request).not.toBeDisabled());
-  fireEvent.click(request);
-  expect(
-    screen.getByText('Item return: $4.00 · Shipping return (outside totals): $2.00'),
-  ).toBeInTheDocument();
-  expect(screen.getByText(/Ended poll: \$10.00 → \$6.00/)).toBeInTheDocument();
-  expect(screen.getByText(/Completed goal: \$10.00 → \$6.00/)).toBeInTheDocument();
-  expect(api.post).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'confirm Payment refund' }));
-  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/claims/c/payment-refund'));
-});
+      }),
+    );
+    const record: PaymentRefundRecord = {
+      id: 'rejected',
+      donation_id: 'd',
+      claim_id: 'c',
+      item_cents: 400,
+      shipping_cents: 200,
+      status: 'RESOLVED',
+      resolution: 'REJECTED',
+      failure_reason: failureReason,
+      stripe_refund_id: null,
+      pool_shrink_data: null,
+      shipping_resolution: null,
+      created_by: 'admin',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:01.000Z',
+      accepted_at: null,
+      resolved_at: '2026-01-01T00:00:01.000Z',
+      resolved_by: 'admin',
+      shipping_resolved_at: null,
+      shipping_resolved_by: null,
+    };
+    api.post.mockResolvedValue({ status: 200, data: record });
+    render(
+      <MemoryRouter initialEntries={['/admin/donations/d']}>
+        <Routes>
+          <Route path="/admin/donations/:id" element={<AdminDonationDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Show reward allocation/ }));
+    const request = await screen.findByRole('button', { name: 'Cancel with Payment refund' });
+    await waitFor(() => expect(request).toBeEnabled());
+    fireEvent.click(request);
+    fireEvent.click(screen.getByRole('button', { name: 'confirm Payment refund' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `Payment refund rejected: ${reason}. The claim and money are unchanged.`,
+    );
+    expect(screen.getByRole('alert')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Cancel with Payment refund' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'pools' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Money: $8.00')).toBeVisible();
+    expect(screen.getByText('PENDING')).toBeVisible();
+    expect(screen.queryByText(/Only this physical claim is cancelled/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'confirm Payment refund' }),
+    ).not.toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Close and review' }));
+    expect(
+      screen.queryByRole('heading', { name: 'Cancel with Payment refund' }),
+    ).not.toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledTimes(1);
+  },
+);
 
 it('renders a changed server eligibility error without committing a stale action', async () => {
   api.get.mockImplementation((path: string) =>
