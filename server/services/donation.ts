@@ -103,8 +103,7 @@ async function intakeDonationInner(input: DonationIntake) {
         pledge.checkout_session_id !== externalId
       )
         throw httpError(409, 'Checkout Session does not match this pledge');
-      if (pledge?.fulfilled_by_donation_id && (pooled || pledge.status === 'LEGACY_PAID'))
-        return null;
+      if (pledge?.fulfilled_by_donation_id) return null;
       if (pooled && pledge!.new_money_cents !== amountCents)
         throw httpError(409, 'Payment differs from confirmed new money');
       if (
@@ -217,7 +216,7 @@ async function intakeDonationInner(input: DonationIntake) {
         await tx.pendingPledge.update({
           where: { id: pledge.id },
           data: {
-            status: paymentReview ? 'PAYMENT_REVIEW' : 'LEGACY_PAID',
+            status: paymentReview ? 'PAYMENT_REVIEW' : 'EXPIRED',
           },
         });
       } else if (pledge) {
@@ -575,8 +574,10 @@ async function resolvePledge(
     });
     // An exact token is authoritative even after a local terminal state. Unknown
     // tokens NEVER fall through to another pledge with the same email address.
-    if (pledge?.format === 'POOLED' || pledge?.status === 'LEGACY_PAID') return pledge;
-    if (pledge?.fulfilled_by_donation_id || pledge?.status === 'FULFILLED') return null;
+    if (pledge?.format === 'POOLED') return pledge;
+    if (pledge?.status === 'FULFILLED') return null;
+    // Keep late cash-only receipts linked for Session checks and deduplication.
+    if (pledge?.fulfilled_by_donation_id || pledge?.status === 'LEGACY_PAID') return pledge;
     if (
       pledge?.status === 'OPEN' &&
       pledge.expires_at > new Date() &&

@@ -4793,7 +4793,9 @@ components:
             READY has no known Stripe attempt; OPEN can pay the same Session.
             PROCESSING/UNKNOWN retain funding and forbid edits/new checkout.
             NON_PAYMENT is confirmed, not a local deadline. Only pooled NON_PAYMENT
-            can edit. LEGACY_PAID records old-shape cash without D or incentives.
+            can edit. LEGACY_PAID is derived from a linked old-shape cash-only receipt,
+            without D or incentives; raw status stays EXPIRED. Original historical
+            FULFILLED pledges stay fulfilled.
             PAYMENT_REVIEW records actual cash as NULL-D Wallet credit when released
             Wallet funding cannot be reacquired in full. It is NOT pledge fulfillment.
         can_edit: { type: boolean }
@@ -4804,7 +4806,11 @@ components:
         has_checkout: { type: boolean }
         pledge_token: { type: string }
         status:
-          { type: string, enum: [OPEN, FULFILLED, EXPIRED, CANCELLED, LEGACY_PAID, PAYMENT_REVIEW] }
+          type: string
+          enum: [OPEN, FULFILLED, EXPIRED, CANCELLED, LEGACY_PAID, PAYMENT_REVIEW]
+          description: |
+            Stored pledge status, not its derived payment_state. Late LEGACY receipts
+            stay EXPIRED. LEGACY_PAID is accepted only for previously stored dev records.
         expires_at: { type: string, format: date-time }
         items:
           type: array

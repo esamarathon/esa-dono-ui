@@ -67,7 +67,7 @@ describe('PledgeReturn', () => {
     async (outcome) => {
       mocks.getPledge.mockResolvedValue({
         ...fulfilledPledge,
-        status: outcome,
+        status: outcome === 'LEGACY_PAID' ? 'EXPIRED' : outcome,
         payment_state: outcome,
       });
       renderWithToken('late');

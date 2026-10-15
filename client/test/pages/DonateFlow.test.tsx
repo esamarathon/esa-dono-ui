@@ -672,7 +672,7 @@ describe('amount-first donate through the routed flow', () => {
               total_cents: 1000,
               top_up_cents: 0,
               payment_state: state,
-              status: state,
+              status: 'EXPIRED',
             }
           : payment({ payment_state: state, status: state, admin_review_required: true }),
       );

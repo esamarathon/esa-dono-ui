@@ -137,7 +137,7 @@ States:
 - `UNKNOWN`: create/expire/retrieve is unresolved. Keep the hold and block edits/new checkout.
 - `NON_PAYMENT`: authoritative non-payment; only a POOLED pledge has `can_edit=true`/`read_only=false`.
 - `FULFILLED`: original immutable plan fulfilled once; never undone by a cancel/expired response.
-- `LEGACY_PAID`: old-shape payment recorded as new-money Wallet credit without D/allocations. Historical review stays read-only; pledge amount is unavailable. A legacy lost create with no stored Session id atomically binds its first verified paid non-recovered Session for this cash-only receipt, never for original incentive fulfillment.
+- `LEGACY_PAID`: derived from an old-shape pledge's linked cash-only receipt, with raw `status=EXPIRED`; original historical `FULFILLED` pledges remain fulfilled. New money is Wallet credit without D/allocations. Historical review stays read-only; pledge amount is unavailable. A legacy lost create with no stored Session id atomically binds its first verified paid non-recovered Session for this cash-only receipt, never for original incentive fulfillment.
 - `PAYMENT_REVIEW`: contradictory paid-after-release money recorded as NULL-D Wallet credit because all original W could not be reacquired. `admin_review_required=true`. Do not report original incentives fulfilled or delete a draft as a fulfilled pledge.
 
 A late pooled payment fulfills normally while funding stays held, or after atomically

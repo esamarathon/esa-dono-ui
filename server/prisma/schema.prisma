@@ -329,7 +329,8 @@ model PendingPledge {
   total_cents           Int          @default(0)
   top_up_cents          Int          @default(0) // optional additional donation beyond cart items
   wallet_discount_cents Int          @default(0) // cents deducted from existing wallet balance at checkout
-  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED | LEGACY_PAID | PAYMENT_REVIEW
+  /// Late LEGACY receipts stay EXPIRED; LEGACY_PAID is derived (old dev values remain readable).
+  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED | PAYMENT_REVIEW
   requires_shipping     Boolean      @default(false) // true when any cart item is a PHYSICAL reward
   /// Written BEFORE the external create. Null session id does not prove no payment opportunity exists.
   checkout_requested_at DateTime?
