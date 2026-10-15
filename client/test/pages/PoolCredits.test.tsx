@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { DraftPledgeProvider } from '../../src/context/DraftPledgeContext';
 import MyWallet from '../../src/pages/MyWallet';
-import type { CreditEvent } from '@dono/shared';
+import type { CreditAmounts, CreditEvent } from '@dono/shared';
 vi.mock('../../src/api/donor', () => ({
   getDonor: vi.fn(),
   getPoolCredits: vi.fn(),
@@ -30,47 +30,85 @@ import {
   getPoolCreditEvent,
   applyPoolCredits,
 } from '../../src/api/donor';
-const event: CreditEvent = {
-  event: { id: 'e1', name: 'ESA Summer', slug: 'summer', ended_at: null },
-  outstanding_cents: { reward: 1000, poll: 1000, goal: 1000 },
-  available_cents: { reward: 1000, poll: 1000, goal: 1000 },
-  reasons: { reward: null, poll: null, goal: null },
-  catalog: {
-    rewards: [
-      {
-        id: 'r1',
-        title: 'Digital reward',
-        cost_cents: 1000,
-        type: 'DIGITAL',
-        remaining: 1,
-        channel: null,
-      },
-    ],
-    polls: [
-      {
-        id: 'p1',
-        title: 'Runner choice',
-        channel: { id: 'c2', name: 'Side stream', slug: 'side' },
-        total_votes_cents: 0,
-        options: [{ id: 'o1', label: 'Glitch', votes_cents: 0 }],
-      },
-    ],
-    goals: [{ id: 'g1', title: 'Bonus run', channel: null, current_cents: 0, target_cents: 10000 }],
-  },
-  history: [
-    {
-      id: 'credit1',
-      donation_id: 'donation1',
-      category: 'poll',
-      amount_cents: 1000,
-      remaining_cents: 1000,
-      created_at: '2026-01-01',
-      cleared_at: null,
-      origin: { kind: 'vote', id: 'v1', title: 'Old poll' },
-      redemptions: [],
+function creditScenario({
+  walletCents,
+  outstandingCents,
+  availableCents,
+  rewardPriceCents,
+  rewardStock,
+  pollHistoryCents,
+}: Readonly<{
+  walletCents: number;
+  outstandingCents: CreditAmounts;
+  availableCents: CreditAmounts;
+  rewardPriceCents: number;
+  rewardStock: number;
+  pollHistoryCents: number;
+}>) {
+  const event: CreditEvent = {
+    event: { id: 'e1', name: 'ESA Summer', slug: 'summer', ended_at: null },
+    outstanding_cents: outstandingCents,
+    available_cents: availableCents,
+    reasons: { reward: null, poll: null, goal: null },
+    catalog: {
+      rewards: [
+        {
+          id: 'r1',
+          title: 'Digital reward',
+          cost_cents: rewardPriceCents,
+          type: 'DIGITAL',
+          remaining: rewardStock,
+          channel: null,
+        },
+      ],
+      polls: [
+        {
+          id: 'p1',
+          title: 'Runner choice',
+          channel: { id: 'c2', name: 'Side stream', slug: 'side' },
+          total_votes_cents: 0,
+          options: [{ id: 'o1', label: 'Glitch', votes_cents: 0 }],
+        },
+      ],
+      goals: [
+        { id: 'g1', title: 'Bonus run', channel: null, current_cents: 0, target_cents: 10000 },
+      ],
     },
-  ],
-};
+    history:
+      pollHistoryCents > 0
+        ? [
+            {
+              id: 'credit1',
+              donation_id: 'donation1',
+              category: 'poll',
+              amount_cents: pollHistoryCents,
+              remaining_cents: pollHistoryCents,
+              created_at: '2026-01-01',
+              cleared_at: null,
+              origin: { kind: 'vote', id: 'v1', title: 'Old poll' },
+              redemptions: [],
+            },
+          ]
+        : [],
+  };
+  vi.mocked(getDonor).mockResolvedValue({
+    id: 'd1',
+    email: 'donor@example.com',
+    balance_remaining: walletCents,
+    total_donated: 0,
+    donations: [],
+    reward_claims: [],
+    poll_votes: [],
+    fund_contributions: [],
+    custom_entries: [],
+  });
+  vi.mocked(getPoolCredits).mockResolvedValue({
+    wallet_credit_cents: walletCents,
+    events: [event],
+  });
+  vi.mocked(getPoolCreditEvent).mockResolvedValue(event);
+  return event;
+}
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/wallet']}>
@@ -88,29 +126,17 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  vi.mocked(getDonor).mockResolvedValue({
-    id: 'd1',
-    email: 'donor@example.com',
-    balance_remaining: 123,
-    total_donated: 1000,
-    donations: [],
-    reward_claims: [],
-    poll_votes: [],
-    fund_contributions: [],
-    custom_entries: [],
-  });
-  vi.mocked(getPoolCredits).mockResolvedValue({ wallet_credit_cents: 123, events: [event] });
-  vi.mocked(getPoolCreditEvent).mockResolvedValue(event);
-  vi.mocked(applyPoolCredits).mockResolvedValue({
-    batch_id: 'batch1',
-    spent_cents: { reward: 1000, poll: 1, goal: 1000 },
-    claim_ids: ['claim1'],
-    vote_ids: ['vote1'],
-    contribution_ids: ['contribution1'],
-    donation_ids: ['donation1'],
-  });
+  vi.mocked(applyPoolCredits).mockReset();
 });
 it('unconfirmed choices clear on leaving/re-entering under the same real provider', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 0, poll: 1000, goal: 0 },
+    availableCents: { reward: 0, poll: 1000, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 1000,
+  });
   renderPage();
   fireEvent.change(await screen.findByLabelText('Glitch amount'), { target: { value: '0.02' } });
   fireEvent.click(screen.getByRole('button', { name: 'Set Glitch' }));
@@ -122,6 +148,14 @@ it('unconfirmed choices clear on leaving/re-entering under the same real provide
   expect(applyPoolCredits).not.toHaveBeenCalled();
 });
 it('stale batch error applies nothing in the page and requires a refreshed review', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 0, goal: 0 },
+    availableCents: { reward: 1000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 0,
+  });
   vi.mocked(applyPoolCredits).mockRejectedValueOnce({
     response: { status: 409, data: { error: 'Reward price changed; refresh and review' } },
   });
@@ -138,7 +172,24 @@ it('stale batch error applies nothing in the page and requires a refreshed revie
   expect(screen.queryByRole('button', { name: 'Apply credits' })).not.toBeInTheDocument();
 });
 it('lost response retains the frozen batch key and choices for a safe retry', async () => {
-  vi.mocked(applyPoolCredits).mockRejectedValueOnce(new Error('Lost response'));
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 0, goal: 0 },
+    availableCents: { reward: 1000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 0,
+  });
+  vi.mocked(applyPoolCredits)
+    .mockRejectedValueOnce(new Error('Lost response'))
+    .mockResolvedValue({
+      batch_id: 'batch1',
+      spent_cents: { reward: 1000, poll: 0, goal: 0 },
+      claim_ids: ['claim1'],
+      vote_ids: [],
+      contribution_ids: [],
+      donation_ids: ['donation1'],
+    });
   renderPage();
   fireEvent.click(await screen.findByRole('button', { name: 'Add Digital reward' }));
   fireEvent.click(screen.getByRole('button', { name: 'Review 1 pick' }));
@@ -152,9 +203,16 @@ it('lost response retains the frozen batch key and choices for a safe retry', as
   );
 });
 it('positive credit with no eligible item remains visible with its reason and Wallet stays separate', async () => {
+  const event = creditScenario({
+    walletCents: 123,
+    outstandingCents: { reward: 34, poll: 1000, goal: 0 },
+    availableCents: { reward: 34, poll: 1000, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 1000,
+  });
   vi.mocked(getPoolCreditEvent).mockResolvedValue({
     ...event,
-    available_cents: { reward: 34, poll: 1000, goal: 0 },
     catalog: { rewards: [], polls: [], goals: [] },
     reasons: {
       reward: 'No affordable open non-physical reward; the remainder stays credit.',
@@ -169,10 +227,17 @@ it('positive credit with no eligible item remains visible with its reason and Wa
   expect(screen.queryByRole('button', { name: 'Apply credits' })).not.toBeInTheDocument();
 });
 it('ended credits show positive recorded amounts and the conversion reason without permitting another spend', async () => {
+  const event = creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 1000, goal: 1000 },
+    availableCents: { reward: 0, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 1000,
+  });
   vi.mocked(getPoolCreditEvent).mockResolvedValue({
     ...event,
     event: { ...event.event, ended_at: '2026-01-02' },
-    available_cents: { reward: 0, poll: 0, goal: 0 },
     reasons: {
       reward: 'Event ended: reward Pool credit expired.',
       poll: 'Event ended: this Pool credit is now Unused pool money.',
@@ -188,6 +253,14 @@ it('ended credits show positive recorded amounts and the conversion reason witho
   expect(screen.queryByRole('button', { name: 'Apply credits' })).not.toBeInTheDocument();
 });
 it('invalid fractional-cent input and over-budget allocations cannot be reviewed', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 0, poll: 1000, goal: 0 },
+    availableCents: { reward: 0, poll: 1000, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 1000,
+  });
   renderPage();
   const input = await screen.findByLabelText('Glitch amount');
   fireEvent.change(input, { target: { value: '0.001' } });
@@ -197,16 +270,60 @@ it('invalid fractional-cent input and over-budget allocations cannot be reviewed
   fireEvent.click(screen.getByRole('button', { name: 'Set Glitch' }));
   expect(screen.getByRole('button', { name: 'Review 1 pick' })).toBeDisabled();
 });
-it('whole reward minus/plus is bounded by stock and category credit', async () => {
+it('whole reward minus/plus stops at one unit of stock while credit can fund two', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 2000, poll: 0, goal: 0 },
+    availableCents: { reward: 2000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 0,
+  });
   renderPage();
   fireEvent.click(await screen.findByRole('button', { name: 'Add Digital reward' }));
   expect(screen.getByRole('button', { name: 'Add Digital reward' })).toBeDisabled();
   expect(screen.getByLabelText('Digital reward quantity')).toHaveTextContent('1');
+  expect(screen.getByLabelText('Mobile credit balances')).toHaveTextContent('Rewards $10.00 left');
   fireEvent.click(screen.getByRole('button', { name: 'Remove Digital reward' }));
   expect(screen.getByLabelText('Digital reward quantity')).toHaveTextContent('0');
   expect(screen.getByRole('button', { name: 'Remove Digital reward' })).toBeDisabled();
 });
+it('whole reward units stop at category credit while multiple units remain in stock', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 0, goal: 0 },
+    availableCents: { reward: 1000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 3,
+    pollHistoryCents: 0,
+  });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Digital reward' }));
+  expect(screen.getByText('3 left')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add Digital reward' })).toBeDisabled();
+  expect(screen.getByLabelText('Digital reward quantity')).toHaveTextContent('1');
+  expect(screen.getByLabelText('Mobile credit balances')).toHaveTextContent('Rewards $0.00 left');
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Digital reward' }));
+  expect(screen.getByRole('button', { name: 'Add Digital reward' })).toBeEnabled();
+  expect(screen.getByLabelText('Digital reward quantity')).toHaveTextContent('0');
+});
 it('routed real provider: visible set/max and whole units, one review/apply, history and mobile bar, without changing ordinary draft', async () => {
+  creditScenario({
+    walletCents: 123,
+    outstandingCents: { reward: 1000, poll: 1000, goal: 1000 },
+    availableCents: { reward: 1000, poll: 1000, goal: 1000 },
+    rewardPriceCents: 1000,
+    rewardStock: 1,
+    pollHistoryCents: 1000,
+  });
+  vi.mocked(applyPoolCredits).mockResolvedValue({
+    batch_id: 'batch1',
+    spent_cents: { reward: 1000, poll: 1, goal: 1000 },
+    claim_ids: ['claim1'],
+    vote_ids: ['vote1'],
+    contribution_ids: ['contribution1'],
+    donation_ids: ['donation1'],
+  });
   const draft = JSON.stringify({
     id: 'draft-one',
     updatedAt: Date.now(),

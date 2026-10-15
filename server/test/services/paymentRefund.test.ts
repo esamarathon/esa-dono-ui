@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import yaml from 'js-yaml';
 import Stripe from 'stripe';
 import express from 'express';
 import request from 'supertest';
@@ -280,6 +282,36 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
       .post(`/api/admin/claims/${f.claim.id}/payment-refund`)
       .set('Authorization', auth);
     expect(created.status).toBe(200);
+    expect(created.body).toMatchObject({
+      status: 'PENDING',
+      resolution: null,
+      shipping_resolution: null,
+    });
+    const spec = yaml.load(
+      readFileSync(new URL('../../openapi.yaml', import.meta.url), 'utf8'),
+    ) as {
+      components: {
+        schemas: {
+          PaymentRefundRecord: {
+            required: string[];
+            properties: Record<string, { type: string; nullable: boolean; enum: unknown[] }>;
+          };
+        };
+      };
+    };
+    const refundSchema = spec.components.schemas.PaymentRefundRecord;
+    for (const [field, values] of [
+      ['resolution', ['REJECTED', 'RETURNED_OUTSIDE_APP', 'WALLET_CREDIT', 'SETTLED_BY_DISPUTE']],
+      ['shipping_resolution', ['RETURNED_OUTSIDE_APP', 'KEPT_BY_AGREEMENT']],
+    ] as const) {
+      expect(refundSchema.required).toContain(field);
+      const schema = refundSchema.properties[field]!;
+      expect(schema).toMatchObject({ type: 'string', nullable: true });
+      // Focused enum acceptance checks against an actual unresolved API response.
+      expect.soft(schema.enum, field).toContain(created.body[field]);
+      for (const value of values) expect(schema.enum).toContain(value);
+      for (const value of ['null', 'INVALID']) expect(schema.enum).not.toContain(value);
+    }
     const id = created.body.id;
     expect(
       (await request(app).get(`/api/admin/payment-refunds/${id}`).set('Authorization', auth)).body
