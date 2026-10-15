@@ -69,6 +69,18 @@ preserving optional pledge token and external id; neither claims Stripe Checkout
 exact-Session coverage. Physical direct-Wallet claims must reject without side effects.
 The matrix requires a dedicated fresh sandbox; the staging probe has no live defaults.
 
+Historical correction replays retain donation ids, statuses, refund links and allocations.
+Verified shipping is extracted once from all four known legacy statuses, including PENDING
+and CHARGEBACK. It lowers receipt amount and cumulative donor `total_donated`, but changes
+counted-money totals only for COMPLETED/REFUNDED. Operator reports distinguish `received_cents`
+(all-status current cash receipts, excluding exact `wallet-<uuid>` identifiers) from
+`counted_cents`. A positive fee requires the donor total to match that receipt history;
+ambiguous totals require manual review, not normalization to counted money. The unshipped
+wallet backfill, report selection and publication proof all require the literal `wallet-`
+prefix plus an exact 8-4-4-4-12 hexadecimal UUID (either hex case); non-UUID wallet-prefix
+cash is not zeroed or treated as Wallet-only. These corrections do not repair old reversals.
+See `docs/deployment.md` for binding acknowledgement and non-dispatching publication.
+
 ## Checkout reconciliation contract (#186)
 
 All paths are relative to `/api`, with empty POST bodies:

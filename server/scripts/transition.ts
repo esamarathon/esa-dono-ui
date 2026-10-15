@@ -1,7 +1,10 @@
 // Operator-only interfaces. No environment loading, default database or network adapter.
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { countsTowardTotals } from '../lib/donationTotals.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
+
+// Exact literal prefix and 8-4-4-4-12 hex UUID; same predicate as the unshipped backfill.
+const walletIdGlob = `wallet-${[8, 4, 4, 4, 12].map((n) => '[0-9a-fA-F]'.repeat(n)).join('-')}`;
+const historicalStatuses = ['COMPLETED', 'PENDING', 'REFUNDED', 'CHARGEBACK'];
 
 export interface CheckoutFacts {
   id: string;
@@ -42,18 +45,25 @@ export interface Correction {
 /** Works on both pre-change and final schema. No donor emails or tokens in reports. */
 export async function financialReport(db: PrismaClient | Prisma.TransactionClient) {
   const donors = await db.$queryRawUnsafe<
-    { id: string; total_donated: number; counted_cents: bigint }[]
+    { id: string; total_donated: number; counted_cents: bigint; received_cents: bigint }[]
   >(`
-    SELECT d.id, d.total_donated, COALESCE(SUM(CASE WHEN n.status IN ('COMPLETED','REFUNDED') THEN n.amount_cents ELSE 0 END),0) AS counted_cents
+    SELECT d.id, d.total_donated,
+      COALESCE(SUM(CASE WHEN n.status IN ('COMPLETED','REFUNDED') THEN n.amount_cents ELSE 0 END),0) AS counted_cents,
+      COALESCE(SUM(CASE WHEN n.external_id NOT GLOB '${walletIdGlob}' THEN n.amount_cents ELSE 0 END),0) AS received_cents
     FROM Donor d LEFT JOIN Donation n ON n.donor_id = d.id GROUP BY d.id ORDER BY d.id`);
   const wallet = await db.$queryRawUnsafe<
     { id: string; external_id: string; amount_cents: number; status: string }[]
   >(
-    "SELECT id, external_id, amount_cents, status FROM Donation WHERE external_id LIKE 'wallet-%' ORDER BY id",
+    `SELECT id, external_id, amount_cents, status FROM Donation WHERE external_id GLOB '${walletIdGlob}' ORDER BY id`,
   );
   return {
     counted_money_cents: donors.reduce((sum, d) => sum + Number(d.counted_cents), 0),
-    donors: donors.map((d) => ({ ...d, counted_cents: Number(d.counted_cents) })),
+    // Receipt history spans statuses; it is NOT the charity's counted-money total.
+    donors: donors.map((d) => ({
+      ...d,
+      counted_cents: Number(d.counted_cents),
+      received_cents: Number(d.received_cents),
+    })),
     wallet,
   };
 }
@@ -81,7 +91,7 @@ export async function correctShipping(db: PrismaClient, stripe: CheckoutAdapter,
     if (
       d.shipping_cents !== null ||
       d.pledge_amount_cents !== null ||
-      !['COMPLETED', 'PENDING'].includes(d.status)
+      !historicalStatuses.includes(d.status)
     )
       continue;
     try {
@@ -100,7 +110,14 @@ export async function correctShipping(db: PrismaClient, stripe: CheckoutAdapter,
       let outcome = 'UNKNOWN';
       if (d.shipping_cents !== null) outcome = 'ALREADY_RECORDED';
       else if (d.pledge_amount_cents !== null) outcome = 'POOLED_MANUAL_REVIEW';
-      else if (!['COMPLETED', 'PENDING'].includes(d.status)) outcome = 'TERMINAL_MANUAL_REVIEW';
+      else if (!historicalStatuses.includes(d.status)) outcome = 'STATUS_MANUAL_REVIEW';
+      else if (
+        d.external_id !== original.external_id ||
+        d.donor_id !== original.donor_id ||
+        d.status !== original.status ||
+        d.amount_cents !== original.amount_cents
+      )
+        outcome = 'CHANGED_MANUAL_REVIEW';
       else {
         const f = facts.get(d.id),
           shipping = f?.total_details?.amount_shipping;
@@ -114,6 +131,20 @@ export async function correctShipping(db: PrismaClient, stripe: CheckoutAdapter,
           shipping >= 0 &&
           shipping <= d.amount_cents
         ) {
+          // total_donated records received new money, independently of current status.
+          // Prove that representation from the transaction's full receipt snapshot;
+          // never normalize a historical mismatch to counted money (#163).
+          const donor = before.donors.find((row) => row.id === d.donor_id);
+          if (
+            shipping > 0 &&
+            (!donor ||
+              !Number.isSafeInteger(donor.received_cents) ||
+              donor.total_donated !== donor.received_cents ||
+              donor.total_donated < shipping)
+          ) {
+            rows.push({ id: d.id, outcome: 'DONOR_TOTAL_MANUAL_REVIEW' });
+            continue;
+          }
           const recorded = new Date();
           const correction: Correction = {
             id: d.id,
@@ -125,11 +156,6 @@ export async function correctShipping(db: PrismaClient, stripe: CheckoutAdapter,
             kind: 'shipping',
           };
           if (bound.apply) {
-            const donor = await tx.donor.findUniqueOrThrow({ where: { id: d.donor_id } });
-            if (countsTowardTotals(d.status) && donor.total_donated < shipping) {
-              rows.push({ id: d.id, outcome: 'DONOR_TOTAL_MANUAL_REVIEW' });
-              continue;
-            }
             await tx.donation.update({
               where: { id: d.id },
               data: {
@@ -138,7 +164,7 @@ export async function correctShipping(db: PrismaClient, stripe: CheckoutAdapter,
                 shipping_recorded_at: recorded,
               },
             });
-            if (countsTowardTotals(d.status) && shipping > 0)
+            if (shipping > 0)
               await tx.donor.update({
                 where: { id: d.donor_id },
                 data: { total_donated: { decrement: shipping } },
@@ -179,8 +205,12 @@ export async function publishCorrections(
         const d = await tx.donation.findUniqueOrThrow({ where: { id: c.id } });
         const wallet =
           c.kind === 'wallet' &&
-          /^wallet-[0-9a-f-]{36}$/i.test(c.external_id) &&
-          c.after_cents === 0;
+          c.after_cents === 0 &&
+          (
+            await tx.$queryRaw<{ id: string }[]>`
+            SELECT id FROM Donation WHERE id = ${d.id} AND external_id GLOB ${walletIdGlob}
+          `
+          ).length === 1;
         const shipping =
           c.kind === 'shipping' &&
           c.external_id.startsWith('cs_') &&

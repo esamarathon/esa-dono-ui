@@ -172,7 +172,7 @@ describe('transition tools on real SQLite with an external Checkout adapter', ()
     }
   });
 
-  it('extracts historical shipping once, corrects only known nonterminal money and reports totals', async () => {
+  it('extracts verified shipping once from counted and uncounted receipts and reports separate totals', async () => {
     const donor = await prisma.donor.create({
       data: { email: `${randomUUID()}@example.test`, total_donated: 5000, balance_remaining: 123 },
     });
@@ -188,7 +188,7 @@ describe('transition tools on real SQLite with an external Checkout adapter', ()
       const d = await prisma.donation.create({
         data: {
           donor_id: donor.id,
-          external_id: `${name === 'wallet' ? 'wallet-' : 'cs_'}${randomUUID()}-${name}`,
+          external_id: name === 'wallet' ? `wallet-${randomUUID()}` : `cs_${randomUUID()}-${name}`,
           amount_cents: 1000,
           status,
           shipping_cents: shipping,
@@ -216,7 +216,7 @@ describe('transition tools on real SQLite with an external Checkout adapter', ()
     const bound = { before: new Date('2040-01-01'), limit: 1000, apply: false };
     try {
       const dry = await correctShipping(prisma, stripe, bound);
-      expect(dry.corrected.filter((r) => ids.includes(r.id))).toHaveLength(2);
+      expect(dry.corrected.filter((r) => ids.includes(r.id))).toHaveLength(3);
       expect(
         (await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } })).total_donated,
       ).toBe(5000);
@@ -226,33 +226,295 @@ describe('transition tools on real SQLite with an external Checkout adapter', ()
           .filter((r) => ids.includes(r.id))
           .map((r) => r.outcome)
           .sort(),
-      ).toEqual([
-        'ALREADY_RECORDED',
-        'CORRECTED',
-        'CORRECTED',
-        'TERMINAL_MANUAL_REVIEW',
-        'UNKNOWN',
-      ]);
-      expect(applied.corrected.filter((r) => ids.includes(r.id))).toHaveLength(2);
+      ).toEqual(['ALREADY_RECORDED', 'CORRECTED', 'CORRECTED', 'CORRECTED', 'UNKNOWN']);
+      expect(applied.corrected.filter((r) => ids.includes(r.id))).toHaveLength(3);
       expect(await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } })).toMatchObject({
-        total_donated: 4800,
+        total_donated: 4400,
         balance_remaining: 123,
       });
       expect((await financialReport(prisma)).donors.find((r) => r.id === donor.id)).toMatchObject({
-        counted_cents: 4800,
-        total_donated: 4800,
+        counted_cents: 4600, // Includes the still-unmigrated wallet fixture's 1000.
+        received_cents: 4400, // Five cash receipts, excluding genuine wallet-only money.
+        total_donated: 4400,
       });
       const again = await correctShipping(prisma, stripe, { ...bound, apply: true });
       expect(again.corrected.filter((r) => ids.includes(r.id))).toEqual([]);
       expect(await prisma.donation.findUniqueOrThrow({ where: { id: ids[2]! } })).toMatchObject({
-        amount_cents: 1000,
-        shipping_cents: null,
+        amount_cents: 800,
+        shipping_cents: 200,
+        status: 'REFUNDED',
       });
     } finally {
       await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
       await prisma.donor.delete({ where: { id: donor.id } });
     }
   });
+  it.each([
+    ['COMPLETED', 100],
+    ['PENDING', 1000],
+    ['REFUNDED', 1999],
+    ['CHARGEBACK', 2001],
+  ])(
+    'refuses ambiguous receipt totals for %s in both dry-run and apply (recorded %i)',
+    async (status, total) => {
+      const donor = await prisma.donor.create({
+        data: {
+          email: `${randomUUID()}@example.test`,
+          total_donated: Number(total),
+          balance_remaining: 321,
+        },
+      });
+      try {
+        const candidate = await prisma.donation.create({
+          data: {
+            donor_id: donor.id,
+            external_id: `cs_${randomUUID()}`,
+            amount_cents: 1000,
+            status: String(status),
+          },
+        });
+        for (const [externalId, amount] of [
+          [`wallet-${randomUUID()}`, 1000],
+          [`wallet-external-${randomUUID()}`, 500],
+          [`wallet-${randomUUID()}-wallet`, 500],
+        ] as const) {
+          await prisma.donation.create({
+            data: { donor_id: donor.id, external_id: externalId, amount_cents: amount },
+          });
+        }
+        const adapter: CheckoutAdapter = {
+          expire: async () => {
+            throw Error('not used');
+          },
+          retrieve: async (id) => ({
+            id,
+            status: 'complete',
+            payment_status: 'paid',
+            amount_total: 1000,
+            total_details: { amount_shipping: 200 },
+          }),
+        };
+        const beforeDonor = await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } });
+        const beforeRows = await prisma.donation.findMany({
+          where: { donor_id: donor.id },
+          orderBy: { id: 'asc' },
+        });
+        expect(
+          (await financialReport(prisma)).donors.find((d) => d.id === donor.id)?.received_cents,
+        ).toBe(2000);
+        for (const apply of [false, true]) {
+          const report = await correctShipping(prisma, adapter, {
+            before: new Date('2040-01-01'),
+            limit: 1000,
+            apply,
+          });
+          expect(report.rows.find((r) => r.id === candidate.id)?.outcome).toBe(
+            'DONOR_TOTAL_MANUAL_REVIEW',
+          );
+          expect(report.corrected.filter((r) => r.id === candidate.id)).toEqual([]);
+          expect(await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } })).toEqual(
+            beforeDonor,
+          );
+          expect(
+            await prisma.donation.findMany({
+              where: { donor_id: donor.id },
+              orderBy: { id: 'asc' },
+            }),
+          ).toEqual(beforeRows);
+        }
+      } finally {
+        await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+        await prisma.donor.delete({ where: { id: donor.id } });
+      }
+    },
+  );
+
+  it('uses the same exact wallet identifier for reports, receipt exclusion and publication proof', async () => {
+    const donor = await prisma.donor.create({ data: { email: `${randomUUID()}@example.test` } });
+    const genuine: string[] = [];
+    const cash: string[] = [];
+    const corrections: Correction[] = [];
+    try {
+      for (const [externalId, wallet] of [
+        [`wallet-${randomUUID()}`, true],
+        [`wallet-${randomUUID().toUpperCase()}`, true],
+        [`wallet-external-${randomUUID()}`, false],
+        ['wallet-012345678-9ab-cdef-0123-456789abcdef', false],
+        ['wallet-g1234567-89ab-cdef-0123-456789abcdef', false],
+        [`wallet-${randomUUID()}-wallet`, false],
+        [`WALLET-${randomUUID()}`, false],
+      ] as const) {
+        const d = await prisma.donation.create({
+          data: { donor_id: donor.id, external_id: externalId, amount_cents: 1000 },
+        });
+        (wallet ? genuine : cash).push(d.id);
+        corrections.push({
+          id: d.id,
+          external_id: d.external_id,
+          before_cents: 1000,
+          after_cents: 0,
+          shipping_cents: null,
+          shipping_recorded_at: null,
+          kind: 'wallet',
+        });
+      }
+      const report = await financialReport(prisma);
+      expect(
+        report.wallet
+          .filter((r) => genuine.includes(r.id) || cash.includes(r.id))
+          .map((r) => r.id)
+          .sort(),
+      ).toEqual(genuine.sort());
+      expect(report.donors.find((r) => r.id === donor.id)).toMatchObject({
+        counted_cents: 7000,
+        received_cents: 5000,
+      });
+      // Simulate the backfill's resulting amount only to test manifest proof. The
+      // populated migration suite separately proves it never zeroes these cash rows.
+      await prisma.donation.updateMany({
+        where: { donor_id: donor.id },
+        data: { amount_cents: 0 },
+      });
+      for (const c of corrections) {
+        for (const apply of [false, true]) {
+          if (genuine.includes(c.id))
+            expect((await publishCorrections(prisma, [c], apply, true)).donation_ids).toEqual([
+              c.id,
+            ]);
+          else
+            await expect(publishCorrections(prisma, [c], apply, true)).rejects.toThrow('Unproved');
+        }
+      }
+    } finally {
+      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
+  it.each([
+    ['missing', 'UNKNOWN'],
+    ['wrong-id', 'UNKNOWN'],
+    ['open', 'UNKNOWN'],
+    ['unpaid', 'UNKNOWN'],
+    ['already-net', 'UNKNOWN'],
+    ['missing-shipping', 'UNKNOWN'],
+    ['fractional-shipping', 'UNKNOWN'],
+    ['negative-shipping', 'UNKNOWN'],
+    ['excess-shipping', 'UNKNOWN'],
+    ['unknown-status', 'STATUS_MANUAL_REVIEW'],
+    ['pooled', 'POOLED_MANUAL_REVIEW'],
+  ])(
+    'leaves %s facts unresolved without changing any receipt or donor fields',
+    async (name, outcome) => {
+      const donor = await prisma.donor.create({
+        data: {
+          email: `${randomUUID()}@example.test`,
+          total_donated: name === 'already-net' ? 800 : 1000,
+        },
+      });
+      try {
+        const donation = await prisma.donation.create({
+          data: {
+            donor_id: donor.id,
+            external_id: `cs_${randomUUID()}`,
+            amount_cents: name === 'already-net' ? 800 : 1000,
+            status: name === 'unknown-status' ? 'UNRECOGNIZED' : 'COMPLETED',
+            pledge_amount_cents: name === 'pooled' ? 1000 : null,
+          },
+        });
+        const adapter: CheckoutAdapter = {
+          expire: async () => {
+            throw Error('not used');
+          },
+          retrieve: async (id) => {
+            if (name === 'missing') throw Error('no facts');
+            return {
+              id: name === 'wrong-id' ? 'cs_other' : id,
+              status: name === 'open' ? 'open' : 'complete',
+              payment_status: name === 'unpaid' ? 'unpaid' : 'paid',
+              amount_total: 1000,
+              total_details: {
+                amount_shipping:
+                  name === 'missing-shipping'
+                    ? null
+                    : name === 'fractional-shipping'
+                      ? 0.5
+                      : name === 'negative-shipping'
+                        ? -1
+                        : name === 'excess-shipping'
+                          ? 1001
+                          : 200,
+              },
+            };
+          },
+        };
+        for (const apply of [false, true]) {
+          const result = await correctShipping(prisma, adapter, {
+            before: new Date('2040-01-01'),
+            limit: 1000,
+            apply,
+          });
+          expect(result.rows.find((r) => r.id === donation.id)?.outcome).toBe(outcome);
+          expect(result.corrected.filter((r) => r.id === donation.id)).toEqual([]);
+          expect(await prisma.donation.findUniqueOrThrow({ where: { id: donation.id } })).toEqual(
+            donation,
+          );
+          expect(await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } })).toEqual(donor);
+        }
+      } finally {
+        await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+        await prisma.donor.delete({ where: { id: donor.id } });
+      }
+    },
+  );
+
+  it('reports a receipt changed during provider retrieval instead of correcting it', async () => {
+    const donor = await prisma.donor.create({
+      data: { email: `${randomUUID()}@example.test`, total_donated: 1000 },
+    });
+    try {
+      const donation = await prisma.donation.create({
+        data: { donor_id: donor.id, external_id: `cs_${randomUUID()}`, amount_cents: 1000 },
+      });
+      let status = 'COMPLETED';
+      const adapter: CheckoutAdapter = {
+        expire: async () => {
+          throw Error('not used');
+        },
+        retrieve: async (id) => {
+          status = status === 'COMPLETED' ? 'REFUNDED' : 'COMPLETED';
+          await prisma.donation.update({ where: { id: donation.id }, data: { status } });
+          return {
+            id,
+            status: 'complete',
+            payment_status: 'paid',
+            amount_total: 1000,
+            total_details: { amount_shipping: 200 },
+          };
+        },
+      };
+      for (const apply of [false, true]) {
+        const result = await correctShipping(prisma, adapter, {
+          before: new Date('2040-01-01'),
+          limit: 1000,
+          apply,
+        });
+        expect(result.rows.find((r) => r.id === donation.id)?.outcome).toBe(
+          'CHANGED_MANUAL_REVIEW',
+        );
+        expect(result.corrected.filter((r) => r.id === donation.id)).toEqual([]);
+        expect(await prisma.donation.findUniqueOrThrow({ where: { id: donation.id } })).toEqual({
+          ...donation,
+          status,
+        });
+        expect(await prisma.donor.findUniqueOrThrow({ where: { id: donor.id } })).toEqual(donor);
+      }
+    } finally {
+      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
   it('rolls shipping and donor totals back together on a late database failure', async () => {
     const donor = await prisma.donor.create({
       data: { email: `${randomUUID()}@example.test`, total_donated: 2000 },

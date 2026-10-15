@@ -6,6 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PrismaClient } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  correctShipping,
+  financialReport,
+  type CheckoutAdapter,
+} from '../../scripts/transition.js';
 
 const serverDir = fileURLToPath(new URL('../../', import.meta.url));
 const prismaCli = createRequire(import.meta.url).resolve('prisma/build/index.js');
@@ -131,6 +136,117 @@ describe('pooled accounting migration on populated SQLite', () => {
     } finally {
       await old.$disconnect();
     }
+  });
+  it('zeros only exact wallet UUIDs, preserving wallet-prefix cash and malformed identifiers', async () => {
+    const historyUrl = `file:${path.join(dir, 'pre-change.db')}`;
+    const history = new PrismaClient({ datasourceUrl: historyUrl });
+    try {
+      for (const [id, externalId, status] of [
+        ['uuid-lower', 'wallet-01234567-89ab-cdef-0123-456789abcdef', 'COMPLETED'],
+        ['uuid-upper', 'wallet-ABCDEF01-2345-6789-ABCD-EF0123456789', 'REFUNDED'],
+        ['external-cash', 'wallet-external-123', 'COMPLETED'],
+        ['malformed-hyphens', 'wallet-012345678-9ab-cdef-0123-456789abcdef', 'PENDING'],
+        ['malformed-hex', 'wallet-g1234567-89ab-cdef-0123-456789abcdef', 'CHARGEBACK'],
+        ['extra-suffix', 'wallet-01234567-89ab-cdef-0123-456789abcdef-wallet', 'REFUNDED'],
+        ['uppercase-prefix', 'WALLET-01234567-89ab-cdef-0123-456789abcdef', 'COMPLETED'],
+      ]) {
+        await history.$executeRaw`INSERT INTO Donation (id, external_id, donor_id, amount_cents, status)
+          VALUES (${id}, ${externalId}, 'donor', 1000, ${status})`;
+      }
+      await history.$disconnect();
+      deploy(path.join(serverDir, 'prisma/schema.prisma'), historyUrl);
+      expect(
+        await history.donation.findMany({
+          where: { channel_id: null },
+          orderBy: { id: 'asc' },
+          select: { id: true, amount_cents: true, status: true },
+        }),
+      ).toEqual([
+        { id: 'external-cash', amount_cents: 1000, status: 'COMPLETED' },
+        { id: 'extra-suffix', amount_cents: 1000, status: 'REFUNDED' },
+        { id: 'malformed-hex', amount_cents: 1000, status: 'CHARGEBACK' },
+        { id: 'malformed-hyphens', amount_cents: 1000, status: 'PENDING' },
+        { id: 'uppercase-prefix', amount_cents: 1000, status: 'COMPLETED' },
+        { id: 'uuid-lower', amount_cents: 0, status: 'COMPLETED' },
+        { id: 'uuid-upper', amount_cents: 0, status: 'REFUNDED' },
+      ]);
+    } finally {
+      await history.$disconnect();
+    }
+  });
+  it('nets shipping on all four migrated Stripe statuses without repairing reversal or allocation history', async () => {
+    // Original intake received four cash receipts; old terminal adjustments did not
+    // rewrite cumulative receipts. Wallet-only rows are already zero after migration.
+    await db.donor.update({ where: { id: 'donor' }, data: { total_donated: 4000 } });
+    const donorBefore = await db.donor.findUniqueOrThrow({ where: { id: 'donor' } });
+    const donationBefore = await db.donation.findMany({ orderBy: { id: 'asc' } });
+    const claims = await db.rewardClaim.findMany({ orderBy: { id: 'asc' } });
+    const votes = await db.pollVote.findMany({ orderBy: { id: 'asc' } });
+    const contributions = await db.fundContribution.findMany({ orderBy: { id: 'asc' } });
+    const adjustments = await db.balanceAdjustment.findMany({ orderBy: { id: 'asc' } });
+    const adapter: CheckoutAdapter = {
+      expire: async () => {
+        throw Error('not used');
+      },
+      retrieve: async (id) => ({
+        id,
+        status: 'complete',
+        payment_status: 'paid',
+        amount_total: 1000,
+        total_details: { amount_shipping: 200 },
+      }),
+    };
+    const bound = { before: new Date('2040-01-01'), limit: 100, apply: false };
+    const dry = await correctShipping(db, adapter, bound);
+    expect(dry.corrected.map((r) => r.id)).toEqual([
+      'stripe-CHARGEBACK',
+      'stripe-COMPLETED',
+      'stripe-PENDING',
+      'stripe-REFUNDED',
+    ]);
+    expect(await db.donation.findMany({ orderBy: { id: 'asc' } })).toEqual(donationBefore);
+    expect(await db.donor.findUniqueOrThrow({ where: { id: 'donor' } })).toEqual(donorBefore);
+    const applied = await correctShipping(db, adapter, { ...bound, apply: true });
+    expect(applied.corrected.map((r) => r.id)).toEqual([
+      'stripe-CHARGEBACK',
+      'stripe-COMPLETED',
+      'stripe-PENDING',
+      'stripe-REFUNDED',
+    ]);
+    expect(applied.financial_before).toMatchObject({
+      counted_money_cents: 2000,
+      donors: [{ id: 'donor', total_donated: 4000, received_cents: 4000, counted_cents: 2000 }],
+    });
+    expect(await financialReport(db)).toMatchObject({
+      counted_money_cents: 1600,
+      donors: [{ id: 'donor', total_donated: 3200, received_cents: 3200, counted_cents: 1600 }],
+    });
+    for (const original of donationBefore) {
+      const saved = await db.donation.findUniqueOrThrow({ where: { id: original.id } });
+      expect(saved).toEqual(
+        original.external_id.startsWith('cs_')
+          ? {
+              ...original,
+              amount_cents: 800,
+              shipping_cents: 200,
+              shipping_recorded_at: expect.any(Date),
+            }
+          : original,
+      );
+    }
+    expect(await db.donor.findUniqueOrThrow({ where: { id: 'donor' } })).toEqual({
+      ...donorBefore,
+      total_donated: 3200,
+      updated_at: expect.any(Date),
+    });
+    expect(await db.rewardClaim.findMany({ orderBy: { id: 'asc' } })).toEqual(claims);
+    expect(await db.pollVote.findMany({ orderBy: { id: 'asc' } })).toEqual(votes);
+    expect(await db.fundContribution.findMany({ orderBy: { id: 'asc' } })).toEqual(contributions);
+    expect(await db.balanceAdjustment.findMany({ orderBy: { id: 'asc' } })).toEqual(adjustments);
+    const after = await db.donation.findMany({ orderBy: { id: 'asc' } });
+    expect((await correctShipping(db, adapter, { ...bound, apply: true })).corrected).toEqual([]);
+    expect(await db.donation.findMany({ orderBy: { id: 'asc' } })).toEqual(after);
+    expect((await db.donor.findUniqueOrThrow({ where: { id: 'donor' } })).total_donated).toBe(3200);
   });
   it('rejects ambiguous pledge shapes, unattributed moderator rows and untraceable credit', async () => {
     await expect(

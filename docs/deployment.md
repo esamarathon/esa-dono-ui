@@ -445,9 +445,12 @@ explicit DB/report mounts, and no backend process, rather than inheriting live s
    The normal entrypoint runs `prisma migrate deploy`; do not seed/reset or run dev
    migrations. Under the freeze, use the entrypoint's migration command with the backend
    still stopped if a rollback checkpoint is required. Rehearse all migrations against a
-   populated backup. #184 zeros historical `wallet-` amounts and expires old OPEN pledges;
-   terminal legacy records, Wallet balances and NULL pledge amounts remain historical.
-   #194 does not repeat the wallet amount migration.
+   populated backup. #184 zeros only historical `wallet-<uuid>` amounts (literal lowercase
+   prefix, exact 8-4-4-4-12 hexadecimal UUID, either hex case) and expires old OPEN pledges.
+   Other `wallet-` references are cash, not proof of Wallet funding. The pooled migration
+   is unshipped; if it has already run outside disposable tests, stop for review rather
+   than editing deployed history or guessing erased amounts. Terminal statuses, Wallet
+   balances and NULL pledge amounts remain historical. #194 does not repeat this backfill.
 7. Before starting writers, capture a final-schema checkpoint with `checkpoint
 --database-url "$DB" --backup-at "$BACKUP_AT" --report "$REPORTS/checkpoint.json"`.
    Review the migration-only delta from the backup (prefer a separately migrated backup
@@ -461,12 +464,16 @@ explicit DB/report mounts, and no backend process, rather than inheriting live s
    and `transition-cli.ts report --database-url "$DB" --report "$REPORTS/post-migration.json"`.
    Reconcile: **old counted money − counted old wallet amounts = post-migration counted
    money**; after shipping, subtract only successfully corrected counted shipping.
-   Counted means COMPLETED + REFUNDED, never incentive allocations. Compare each Donor's
-   `total_donated` with counted money; existing mismatches are evidence for manual review,
-   not permission to overwrite balances/totals. #184 does not rewrite historical donor
-   totals. Preserve/referral-report legacy REFUNDED/CHARGEBACK rows and their prior
-   adjustments; never automatically repair them. No donation-writing smoke/seed/reset
-   command is permitted against a deployment.
+   Counted means COMPLETED + REFUNDED, never incentive allocations. Separately compare
+   each Donor's `total_donated` with report `received_cents`: the sum of current Donation
+   amounts across ALL statuses, excluding only exact `wallet-<uuid>` rows. This cumulative
+   receipt history is not `counted_cents`; a difference from counted money is not itself
+   a donor-total error. A mismatch with receipt history requires manual review, not
+   overwriting balances/totals. #184 does not rewrite historical donor totals. Preserve
+   legacy REFUNDED/CHARGEBACK status, refund links, adjustments and allocations; never
+   automatically repair old reversals (#163). Verified fee extraction below is a separate
+   correction, not reversal repair. No donation-writing smoke/seed/reset command is
+   permitted against a deployment.
 9. **Overlay binding check before any replay:** verify Event/Channel ids AND slugs,
    Destination exchange/routing keys and each overlay/reader binding, with the operator
    off air or explicitly accepting replay. Check consumers' active image/source revisions.
@@ -488,11 +495,19 @@ explicit DB/report mounts, and no backend process, rather than inheriting live s
    Paginate shipping to exhaustion; pass each applied report with repeatable
    `--corrections`. A publication accepts at most 1000 input corrections; if more are
    needed stop for a reviewed publication plan (separate batches repeat scoped totals).
-   Shipping requires the exact complete/paid Session, gross matching the old amount and
-   an integer nonnegative shipping amount. Already-recorded shipping (even zero) is never
-   subtracted again. Unknown, mismatched, pooled-with-missing-shipping and terminal legacy
-   records are reported, not guessed. PENDING corrections do not lower counted money or
-   donor totals. Wallet credit/stock/allocations are untouched. Recheck financial reports.
+   Shipping requires the exact complete/paid Session, gross matching the current amount
+   and an integer nonnegative shipping amount. All four known legacy statuses (COMPLETED,
+   PENDING, REFUNDED, CHARGEBACK) are eligible without changing status or refund links.
+   Every verified fee lowers `amount_cents` AND cumulative `total_donated`; only fees on
+   COMPLETED/REFUNDED lower counted money. Before any positive fee, donor `total_donated`
+   must exactly equal the known `received_cents` history and cover the fee. Otherwise both
+   dry-run and apply report `DONOR_TOTAL_MANUAL_REVIEW` and change nothing. Already-recorded
+   shipping (even zero) is never subtracted again. Unknown/changed/already-net facts,
+   unknown statuses and pooled-with-missing-shipping records require review, never guesses.
+   Wallet balances, stock, old adjustments and all allocations are untouched. This follows
+   [#173 §5](https://github.com/esamarathon/esa-dono-ui/issues/173#issuecomment-6116662382)
+   and PRD T5; §4's manual reversal repair rule does not exempt terminal receipts from fee
+   extraction. Recheck both counted-money and cumulative receipt totals independently.
    Only positive amount corrections are eligible for forced publication. Stale manifests
    fail atomically. Publication uses the existing publisher/outbox, one message per corrected
    donation and totals once per source Channel/Event per invocation. Native update opt-in
