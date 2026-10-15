@@ -19,6 +19,8 @@ vi.mock('fs/promises', async (importOriginal) => {
 // Real SQLite and outbox; no delivery network calls.
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 import prisma from '../../lib/prisma.js';
+import { createTestChannel } from '../helpers/fixtures.js';
+const channelIds: string[] = [];
 import {
   createReward,
   updateReward,
@@ -79,8 +81,11 @@ afterEach(async () => {
   donorIds.length = 0;
   await prisma.reward.deleteMany({ where: { id: { in: rewardIds } } });
   await prisma.poll.deleteMany({ where: { id: { in: pollIds } } });
+  await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: { in: channelIds } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goalIds } } });
   pollIds.length = goalIds.length = 0;
+  await prisma.channel.deleteMany({ where: { id: { in: channelIds } } });
+  channelIds.length = 0;
   await prisma.webhookDestination.deleteMany({ where: { id: { in: destinationIds } } });
   rewardIds.length = destinationIds.length = 0;
 });
@@ -248,16 +253,13 @@ describe('Incentive lifecycle on SQLite', () => {
     });
   });
 
-  it('creates and updates a goal without inventing completion policy or messages', async () => {
+  it('derives goal completion on target edits and rejects a manual completion override', async () => {
     const target = await destination();
     const goal = await createGoal({ title: 'Goal', target_cents: 1000 });
     goalIds.push(goal.id);
-    await updateGoal(goal.id, { target_cents: 2000, is_active: false, is_complete: true });
-    await updateGoal(goal.id, {
-      description: 'Changed text',
-      target_cents: 2000,
-      is_complete: false,
-    });
+    await expect(updateGoal(goal.id, { is_complete: true })).rejects.toMatchObject({ status: 400 });
+    await updateGoal(goal.id, { target_cents: 2000, is_active: false });
+    await updateGoal(goal.id, { description: 'Changed text', target_cents: 2000 });
     await updateGoal(goal.id, { is_active: true });
     expect(await messages(target)).toEqual([
       expect.objectContaining({
@@ -292,6 +294,192 @@ describe('Incentive lifecycle on SQLite', () => {
       is_active: true,
       is_complete: false,
     });
+  });
+
+  it('validates representable positive cents, titles, labels, nullable Channels and stock', async () => {
+    const goal = await createGoal({ title: '  Goal  ', target_cents: 1000 });
+    goalIds.push(goal.id);
+    expect(goal.title).toBe('Goal');
+    for (const target of [0, -1, 0.5, 2147483648, Number.MAX_SAFE_INTEGER]) {
+      await expect(updateGoal(goal.id, { target_cents: target })).rejects.toMatchObject({
+        status: 400,
+      });
+    }
+    await expect(updateGoal(goal.id, { title: '  ' })).rejects.toMatchObject({ status: 400 });
+    await expect(updateGoal(goal.id, { channel_id: 'missing' })).rejects.toMatchObject({
+      status: 400,
+    });
+    const reward = await createReward({ title: '  Reward  ', type: 'DIGITAL', cost_cents: 1 });
+    rewardIds.push(reward.id);
+    for (const cost of [0, -1, 0.5, 2147483648]) {
+      await expect(updateReward(reward.id, { cost_cents: cost })).rejects.toMatchObject({
+        status: 400,
+      });
+    }
+    for (const stock of [-1, 0.5, 2147483648]) {
+      await expect(updateReward(reward.id, { quantity_total: stock })).rejects.toMatchObject({
+        status: 400,
+      });
+    }
+    expect(await updateReward(reward.id, { quantity_total: 0 })).toMatchObject({
+      quantity_total: 0,
+    });
+    const poll = await createPoll({ title: ' Poll ', options: { create: [{ label: ' A ' }] } });
+    pollIds.push(poll.id);
+    expect(poll).toMatchObject({
+      title: 'Poll',
+      options: [expect.objectContaining({ label: 'A' })],
+    });
+    await expect(createPollOption(poll.id, '  ')).rejects.toMatchObject({ status: 400 });
+    await expect(updatePollOption(poll.options[0]!.id, '  ')).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it.each([false, true])(
+    'protects Channel and reward type changes with allocation history (reversed: %s)',
+    async (reversed) => {
+      const donor = await prisma.donor.create({
+        data: { email: `${crypto.randomUUID()}@example.com` },
+      });
+      donorIds.push(donor.id);
+      const reward = await createReward({ title: 'Reward', type: 'DIGITAL', cost_cents: 500 });
+      rewardIds.push(reward.id);
+      await prisma.rewardClaim.create({
+        data: {
+          reward_id: reward.id,
+          donor_id: donor.id,
+          amount_cents: 500,
+          status: reversed ? 'REVERSED' : 'PENDING',
+          reversed_at: reversed ? new Date() : null,
+        },
+      });
+      await expect(updateReward(reward.id, { type: 'PHYSICAL' })).rejects.toMatchObject({
+        status: 409,
+      });
+      // Stock zero can close future availability even below a live claimed count.
+      if (!reversed)
+        await prisma.reward.update({ where: { id: reward.id }, data: { quantity_claimed: 1 } });
+      expect(await updateReward(reward.id, { quantity_total: 0 })).toMatchObject({
+        quantity_total: 0,
+        quantity_claimed: reversed ? 0 : 1,
+      });
+    },
+  );
+
+  it.each(['REWARD', 'POLL', 'GOAL'] as const)(
+    'blocks %s Channel changes with reversed history but permits text edits',
+    async (kind) => {
+      const a = await createTestChannel(prisma);
+      const b = await createTestChannel(prisma);
+      channelIds.push(a.id, b.id);
+      const owner = await prisma.donor.create({
+        data: { email: `${crypto.randomUUID()}@example.com` },
+      });
+      donorIds.push(owner.id);
+      if (kind === 'REWARD') {
+        const reward = await createReward({
+          title: 'Original',
+          type: 'DIGITAL',
+          cost_cents: 100,
+          channel_id: a.id,
+        });
+        rewardIds.push(reward.id);
+        await prisma.rewardClaim.create({
+          data: {
+            donor_id: owner.id,
+            reward_id: reward.id,
+            amount_cents: 100,
+            status: 'REVERSED',
+            reversed_at: new Date(),
+          },
+        });
+        await expect(updateReward(reward.id, { channel_id: b.id })).rejects.toMatchObject({
+          status: 409,
+        });
+        expect(await updateReward(reward.id, { title: 'Edited' })).toMatchObject({
+          channel_id: a.id,
+          title: 'Edited',
+        });
+      } else if (kind === 'POLL') {
+        const poll = await createPoll({
+          title: 'Original',
+          channel_id: a.id,
+          options: { create: { label: 'A' } },
+        });
+        pollIds.push(poll.id);
+        await prisma.pollVote.create({
+          data: {
+            donor_id: owner.id,
+            poll_id: poll.id,
+            poll_option_id: poll.options[0]!.id,
+            amount_cents: 100,
+            reversed_at: new Date(),
+          },
+        });
+        await expect(updatePoll(poll.id, { channel_id: b.id })).rejects.toMatchObject({
+          status: 409,
+        });
+        expect(await updatePoll(poll.id, { title: 'Edited' })).toMatchObject({
+          channel_id: a.id,
+          title: 'Edited',
+        });
+      } else {
+        const goal = await createGoal({ title: 'Original', channel_id: a.id, target_cents: 100 });
+        goalIds.push(goal.id);
+        await prisma.fundContribution.create({
+          data: {
+            donor_id: owner.id,
+            goal_id: goal.id,
+            amount_cents: 100,
+            reversed_at: new Date(),
+          },
+        });
+        await expect(updateGoal(goal.id, { channel_id: b.id })).rejects.toMatchObject({
+          status: 409,
+        });
+        expect(await updateGoal(goal.id, { title: 'Edited' })).toMatchObject({
+          channel_id: a.id,
+          title: 'Edited',
+        });
+      }
+    },
+  );
+
+  it('derives completion only for actual target edits, retaining terminal-shrink exceptions during text edits', async () => {
+    const goal = await prisma.fundGoal.create({
+      data: {
+        title: 'Completed before shrink',
+        target_cents: 1000,
+        current_cents: 500,
+        is_complete: true,
+      },
+    });
+    goalIds.push(goal.id);
+    expect(await updateGoal(goal.id, { title: 'Renamed', target_cents: 1000 })).toMatchObject({
+      is_complete: true,
+    });
+    expect(await updateGoal(goal.id, { target_cents: 1200 })).toMatchObject({ is_complete: false });
+    expect(await updateGoal(goal.id, { target_cents: 400 })).toMatchObject({ is_complete: true });
+  });
+
+  it('protects an unused goal referenced by a Default goal list without blocking a still-valid move to shared', async () => {
+    const a = await createTestChannel(prisma);
+    const b = await createTestChannel(prisma);
+    channelIds.push(a.id, b.id);
+    const goal = await createGoal({ title: 'Setup goal', target_cents: 1000, channel_id: a.id });
+    goalIds.push(goal.id);
+    await prisma.channelDefaultGoal.create({
+      data: { channel_id: a.id, goal_id: goal.id, position: 0 },
+    });
+    await expect(removeIncentive('GOAL', goal.id)).rejects.toMatchObject({
+      status: 409,
+      message: 'Remove this goal from its Default goal lists before deleting it.',
+    });
+    expect(await updateGoal(goal.id, { channel_id: null })).toMatchObject({ channel_id: null });
+    await expect(updateGoal(goal.id, { channel_id: b.id })).rejects.toMatchObject({ status: 409 });
+    await prisma.channelDefaultGoal.deleteMany({ where: { goal_id: goal.id } });
+    expect(await updateGoal(goal.id, { channel_id: b.id })).toMatchObject({ channel_id: b.id });
   });
 
   it('adds and renames poll options without queueing messages', async () => {

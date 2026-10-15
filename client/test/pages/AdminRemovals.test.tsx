@@ -11,12 +11,14 @@ const mocks = vi.hoisted(() => ({
   },
   refundPollOption: vi.fn(),
   refundGoal: vi.fn(),
+  getReversalPreview: vi.fn(),
 }));
 
 vi.mock('../../src/api/admin', () => ({
   default: mocks.adminClient,
   refundPollOption: mocks.refundPollOption,
   refundGoal: mocks.refundGoal,
+  getReversalPreview: mocks.getReversalPreview,
 }));
 
 import AdminPolls from '../../src/pages/admin/AdminPolls';
@@ -55,6 +57,19 @@ describe('admin funded removals', () => {
       Promise.resolve({ data: path === '/polls' ? [poll] : [goal] }),
     );
     mocks.adminClient.delete.mockResolvedValue({ data: { success: true } });
+    mocks.getReversalPreview.mockImplementation((path: string) =>
+      Promise.resolve({
+        destinations: [
+          {
+            destination: 'Pool credit',
+            category: path.startsWith('/goals') ? 'goal' : 'poll',
+            donation_id: 'd1',
+            credit_id: null,
+            amount_cents: path.startsWith('/goals') ? 750 : 500,
+          },
+        ],
+      }),
+    );
   });
 
   it('requires confirmation and warns before removing a funded poll option', async () => {
@@ -63,8 +78,10 @@ describe('admin funded removals', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'remove' }));
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining('This will refund $5.00 to donor wallets'),
+    await waitFor(() =>
+      expect(window.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('+$5.00 poll Pool credit of donation d1'),
+      ),
     );
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('This cannot be undone.'));
     expect(mocks.adminClient.delete).not.toHaveBeenCalled();
@@ -83,8 +100,10 @@ describe('admin funded removals', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'delete' }));
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining('This will refund $7.50 to donor wallets'),
+    await waitFor(() =>
+      expect(window.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('+$7.50 goal Pool credit of donation d1'),
+      ),
     );
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('This cannot be undone.'));
     expect(mocks.adminClient.delete).not.toHaveBeenCalled();

@@ -1,8 +1,18 @@
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
+import { pledgePaymentState } from '../services/pledge.js';
 import crypto from 'crypto';
 import { MIN_SPEND_CENTS } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { readAccountingStatsTx } from '../services/accountingStats.js';
+import {
+  readStaffDonationTx,
+  readStaffClaimsTx,
+  donationActionReasonsTx,
+  incentiveAllocationTx,
+} from '../services/staffRead.js';
+import { readPoolCreditSummaryTx } from '../services/poolCredit.js';
+import { readRewardFundingTx } from '../services/rewardFunding.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
 import { handle, sendError } from '../lib/httpError.js';
@@ -42,6 +52,8 @@ import {
   previewDonationReversalTx,
   setClaimStatusTx,
   acknowledgeChargebackClaimTx,
+  previewSpendReversalTx,
+  previewIncentiveReversalTx,
 } from '../services/reversal.js';
 import {
   closeAuctionTx,
@@ -123,8 +135,32 @@ router.get('/donations', async (req, res) => {
     },
     orderBy: { created_at: 'desc' },
   });
-  res.json(donations);
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        donations.map(async (donation) => ({
+          ...donation,
+          ...(await readStaffDonationTx(tx, donation.id)),
+          donor: donation.donor,
+        })),
+      ),
+    ),
+  );
 });
+router.get(
+  '/donations/:id',
+  handle('[admin/donation]', async (req, res) => {
+    const detail = await prisma.$transaction(async (tx) => ({
+      ...(await readStaffDonationTx(tx, req.params.id!)),
+      action_disabled_reasons: await donationActionReasonsTx(tx, req.params.id!),
+    }));
+    const donor = await prisma.donor.findUnique({
+      where: { id: detail.donor_id },
+      select: { email: true },
+    });
+    res.json({ ...detail, donor });
+  }),
+);
 
 /**
  * PATCH /admin/donations/:id/channel (PRD-0002 §E6)
@@ -159,7 +195,7 @@ router.get('/donations/:id/reversal-preview', async (req, res) => {
 
 router.patch('/donations/:id/status', async (req, res) => {
   const { status, reason } = req.body;
-  if (!DONATION_STATUSES.includes(status)) {
+  if (!['REFUNDED', 'CHARGEBACK'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
@@ -179,21 +215,13 @@ router.patch('/donations/:id/status', async (req, res) => {
 
 // Claims
 router.get('/claims', async (req, res) => {
-  const claims = await prisma.rewardClaim.findMany({
-    include: { reward: true, donor: { select: { email: true } } },
-    orderBy: { created_at: 'desc' },
+  const claims = await prisma.$transaction((tx) => readStaffClaimsTx(tx));
+  const donors = await prisma.donor.findMany({
+    where: { id: { in: claims.map((c) => c.donor_id) } },
+    select: { id: true, email: true },
   });
-  res.json(
-    claims.map((c) => {
-      let parsed = null;
-      try {
-        parsed = c.claim_data ? JSON.parse(c.claim_data) : null;
-      } catch {
-        /* ignore */
-      }
-      return { ...c, claim_data: parsed };
-    }),
-  );
+  const identities = new Map(donors.map((d) => [d.id, { email: d.email }]));
+  res.json(claims.map((claim) => ({ ...claim, donor: identities.get(claim.donor_id) })));
 });
 
 router.patch('/claims/:id', async (req, res) => {
@@ -305,7 +333,16 @@ router.post(
 
 // Rewards CRUD
 router.get('/rewards', async (req, res) => {
-  res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.reward.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'reward', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/rewards', async (req, res) => {
@@ -329,7 +366,7 @@ router.post('/rewards', async (req, res) => {
     is_active: is_active ?? true,
     custom_type_label,
     image_url: image_url || null,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
   });
   res.json(reward);
 });
@@ -355,7 +392,7 @@ router.put('/rewards/:id', async (req, res) => {
     is_active,
     custom_type_label,
     image_url: image_url || null,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(reward);
 });
@@ -497,6 +534,7 @@ router.get('/donors/:id', async (req, res) => {
       email: true,
       total_donated: true,
       balance_remaining: true,
+      balance_held_cents: true,
       role: true,
       is_frozen: true,
       created_at: true,
@@ -509,7 +547,17 @@ router.get('/donors/:id', async (req, res) => {
     },
   });
   if (!donor) return res.status(404).json({ error: 'Donor not found' });
-  res.json(donor);
+  const pool_credits = await prisma.$transaction((tx) => readPoolCreditSummaryTx(tx, donor.id));
+  const reward_claims = await prisma.$transaction((tx) =>
+    Promise.all(
+      donor.reward_claims.map(async (claim) => ({
+        ...claim,
+        source: 'donor',
+        funding_donation_ids: (await readRewardFundingTx(tx, claim)).donation_ids,
+      })),
+    ),
+  );
+  res.json({ ...donor, reward_claims, pool_credits });
 });
 
 router.patch('/donors/:id/role', async (req, res) => {
@@ -622,6 +670,39 @@ router.post('/donors/sweep-credits', async (req, res) => {
   }
 });
 
+router.get(
+  '/donors/:id/reverse-spend-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    if (typeof req.query.spend_type !== 'string' || typeof req.query.spend_id !== 'string')
+      return res.status(400).json({ error: 'spend_type and spend_id required' });
+    res.json(
+      await prisma.$transaction((tx) =>
+        previewSpendReversalTx(
+          tx,
+          req.params.id!,
+          req.query.spend_type as string,
+          req.query.spend_id as string,
+        ),
+      ),
+    );
+  }),
+);
+router.get(
+  '/goals/:id/reversal-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) => previewIncentiveReversalTx(tx, 'goal', req.params.id!)),
+    );
+  }),
+);
+router.get(
+  '/polls/options/:id/reversal-preview',
+  handle('[admin/reversal-preview]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) => previewIncentiveReversalTx(tx, 'option', req.params.id!)),
+    );
+  }),
+);
 router.post('/donors/:id/reverse-spend', async (req, res) => {
   const { spend_type, spend_id } = req.body;
   if (!spend_type || !spend_id) {
@@ -640,10 +721,13 @@ router.post('/donors/:id/reverse-spend', async (req, res) => {
 // Polls CRUD
 router.get('/polls', async (req, res) => {
   res.json(
-    await prisma.poll.findMany({
-      include: { options: true },
-      orderBy: { created_at: 'desc' },
-    }),
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (
+          await tx.poll.findMany({ include: { options: true }, orderBy: { created_at: 'desc' } })
+        ).map(async (row) => ({ ...row, ...(await incentiveAllocationTx(tx, 'poll', row.id)) })),
+      ),
+    ),
   );
 });
 
@@ -667,7 +751,7 @@ router.post('/polls', async (req, res) => {
     allow_custom_entries: allow_custom_entries ?? false,
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
     options: options?.length
       ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
       : undefined,
@@ -695,7 +779,7 @@ router.put('/polls/:id', async (req, res) => {
     allow_custom_entries: allow_custom_entries ?? false,
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(poll);
 });
@@ -716,10 +800,7 @@ router.post('/polls/:id/options', async (req, res) => {
 
 router.patch('/polls/options/:id', async (req, res) => {
   const { label } = req.body;
-  if (!label || !String(label).trim()) {
-    return res.status(400).json({ error: 'label is required' });
-  }
-  const option = await updatePollOption(req.params.id, String(label).trim());
+  const option = await updatePollOption(req.params.id, label);
   res.json(option);
 });
 
@@ -755,24 +836,118 @@ router.post('/pledges/:id/check-stripe', async (req, res) => {
     sendError(res, error, '[admin/check-stripe]');
   }
 });
-router.get('/pledges', async (req, res) => {
-  const pledges = await prisma.pendingPledge.findMany({
-    include: {
-      items: true,
-      fulfilled_by: {
-        include: { donor: { select: { email: true } } },
-      },
-    },
-    orderBy: { created_at: 'desc' },
-    take: 100,
-  });
-  res.json(
-    pledges.map((pledge) => ({
-      ...pledge,
-      admin_review_required: pledge.status === 'PAYMENT_REVIEW',
-    })),
-  );
-});
+router.get(
+  '/pledges',
+  handle('[admin/pledges]', async (req, res) => {
+    const statuses = typeof req.query.status === 'string' ? req.query.status.split(',') : [];
+    if (
+      (req.query.status !== undefined && typeof req.query.status !== 'string') ||
+      statuses.some(
+        (s) => !['OPEN', 'FULFILLED', 'EXPIRED', 'CANCELLED', 'PAYMENT_REVIEW'].includes(s),
+      )
+    )
+      return res.status(400).json({ error: 'Invalid pledge status filter' });
+    const paymentState = req.query.payment_state;
+    if (
+      paymentState !== undefined &&
+      (typeof paymentState !== 'string' ||
+        ![
+          'READY',
+          'OPEN',
+          'PROCESSING',
+          'UNKNOWN',
+          'NON_PAYMENT',
+          'FULFILLED',
+          'LEGACY_PAID',
+          'PAYMENT_REVIEW',
+        ].includes(paymentState))
+    )
+      return res.status(400).json({ error: 'Invalid pledge payment-state filter' });
+    const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+    const limit = req.query.limit === undefined ? 100 : Number(req.query.limit);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 200 ||
+      (req.query.overdue !== undefined && !['true', 'false'].includes(String(req.query.overdue)))
+    )
+      return res.status(400).json({ error: 'Invalid pledge pagination/filter' });
+    const now = new Date();
+    const overdue: Prisma.PendingPledgeWhereInput = {
+      status: 'OPEN',
+      expires_at: { lt: now },
+      OR: [{ checkout_session_status: null }, { checkout_session_status: { not: 'complete' } }],
+    };
+    const where: Prisma.PendingPledgeWhereInput = {
+      AND: [
+        ...(statuses.length ? [{ status: { in: statuses } }] : []),
+        ...(paymentState === 'LEGACY_PAID' ? [{ format: 'LEGACY' }] : []),
+        ...(req.query.overdue === 'true'
+          ? [overdue]
+          : req.query.overdue === 'false'
+            ? [{ NOT: overdue }]
+            : []),
+      ],
+    };
+    const [storedTotal, candidates] = await prisma.$transaction(async (tx) =>
+      Promise.all([
+        tx.pendingPledge.count({ where }),
+        tx.pendingPledge.findMany({
+          where,
+          include: {
+            items: true,
+            fulfilled_by: { include: { donor: { select: { email: true } } } },
+          },
+          orderBy: [{ created_at: 'desc' }, { id: 'asc' }],
+          take: paymentState === undefined ? limit : undefined,
+          skip: paymentState === undefined ? offset : undefined,
+        }),
+      ]),
+    );
+    // Canonical payment outcomes can differ from stored status (late LEGACY cash
+    // keeps EXPIRED). Filter the shared projection BEFORE paginating/counting it.
+    const matching =
+      paymentState === undefined
+        ? candidates
+        : candidates.filter((pledge) => pledgePaymentState(pledge) === paymentState);
+    const total = paymentState === undefined ? storedTotal : matching.length;
+    const pledges = paymentState === undefined ? matching : matching.slice(offset, offset + limit);
+    res.set('X-Total-Count', String(total));
+    res.json(
+      await Promise.all(
+        pledges.map(async (pledge) => ({
+          ...pledge,
+          payment_state: pledgePaymentState(pledge),
+          overdue:
+            pledge.status === 'OPEN' &&
+            pledge.expires_at < now &&
+            pledge.checkout_session_status !== 'complete',
+          admin_review_required: pledge.status === 'PAYMENT_REVIEW',
+          wallet_held_cents: pledge.wallet_hold_status === 'HELD' ? pledge.held_wallet_cents : 0,
+          shipping_cents: pledge.fulfilled_by?.shipping_cents ?? null,
+          items: await Promise.all(
+            pledge.items.map(async (item) => {
+              const reward =
+                item.kind === 'REWARD'
+                  ? await prisma.reward.findUnique({
+                      where: { id: item.target_id },
+                      select: { cost_cents: true, title: true },
+                    })
+                  : null;
+              return {
+                ...item,
+                current_price_cents: reward?.cost_cents ?? null,
+                label: reward?.title ?? item.target_id,
+              };
+            }),
+          ),
+        })),
+      ),
+    );
+  }),
+);
 router.get('/blocked-words', async (req, res) => {
   const words = await prisma.blockedWord.findMany({ orderBy: { word: 'asc' } });
   res.json(words);
@@ -798,17 +973,27 @@ router.delete('/blocked-words/:id', async (req, res) => {
 
 // Goals CRUD
 router.get('/goals', async (req, res) => {
-  res.json(await prisma.fundGoal.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.fundGoal.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'goal', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, channel_id } = req.body;
+  const { title, description, target_cents, is_active, channel_id, is_complete } = req.body;
   const goal = await createGoal({
+    is_complete,
     title,
     description,
     target_cents,
     is_active: is_active ?? true,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
   });
   res.json(goal);
 });
@@ -822,7 +1007,7 @@ router.put('/goals/:id', async (req, res) => {
     target_cents,
     is_active,
     is_complete,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(goal);
 });

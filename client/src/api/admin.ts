@@ -7,6 +7,7 @@ import type {
   Event,
   Pledge,
   RefundResult,
+  ReversalPreview,
   WebhookDelivery,
   WebhookEndpoint,
 } from '../types';
@@ -125,6 +126,14 @@ export async function adjustDonorBalance(
     reason,
     type,
   });
+  return data;
+}
+
+export async function getReversalPreview(
+  path: string,
+  params?: { spend_type: string; spend_id: string },
+): Promise<ReversalPreview> {
+  const { data } = await adminClient.get(path, { params });
   return data;
 }
 

@@ -5,7 +5,7 @@ import {
   createChannel,
   deactivateChannel,
   updateChannel,
-  channelResponse,
+  readStaffChannelsTx,
 } from '../services/channels.js';
 import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
 
@@ -18,14 +18,7 @@ export function mountIdentityRoutes(router: Router): void {
   router.get(
     '/channels',
     handle('[channels]', async (_req, res) => {
-      res.json(
-        (
-          await prisma.channel.findMany({
-            orderBy: { created_at: 'asc' },
-            include: { default_goals: { orderBy: { position: 'asc' } } },
-          })
-        ).map(channelResponse),
-      );
+      res.json(await prisma.$transaction((tx) => readStaffChannelsTx(tx)));
     }),
   );
   router.post(

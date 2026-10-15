@@ -6,6 +6,7 @@ import LoadingSpinner from '../../components/LoadingSpinner';
 import ProgressBar from '../../components/ProgressBar';
 import StatusBadge from '../../components/StatusBadge';
 import ChannelPill from '../../components/ChannelPill';
+import { AllocationSources, GoalDefaults } from '../../components/StaffAmounts';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Goal } from '../../types';
 
@@ -71,7 +72,10 @@ export default function ModeratorGoals() {
   const handleSave = async () => {
     setError('');
     const data = {
-      ...form,
+      title: form.title,
+      description: form.description,
+      channel_id: form.channel_id,
+      is_active: form.is_active,
       target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
     };
     try {
@@ -86,8 +90,12 @@ export default function ModeratorGoals() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete goal?')) return;
-    await moderatorClient.delete(`/goals/${id}`);
-    await reload();
+    try {
+      await moderatorClient.delete(`/goals/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Delete failed'));
+    }
   };
 
   if (loading) return <LoadingSpinner />;
@@ -101,6 +109,7 @@ export default function ModeratorGoals() {
         </button>
       </div>
 
+      {!modal && error && <p role="alert">{error}</p>}
       <div className="space-y-4">
         {filteredGoals.map((g) => (
           <Card key={g.id}>
@@ -111,12 +120,15 @@ export default function ModeratorGoals() {
                   <ChannelPill label={channelName(g.channel_id)} />
                 </div>
                 <p className="font-data text-sm text-off-white/55">
-                  {fmt(g.current_cents)} / {fmt(g.target_cents)} {g.is_complete && '· complete'}
+                  {fmt(g.current_cents)} allocated / target {fmt(g.target_cents)}{' '}
+                  {g.is_complete && '· complete'}
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={g.is_active} />
                 </div>
-                <ProgressBar value={g.current_cents} max={g.target_cents} />
+                <GoalDefaults id={g.id} channels={channels} />
+                <AllocationSources row={g} />
+                <ProgressBar value={g.current_cents} max={g.target_cents} animateOnChange={false} />
               </div>
               <div className="flex gap-2 ml-4">
                 <button
@@ -170,19 +182,9 @@ export default function ModeratorGoals() {
               onChange={(e) => setForm((d) => ({ ...d, target_dollars: e.target.value }))}
             />
           </div>
-          {modal !== 'create' && (
-            <div className="mb-3 flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="modgoal_complete"
-                checked={form.is_complete}
-                onChange={(e) => setForm((d) => ({ ...d, is_complete: e.target.checked }))}
-              />
-              <label htmlFor="modgoal_complete" className="font-data text-sm text-off-white">
-                complete
-              </label>
-            </div>
-          )}
+          <p className="font-body text-sm text-off-white/55">
+            Completion is derived from allocated progress. Deactivate to close early.
+          </p>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
             <select

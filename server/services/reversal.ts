@@ -427,6 +427,15 @@ export async function previewDonationReversalTx(
       goal: donation.allocations.goal.length,
     },
     retained_claim_ids: retained.map((row) => row.id),
+    reversed_allocation_ids: {
+      reward: claims.map((row) => row.id),
+      poll: donation.allocations.poll.map((row) => row.id),
+      goal: donation.allocations.goal.map((row) => row.id),
+    },
+    cleared_unused_cents: {
+      poll: donation.pools.poll.unused_cents,
+      goal: donation.pools.goal.unused_cents,
+    },
     cleared_pool_credit_cents: {
       reward: donation.pools.reward.outstanding_credit_cents,
       poll: donation.pools.poll.outstanding_credit_cents,
@@ -450,8 +459,7 @@ export async function setDonationStatusTx(
   if (donation.refund_id || ['REFUNDED', 'CHARGEBACK'].includes(donation.status))
     throw httpError(400, 'Donation is refunded/charged back and cannot change status');
   if (donation.status === status) throw httpError(400, 'Donation already has this status');
-  if (!['PENDING', 'COMPLETED', 'REFUNDED', 'CHARGEBACK'].includes(status))
-    throw httpError(400, 'Invalid status');
+  if (!['REFUNDED', 'CHARGEBACK'].includes(status)) throw httpError(400, 'Invalid status');
   await assertNoRequestedRefundTx(tx, donationId);
   const initial = await readDonationAccountingTx(tx, donationId);
   const affectedIds = new Set([donationId]);
@@ -546,6 +554,117 @@ export async function recordLegacyAsyncFailureTx(
   );
 }
 
+export interface ReversalDestination {
+  destination: 'Wallet credit' | 'Pool credit' | 'Unused pool money' | 'Expired reward Pool credit';
+  category: 'reward' | 'poll' | 'goal';
+  donation_id: string | null;
+  credit_id: string | null;
+  amount_cents: number;
+}
+async function rowReturnPreviewTx(
+  tx: Tx,
+  row: { id: string; donation_id: string | null; amount_cents: number; source?: string },
+  category: 'reward' | 'poll' | 'goal',
+): Promise<ReversalDestination[]> {
+  const redemptions = await tx.poolCreditRedemption.findMany({
+    where:
+      category === 'reward'
+        ? { claim_id: row.id }
+        : category === 'poll'
+          ? { vote_id: row.id }
+          : { contribution_id: row.id },
+    select: {
+      amount_cents: true,
+      reduced_cents: true,
+      credit_id: true,
+      credit: {
+        select: {
+          donation_id: true,
+          donation: { select: { status: true, event: { select: { ended_at: true } } } },
+        },
+      },
+    },
+  });
+  if (redemptions.length)
+    return redemptions
+      .filter((r) => r.credit.donation.status !== 'CHARGEBACK')
+      .map((r) => ({
+        destination: r.credit.donation.event?.ended_at
+          ? category === 'reward'
+            ? 'Expired reward Pool credit'
+            : 'Unused pool money'
+          : 'Pool credit',
+        category,
+        donation_id: r.credit.donation_id,
+        credit_id: r.credit_id,
+        amount_cents: r.amount_cents - r.reduced_cents,
+      }));
+  const donation = row.donation_id
+    ? await tx.donation.findUniqueOrThrow({
+        where: { id: row.donation_id },
+        select: { status: true, pledge_amount_cents: true, event: { select: { ended_at: true } } },
+      })
+    : null;
+  if (donation?.status === 'CHARGEBACK') return [];
+  return [
+    {
+      category,
+      donation_id: row.donation_id,
+      credit_id: null,
+      amount_cents: row.amount_cents,
+      destination:
+        donation?.pledge_amount_cents == null
+          ? 'Wallet credit'
+          : row.source === 'moderator' || (donation.event?.ended_at && category !== 'reward')
+            ? 'Unused pool money'
+            : donation.event?.ended_at
+              ? 'Expired reward Pool credit'
+              : 'Pool credit',
+    },
+  ];
+}
+/** Read-only destination projection of the existing reversal policy. Mutation rechecks all locks. */
+export async function previewSpendReversalTx(tx: Tx, donorId: string, kind: string, id: string) {
+  const row =
+    kind === 'claim'
+      ? await tx.rewardClaim.findUnique({ where: { id } })
+      : kind === 'vote'
+        ? await tx.pollVote.findUnique({ where: { id } })
+        : kind === 'contribution'
+          ? await tx.fundContribution.findUnique({ where: { id } })
+          : null;
+  if (!row || row.donor_id !== donorId) throw httpError(404, 'Spend record not found');
+  const category = kind === 'claim' ? 'reward' : kind === 'vote' ? 'poll' : 'goal';
+  if (row.reversed_at) throw httpError(409, 'Already reversed');
+  if ('status' in row && row.status !== 'PENDING')
+    throw httpError(
+      409,
+      'Only pending claims can be reversed; mark fulfilled claims pending first',
+    );
+  if (kind === 'claim')
+    for (const source of (await readRewardFundingTx(tx, row)).donation_ids)
+      await assertSpendSourceTx(tx, source);
+  else await assertSpendSourceTx(tx, row.donation_id);
+  return { destinations: await rowReturnPreviewTx(tx, row, category) };
+}
+export async function previewIncentiveReversalTx(tx: Tx, kind: 'goal' | 'option', id: string) {
+  const target =
+    kind === 'goal'
+      ? await tx.fundGoal.findUnique({ where: { id }, select: { id: true } })
+      : await tx.pollOption.findUnique({ where: { id }, select: { id: true } });
+  if (!target) throw httpError(404, 'Incentive not found');
+  const rows =
+    kind === 'goal'
+      ? await tx.fundContribution.findMany({ where: { goal_id: id, reversed_at: null } })
+      : await tx.pollVote.findMany({ where: { poll_option_id: id, reversed_at: null } });
+  const destinations: ReversalDestination[] = [];
+  for (const row of rows) {
+    await assertNoRequestedRefundTx(tx, row.donation_id);
+    destinations.push(...(await rowReturnPreviewTx(tx, row, kind === 'goal' ? 'goal' : 'poll')));
+  }
+  return { destinations };
+}
+
 async function assertSpendSourceTx(tx: Tx, donationId: string | null) {
   await assertNoRequestedRefundTx(tx, donationId);
   if (
@@ -553,6 +672,22 @@ async function assertSpendSourceTx(tx: Tx, donationId: string | null) {
     (await tx.donation.findUniqueOrThrow({ where: { id: donationId } })).status === 'CHARGEBACK'
   )
     throw httpError(409, 'Cannot reverse spending from a charged-back donation');
+}
+
+/** Shared read/mutation guard checks EVERY funding source, including credit-backed claims. */
+export async function claimStatusReasonTx(tx: Tx, claimId: string): Promise<string | null> {
+  const claim = await tx.rewardClaim.findUnique({ where: { id: claimId } });
+  if (!claim) throw httpError(404, 'Claim not found');
+  try {
+    for (const id of (await readRewardFundingTx(tx, claim)).donation_ids)
+      await assertSpendSourceTx(tx, id);
+    if (claim.reversed_at || !['PENDING', 'FULFILLED'].includes(claim.status))
+      return 'Only pending or fulfilled claims can change status';
+    return null;
+  } catch (error) {
+    if (error instanceof Error && 'status' in error) return error.message;
+    throw error;
+  }
 }
 
 /** Only live PENDING <-> FULFILLED transitions, never resurrection of a reversed claim. */
@@ -567,9 +702,8 @@ export async function setClaimStatusTx(
   const claim = await tx.rewardClaim.findUnique({ where: { id: claimId } });
   if (!claim) throw httpError(404, 'Claim not found');
   const funding = await readRewardFundingTx(tx, claim);
-  for (const id of funding.donation_ids) await assertSpendSourceTx(tx, id);
-  if (claim.reversed_at || !['PENDING', 'FULFILLED'].includes(claim.status))
-    throw httpError(409, 'Only pending or fulfilled claims can change status');
+  const disabled = await claimStatusReasonTx(tx, claimId);
+  if (disabled) throw httpError(409, disabled);
   const ids = funding.donation_ids;
   const before = await publisher.snapshot(ids);
   const result = await tx.rewardClaim.update({

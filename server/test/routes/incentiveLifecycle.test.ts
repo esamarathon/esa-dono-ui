@@ -72,7 +72,7 @@ const inputs = {
     quantity_total: 10,
     image_url: '/api/uploads/missing.webp',
     is_active: false,
-    channel_id: '',
+    channel_id: null,
     quantity_claimed: 99,
   },
   polls: {
@@ -83,7 +83,7 @@ const inputs = {
     allow_custom_entries: true,
     max_entry_chars: 40,
     auto_approve: false,
-    channel_id: '',
+    channel_id: null,
     options: [{ label: 'A', votes_cents: 99 }],
   },
   goals: {
@@ -91,9 +91,8 @@ const inputs = {
     description: 'Description',
     target_cents: 1000,
     is_active: false,
-    channel_id: '',
+    channel_id: null,
     current_cents: 99,
-    is_complete: true,
   },
 };
 
@@ -153,7 +152,6 @@ for (const role of ['admin', 'moderator']) {
             is_active: true,
             cost_cents: 700,
             target_cents: 2000,
-            is_complete: true,
             quantity_claimed: 99,
             current_cents: 99,
           });
@@ -185,7 +183,7 @@ for (const role of ['admin', 'moderator']) {
           expect(updated.body).toMatchObject({
             target_cents: 2000,
             current_cents: 0,
-            is_complete: true,
+            is_complete: false,
           });
         const rows = await prisma.webhookDelivery.findMany({
           where: { destination_id: target.id },
@@ -198,6 +196,52 @@ for (const role of ['admin', 'moderator']) {
         ]);
       },
     );
+
+    it('rejects manual completion on create and update and invalid prices for either role', async () => {
+      for (const is_complete of [true, false, null]) {
+        await request(app)
+          .post(`/api/${role}/goals`)
+          .set('Authorization', auth(role))
+          .send({ title: 'Goal', target_cents: 100, is_complete })
+          .expect(400);
+      }
+      const created = await request(app)
+        .post(`/api/${role}/goals`)
+        .set('Authorization', auth(role))
+        .send({ title: ' Trimmed ', target_cents: 100 })
+        .expect(200);
+      goalIds.push(created.body.id);
+      expect(created.body.title).toBe('Trimmed');
+      await request(app)
+        .put(`/api/${role}/goals/${created.body.id}`)
+        .set('Authorization', auth(role))
+        .send({ is_complete: false })
+        .expect(400);
+      for (const target_cents of [0, -1, 1.5, 2147483648]) {
+        await request(app)
+          .put(`/api/${role}/goals/${created.body.id}`)
+          .set('Authorization', auth(role))
+          .send({ target_cents })
+          .expect(400);
+      }
+      for (const channel_id of ['', false, 0, 'missing']) {
+        await request(app)
+          .put(`/api/${role}/goals/${created.body.id}`)
+          .set('Authorization', auth(role))
+          .send({ channel_id })
+          .expect(400);
+      }
+      await request(app)
+        .post(`/api/${role}/polls`)
+        .set('Authorization', auth(role))
+        .send({ title: 'Valid poll', options: [{ label: '  ' }] })
+        .expect(400);
+      await request(app)
+        .post(`/api/${role}/rewards`)
+        .set('Authorization', auth(role))
+        .send({ title: '  ', cost_cents: 100, type: 'DIGITAL' })
+        .expect(400);
+    });
 
     it('returns the exact history conflict for hard deletes without granting reversal powers', async () => {
       const reward = await prisma.reward.create({

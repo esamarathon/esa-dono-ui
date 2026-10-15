@@ -2,6 +2,11 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { readAccountingStatsTx } from '../services/accountingStats.js';
+import {
+  readStaffDonationTx,
+  readStaffClaimsTx,
+  incentiveAllocationTx,
+} from '../services/staffRead.js';
 import { handle, httpError, sendError } from '../lib/httpError.js';
 import {
   assignUnusedTx,
@@ -118,10 +123,16 @@ router.post(
 // Polls CRUD
 router.get('/polls', async (req, res) => {
   res.json(
-    await prisma.poll.findMany({
-      include: { options: true, custom_entries: true },
-      orderBy: { created_at: 'desc' },
-    }),
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (
+          await tx.poll.findMany({
+            include: { options: true, custom_entries: true },
+            orderBy: { created_at: 'desc' },
+          })
+        ).map(async (row) => ({ ...row, ...(await incentiveAllocationTx(tx, 'poll', row.id)) })),
+      ),
+    ),
   );
 });
 
@@ -145,7 +156,7 @@ router.post('/polls', async (req, res) => {
     allow_custom_entries: allow_custom_entries ?? false,
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
     options: options?.length
       ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
       : undefined,
@@ -172,7 +183,7 @@ router.put('/polls/:id', async (req, res) => {
     allow_custom_entries: allow_custom_entries ?? false,
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(poll);
 });
@@ -193,10 +204,7 @@ router.post('/polls/:id/options', async (req, res) => {
 
 router.patch('/polls/options/:id', async (req, res) => {
   const { label } = req.body;
-  if (!label || !String(label).trim()) {
-    return res.status(400).json({ error: 'label is required' });
-  }
-  const option = await updatePollOption(req.params.id, String(label).trim());
+  const option = await updatePollOption(req.params.id, label);
   res.json(option);
 });
 
@@ -261,7 +269,16 @@ router.use('/uploads', (err: unknown, _req: Request, res: Response, _next: NextF
 });
 
 router.get('/rewards', async (req, res) => {
-  res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.reward.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'reward', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/rewards', async (req, res) => {
@@ -285,7 +302,7 @@ router.post('/rewards', async (req, res) => {
     is_active: is_active ?? true,
     custom_type_label,
     image_url: image_url || null,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
   });
   res.json(reward);
 });
@@ -311,7 +328,7 @@ router.put('/rewards/:id', async (req, res) => {
     is_active,
     custom_type_label,
     image_url: image_url || null,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(reward);
 });
@@ -330,40 +347,7 @@ router.delete('/rewards/:id', async (req, res) => {
 // displayed/tracked here (admin retains its own status toggle at
 // admin.ts's PATCH /claims/:id, which is unrelated and untouched).
 router.get('/claims', async (req, res) => {
-  const claims = await prisma.rewardClaim.findMany({
-    include: {
-      reward: true,
-      // Human-readable donor identity without ever touching email (#57):
-      // donor_name is a plain column on Donation (self-reported at checkout),
-      // not on Donor — join to the donor's most recent donation for it.
-      donor: {
-        select: {
-          donations: {
-            orderBy: { created_at: 'desc' },
-            take: 1,
-            select: { donor_name: true },
-          },
-        },
-      },
-    },
-    orderBy: { created_at: 'desc' },
-  });
-  res.json(
-    claims.map((c) => {
-      let parsed = null;
-      try {
-        parsed = c.claim_data ? JSON.parse(c.claim_data) : null;
-      } catch {
-        /* ignore */
-      }
-      const { donor, ...rest } = c;
-      return {
-        ...rest,
-        claim_data: parsed,
-        donor_name: donor?.donations[0]?.donor_name ?? null,
-      };
-    }),
-  );
+  res.json(await prisma.$transaction((tx) => readStaffClaimsTx(tx, true)));
 });
 
 // Donations — read-only list + moderation flag. Downstream tools (exports,
@@ -466,19 +450,26 @@ router.get('/donations', async (req, res) => {
   };
 
   res.json(
-    donations.map((d) => {
-      const { pledge, ...rest } = d;
-      return {
-        ...rest,
-        pledge_items: (pledge?.items ?? []).map((i) => ({
-          kind: i.kind,
-          label: labelForItem(i),
-          amount_cents: i.amount_cents,
-          quantity: i.quantity,
-        })),
-        top_up_cents: pledge?.top_up_cents ?? null,
-      };
-    }),
+    await prisma.$transaction((tx) =>
+      Promise.all(
+        donations.map(async (d) => {
+          const { pledge, ...rest } = d;
+          const { pools: _privateCredits, ...current } = await readStaffDonationTx(tx, d.id);
+          void _privateCredits; // Deliberately omit the Pool-credit panel from moderator responses.
+          return {
+            ...rest,
+            ...current,
+            pledge_items: (pledge?.items ?? []).map((i) => ({
+              kind: i.kind,
+              label: labelForItem(i),
+              amount_cents: i.amount_cents,
+              quantity: i.quantity,
+            })),
+            top_up_cents: pledge?.top_up_cents ?? null,
+          };
+        }),
+      ),
+    ),
   );
 });
 
@@ -534,17 +525,27 @@ router.patch('/donations/:id', async (req, res) => {
 
 // Goals CRUD
 router.get('/goals', async (req, res) => {
-  res.json(await prisma.fundGoal.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.fundGoal.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'goal', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, channel_id } = req.body;
+  const { title, description, target_cents, is_active, channel_id, is_complete } = req.body;
   const goal = await createGoal({
+    is_complete,
     title,
     description,
     target_cents,
     is_active: is_active ?? true,
-    channel_id: channel_id || null,
+    channel_id: channel_id ?? null,
   });
   res.json(goal);
 });
@@ -557,7 +558,7 @@ router.put('/goals/:id', async (req, res) => {
     target_cents,
     is_active,
     is_complete,
-    channel_id: channel_id || null,
+    channel_id,
   });
   res.json(goal);
 });

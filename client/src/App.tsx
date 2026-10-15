@@ -21,6 +21,7 @@ import AdminRewards from './pages/admin/AdminRewards';
 import AdminPolls from './pages/admin/AdminPolls';
 import AdminGoals from './pages/admin/AdminGoals';
 import AdminDonations from './pages/admin/AdminDonations';
+import AdminDonationDetail from './pages/admin/AdminDonationDetail';
 import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="polls" element={<AdminPolls />} />
           <Route path="goals" element={<AdminGoals />} />
           <Route path="donations" element={<AdminDonations />} />
+          <Route path="donations/:id" element={<AdminDonationDetail />} />
           <Route path="simulate" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />

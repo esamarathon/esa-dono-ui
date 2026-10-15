@@ -53,6 +53,21 @@ info:
     adds zero money; shipping is a separate fee. Each incentive category has its
     own Pool equal to the pledge amount; incentive totals are not money totals.
 
+    ## Staff incentive validation
+
+    Both staff roles share transactional incentiveLifecycle validation. Titles and option labels
+    are trimmed and nonempty. Reward prices and goal targets must be positive safe integer cents
+    representable by Prisma Int (maximum 2147483647). Stock is a nonnegative representable integer
+    or null (unlimited); zero may close future availability even with claims. Channel ids must be
+    null or valid. Channel/reward-type changes with any live or reversed allocation history return
+    409; malformed input returns 400. Manual goal is_complete input is rejected on create/update;
+    completion is derived on actual target changes (unchanged targets/text edits retain existing exceptions).
+    Staff incentive list reads add allocated_cents, allocated_source_cents (donor/auto/moderator)
+    and live_count. These sum recorded effective financial components and count reward entitlements once,
+    never current catalog price times count or a cross-category money total.
+    Ordinary reversals recompute completion; chargeback and
+    Payment-refund shrink preserve their existing completion exceptions. Staff deactivate to close early.
+
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
@@ -1442,7 +1457,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All channels ordered by created_at ascending
+          description: Channels ordered by created_at ascending, ordered default_goals ids, default_goal and fallback_goal (id/title or null) from the fulfillment resolver, has_eligible_default boolean. Ineligible entries stay listed; no donor data.
     post:
       tags: [Admin]
       summary: Create a channel
@@ -1666,7 +1681,77 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Donations (all Donation fields incl. status, refund_id, external_id, channel_id, event_id, hidden_from_overlay, moderation flags) with donor email and channel (id, name, slug, event_id), ordered by created_at descending
+          description: All Donation scalar fields, admin-only donor email, Channel/Event identity, live source-local allocations, flags/needs_attention, unused_cents and category Pools. Array shape retained, ordered by created_at descending. Action eligibility is provided by the detail endpoint.
+
+  /admin/donations/{id}:
+    get:
+      tags: [Admin]
+      summary: Staff donation detail with live source-local Pools and action eligibility
+      description: Reuses current accounting and all-source reversal guards. Only this admin router joins private donor email; shared helpers never do. Wallet-only cash0 and NULL-D legacy donations remain distinct.
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current donation, Pools, safe live allocations and disabled reasons
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminDonationDetail' }
+        '404': { description: Donation not found }
+
+  /admin/donors/{id}/reverse-spend-preview:
+    get:
+      tags: [Admin]
+      summary: Preview the recorded credit destinations of one live spend record
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - {
+            name: spend_type,
+            in: query,
+            required: true,
+            schema: { type: string, enum: [claim, vote, contribution] },
+          }
+        - { name: spend_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Source-linked destinations, including original grants and ended-Event conversion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpendReversalPreview' }
+        '400': { description: Missing spend_type or spend_id }
+        '404': { description: Spend record not found or belongs to another donor }
+        '409': { description: Reversed, fulfilled, CANCELLING, charged-back or REQUESTED source }
+
+  /admin/goals/{id}/reversal-preview:
+    get:
+      tags: [Admin]
+      summary: Preview all live contribution destinations before reverse or reverse-and-deactivate
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: One destination per financial component; categories are not charity money
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpendReversalPreview' }
+        '409': { description: A source Payment refund is REQUESTED }
+
+  /admin/polls/options/{id}/reversal-preview:
+    get:
+      tags: [Admin]
+      summary: Preview all live vote destinations before reverse or reverse-and-deactivate
+      security: [{ AdminKey: [] }, { DonorSession: [] }, { DonorBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: One destination per financial component; no credit for old charged-back sources
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SpendReversalPreview' }
+        '409': { description: A source Payment refund is REQUESTED }
 
   /admin/donations/{id}/reversal-preview:
     get:
@@ -1698,6 +1783,8 @@ paths:
                     money_after_cents,
                     reversed_rows,
                     retained_claim_ids,
+                    reversed_allocation_ids,
+                    cleared_unused_cents,
                     cleared_pool_credit_cents,
                   ]
                 properties:
@@ -1711,6 +1798,18 @@ paths:
                     type: object
                     properties:
                       reward: { type: integer }
+                      poll: { type: integer }
+                      goal: { type: integer }
+                  reversed_allocation_ids:
+                    type: object
+                    required: [reward, poll, goal]
+                    properties:
+                      reward: { type: array, items: { type: string } }
+                      poll: { type: array, items: { type: string } }
+                      goal: { type: array, items: { type: string } }
+                  cleared_unused_cents:
+                    type: object
+                    properties:
                       poll: { type: integer }
                       goal: { type: integer }
                   retained_claim_ids: { type: array, items: { type: string } }
@@ -1727,7 +1826,7 @@ paths:
   /admin/donations/{id}/status:
     patch:
       tags: [Admin]
-      summary: Set a donation's lifecycle status (#63)
+      summary: Wallet refund or Record chargeback (manual PENDING/COMPLETED transitions are rejected)
       description: >-
         ADR-0011 pooled or NULL-D legacy accounting is selected per donation.
         Both actions reverse live linked rows except FULFILLED claims and clear Pool credit.
@@ -1754,7 +1853,7 @@ paths:
               properties:
                 status:
                   type: string
-                  enum: [PENDING, COMPLETED, REFUNDED, CHARGEBACK]
+                  enum: [REFUNDED, CHARGEBACK]
                 reason: { type: string }
       responses:
         '200':
@@ -1955,7 +2054,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: Claims with reward and donor email
+          description: Every claim (including reversed history), parsed claim_data, recorded amount_cents, reward current price, canonical funding_donation_ids and toggle_disabled_reason. All-source CHARGEBACK/REQUESTED guards apply. Private donor email is joined only in this admin router.
 
   /admin/claims/{id}:
     patch:
@@ -2211,7 +2310,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Full donor with nested donations, claims, votes, contributions, adjustments
+          description: Private admin donor identity, donated cash, balance_remaining (available Wallet) and balance_held_cents separately, role/token/freeze metadata, nested recorded spend histories and balance adjustments. Claims add canonical funding_donation_ids. pool_credits is the safe readPoolCreditSummaryTx contract (wallet_credit_cents and per-Event/category outstanding/available/reasons); only routes/admin.ts joins email.
         '404':
           description: Donor not found
 
@@ -2310,7 +2409,7 @@ paths:
   /admin/donors/{id}/adjust-balance:
     post:
       tags: [Admin]
-      summary: Adjust donor balance
+      summary: Adjust available Wallet credit (not held Wallet or Pool credit)
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2351,7 +2450,7 @@ paths:
       tags: [Admin]
       summary: Bulk credit sweep-out (#60)
       description: |
-        Zeros balance_remaining for every donor with a positive balance,
+        Zeros available Wallet credit (balance_remaining) ONLY; never touches balance_held_cents or category Pool credit. For every donor with positive available credit,
         optionally filtered to a balance range. Two-step confirmation:
         omit/false `confirm` for a dry-run preview (nothing written);
         `confirm: true` to actually perform the sweep. Each swept donor gets
@@ -2557,7 +2656,7 @@ paths:
           description: label is required
     delete:
       tags: [Admin]
-      summary: Refund and remove a poll option
+      summary: Reverse votes and deactivate a poll option
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -2594,11 +2693,55 @@ paths:
   /admin/pledges:
     get:
       tags: [Admin]
-      summary: List all pledges
+      summary: List Pending pledges (array-compatible, paginated)
       security: [{ AdminKey: [] }]
+      parameters:
+        - {
+            name: status,
+            in: query,
+            schema: { type: string },
+            description: Comma-separated stored statuses OPEN/FULFILLED/EXPIRED/CANCELLED/PAYMENT_REVIEW. Omitted retains all-status compatibility; the staff UI defaults OPEN. Late LEGACY cash remains EXPIRED; filter its canonical payment_state instead.,
+          }
+        - name: payment_state
+          in: query
+          description: Canonical checkout outcome, filtered before pagination/counting. LEGACY_PAID selects linked late LEGACY cash receipts whose stored status stays EXPIRED; original historical FULFILLED remains FULFILLED.
+          schema:
+            type: string
+            enum:
+              [
+                READY,
+                OPEN,
+                PROCESSING,
+                UNKNOWN,
+                NON_PAYMENT,
+                FULFILLED,
+                LEGACY_PAID,
+                PAYMENT_REVIEW,
+              ]
+        - {
+            name: overdue,
+            in: query,
+            schema: { type: boolean },
+            description: OPEN with deadline before now and Session not complete; never proof of non-payment.,
+          }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - {
+            name: limit,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 200, default: 100 },
+          }
       responses:
         '200':
-          description: Pledges with nested items, funding/Stripe reconciliation fields, admin_review_required and fulfilled_by donor (capped at 100). PAYMENT_REVIEW flags received cash credited without original incentive fulfillment.
+          description: Raw admin-only pledge fields plus canonical payment_state, overdue, separate shipping_cents (null until recorded), item label/current_price_cents and confirmed unit_price_cents. payment_state LEGACY_PAID identifies late cash linked to a LEGACY pledge that stays EXPIRED. PAYMENT_REVIEW is distinct; neither means original fulfillment. Historical FULFILLED stays fulfilled. Drafts remain browser-only.
+          headers:
+            X-Total-Count:
+              { description: Total records matching filters, schema: { type: integer } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StaffPledgeRead' }
+        '400': { description: Invalid filter or pagination }
 
   /admin/pledges/{id}/check-stripe:
     post:
@@ -3100,13 +3243,15 @@ paths:
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
-                is_complete: { type: boolean }
       responses:
         '200':
-          description: Goal updated
+          description: Goal updated; completion derives from current allocation versus target on target edits
+        '400': { description: Invalid input or supplied manual is_complete }
+        '409':
+          { description: Channel change with allocation history or a Default goal list reference }
     delete:
       tags: [Admin]
-      summary: Refund and remove a fund goal
+      summary: Reverse contributions and deactivate a fund goal
       security: [{ AdminKey: [] }]
       parameters:
         - name: id
@@ -3464,7 +3609,7 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: All channels ordered by created_at ascending
+          description: Channels ordered by created_at ascending, ordered default_goals ids, default_goal and fallback_goal (id/title or null) from the fulfillment resolver, has_eligible_default boolean. Ineligible entries stay listed; no donor data.
     post:
       tags: [Moderator]
       summary: Create a channel
@@ -3855,7 +4000,7 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Claims with reward details and a human-readable donor_name (from the donor's most recent donation; never donor email or id)
+          description: Live-only claims (unreversed PENDING/FULFILLED/CANCELLING), recorded amount_cents, reward current price, parsed claim_data and funding_donation_ids. donor_name comes from the own donation, including a null name; ONLY an unlinked claim falls back to the donor's newest donation. No donor object or donor email.
 
   /moderator/donations:
     get:
@@ -3864,7 +4009,12 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Donations with donor name (no donor email), channel (id, name, slug, event_id), event_id, status, hidden_from_overlay, moderation status, and pledge_items — human-readable labels (never raw target_id) for each reward/poll-vote/poll-custom/goal the donor selected, plus top_up_cents for the additional contribution
+          description: Safe current donation state with source-local live allocation labels, assignment actor/time, flags, needs_attention and unused_cents per poll/goal. No donor join/email or Pools/Pool-credit projection. Legacy pledge_items/top_up_cents remain for API compatibility only, not the staff display.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StaffDonationRead' }
 
   /moderator/donations/{id}:
     patch:
@@ -3957,10 +4107,12 @@ paths:
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
                 is_active: { type: boolean }
-                is_complete: { type: boolean }
       responses:
         '200':
-          description: Goal updated
+          description: Goal updated; completion derives from current allocation versus target on target edits
+        '400': { description: Invalid input or supplied manual is_complete }
+        '409':
+          { description: Channel change with allocation history or a Default goal list reference }
     delete:
       tags: [Moderator]
       summary: Delete a fund goal
@@ -4362,6 +4514,193 @@ components:
       scheme: bearer
       description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
+    SpendReversalPreview:
+      type: object
+      required: [destinations]
+      properties:
+        destinations:
+          type: array
+          items:
+            type: object
+            required: [destination, category, donation_id, credit_id, amount_cents]
+            properties:
+              destination:
+                {
+                  type: string,
+                  enum: [Wallet credit, Pool credit, Unused pool money, Expired reward Pool credit],
+                }
+              category: { type: string, enum: [reward, poll, goal] }
+              donation_id: { type: string, nullable: true }
+              credit_id:
+                {
+                  type: string,
+                  nullable: true,
+                  description: Original grant restored by a redemption reversal,
+                }
+              amount_cents:
+                { type: integer, description: Recorded effective component, not catalog price }
+    StaffAllocation:
+      type: object
+      required: [id, label, channel, source, amount_cents]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        channel: { type: string, description: Incentive Channel name or shared }
+        source: { type: string, enum: [donor, auto, moderator] }
+        amount_cents: { type: integer, description: Source-local effective allocation }
+        status: { type: string }
+        allocated_by:
+          {
+            type: string,
+            nullable: true,
+            description: Staff assignment attribution,
+            never source donor identity,
+          }
+        allocated_at: { type: string, format: date-time, nullable: true }
+        recorded_amount_cents:
+          { type: integer, description: Whole reward entitlement recorded amount }
+        current_price_cents:
+          { type: integer, description: Current reward catalog price, not the allocation }
+        chargeback_flagged_at: { type: string, format: date-time, nullable: true }
+    CategoryAccounting:
+      type: object
+      required: [live_cents, outstanding_credit_cents, pool_credit_cents, unused_cents, used_cents]
+      properties:
+        live_cents: { type: integer }
+        outstanding_credit_cents: { type: integer }
+        pool_credit_cents: { type: integer }
+        unused_cents: { type: integer }
+        used_cents: { type: integer }
+    StaffDonationRead:
+      type: object
+      description: Donation scalar fields, routing/Event metadata and safe live allocation labels. No donor join. Moderator responses omit Pools/Pool-credit panels and retain legacy pledge_items/top_up_cents only for additive compatibility.
+      required:
+        [
+          id,
+          donor_id,
+          amount_cents,
+          pledge_amount_cents,
+          wallet_applied_cents,
+          status,
+          allocations,
+          flags,
+          needs_attention,
+          unused_cents,
+        ]
+      properties:
+        id: { type: string }
+        donor_id: { type: string }
+        amount_cents: { type: integer }
+        pledge_amount_cents: { type: integer, nullable: true }
+        wallet_applied_cents: { type: integer }
+        status: { type: string, enum: [PENDING, COMPLETED, REFUNDED, CHARGEBACK] }
+        allocations:
+          type: object
+          required: [reward, poll, goal]
+          properties:
+            reward: { type: array, items: { $ref: '#/components/schemas/StaffAllocation' } }
+            poll: { type: array, items: { $ref: '#/components/schemas/StaffAllocation' } }
+            goal: { type: array, items: { $ref: '#/components/schemas/StaffAllocation' } }
+        flags: { type: array, items: { type: string } }
+        needs_attention: { type: boolean }
+        ended_target_changes:
+          type: array
+          description: All recorded Payment-refund affected targets that were ended/completed, without a history-page cap
+          items:
+            type: object
+            properties:
+              payment_refund_id: { type: string }
+              category: { type: string, enum: [poll, goal] }
+              target_id: { type: string }
+              poll_id: { type: string, nullable: true }
+              label: { type: string }
+              before_cents: { type: integer }
+              after_cents: { type: integer }
+              ended: { type: boolean }
+              completed: { type: boolean }
+        unused_cents:
+          type: object
+          properties:
+            poll: { type: integer }
+            goal: { type: integer }
+    AdminDonationDetail:
+      allOf:
+        - { $ref: '#/components/schemas/StaffDonationRead' }
+        - type: object
+          required: [pools, action_disabled_reasons, donor]
+          properties:
+            donor:
+              type: object
+              nullable: true
+              properties:
+                email: { type: string, description: Joined only in routes/admin.ts }
+            pools:
+              type: object
+              required: [reward, poll, goal]
+              properties:
+                reward: { $ref: '#/components/schemas/CategoryAccounting' }
+                poll: { $ref: '#/components/schemas/CategoryAccounting' }
+                goal: { $ref: '#/components/schemas/CategoryAccounting' }
+            action_disabled_reasons:
+              type: object
+              required: [REFUNDED, CHARGEBACK]
+              properties:
+                REFUNDED: { type: string, nullable: true }
+                CHARGEBACK: { type: string, nullable: true }
+    StaffPledgeRead:
+      type: object
+      description: Existing raw admin-only PendingPledge scalar fields are retained (including donor_email). No shared service adds private identity. Canonical payment state is projected by pledgePaymentState, not reimplemented by the staff page.
+      required:
+        [id, status, format, payment_state, overdue, shipping_cents, items, admin_review_required]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        format: { type: string, enum: [POOLED, LEGACY] }
+        pledge_amount_cents: { type: integer, nullable: true }
+        new_money_cents: { type: integer, nullable: true }
+        held_wallet_cents:
+          {
+            type: integer,
+            description: Original confirmed Wallet funding,
+            retained after release or consumption,
+          }
+        wallet_held_cents:
+          {
+            type: integer,
+            description: Currently held amount only,
+            zero unless wallet_hold_status is HELD,
+          }
+        wallet_hold_status: { type: string, enum: [NONE, HELD, CONSUMED, RELEASED] }
+        checkout_session_status: { type: string, nullable: true }
+        payment_status: { type: string, nullable: true }
+        payment_state:
+          {
+            type: string,
+            enum:
+              [
+                READY,
+                OPEN,
+                PROCESSING,
+                UNKNOWN,
+                NON_PAYMENT,
+                FULFILLED,
+                LEGACY_PAID,
+                PAYMENT_REVIEW,
+              ],
+          }
+        overdue: { type: boolean }
+        shipping_cents: { type: integer, nullable: true }
+        admin_review_required: { type: boolean }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+              unit_price_cents: { type: integer, nullable: true }
+              current_price_cents: { type: integer, nullable: true }
+              amount_cents: { type: integer }
     PaymentRefundRecord:
       type: object
       required:

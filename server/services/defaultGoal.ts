@@ -6,6 +6,7 @@ import { httpError } from '../lib/httpError.js';
 export async function defaultGoal(
   tx: Prisma.TransactionClient,
   channelId: string,
+  skipOwnList = false,
 ): Promise<string | null> {
   const channel = await tx.channel.findUniqueOrThrow({
     where: { id: channelId },
@@ -14,6 +15,7 @@ export async function defaultGoal(
   for (const listChannel of new Set(
     [channelId, channel.event.primary_channel_id].filter((id): id is string => id !== null),
   )) {
+    if (skipOwnList && listChannel === channelId) continue;
     const entries = await tx.channelDefaultGoal.findMany({
       where: { channel_id: listChannel },
       orderBy: { position: 'asc' },

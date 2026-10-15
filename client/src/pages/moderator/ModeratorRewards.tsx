@@ -106,7 +106,10 @@ export default function ModeratorRewards() {
     const data = {
       ...form,
       cost_cents: Math.round(parseFloat(String(form.cost_dollars)) * 100),
-      quantity_total: form.quantity_total ? parseInt(String(form.quantity_total)) : null,
+      quantity_total:
+        form.quantity_total === '' || form.quantity_total === null
+          ? null
+          : Number(form.quantity_total),
     };
     try {
       if (modal === 'create') await moderatorClient.post('/rewards', data);
@@ -157,9 +160,13 @@ export default function ModeratorRewards() {
                     <ChannelPill label={channelName(r.channel_id)} />
                   </div>
                   <p className="font-data text-sm text-off-white/55">
-                    {r.type} &middot; {fmt(r.cost_cents)}
+                    {r.type} &middot; current price {fmt(r.cost_cents)}
                   </p>
-                  {r.quantity_total && (
+                  <p className="font-data text-sm text-off-white/55">
+                    {r.live_count ?? r.quantity_claimed} claimed · {fmt(r.allocated_cents ?? 0)}{' '}
+                    allocated
+                  </p>
+                  {r.quantity_total !== null && (
                     <p className="font-data text-sm text-off-white/55">
                       {r.quantity_claimed}/{r.quantity_total} claimed
                     </p>

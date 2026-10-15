@@ -47,6 +47,8 @@ describe('AdminDashboard', () => {
 
     expect(await screen.findByText('Wallet credit available')).toBeInTheDocument();
     expect(screen.getByText('$40.00')).toBeInTheDocument();
+    expect(screen.getByText('Wallet credit held')).toBeInTheDocument();
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
   });
 
   it('renders per-channel totals when present', async () => {
@@ -64,8 +66,9 @@ describe('AdminDashboard', () => {
 
     render(<AdminDashboard />);
 
-    expect(await screen.findByText('per-channel totals')).toBeInTheDocument();
-    expect(screen.getByText('Main')).toBeInTheDocument();
+    expect(await screen.findByText('Money by Channel')).toBeInTheDocument();
+    expect(screen.getByText('Incentives by Channel (not money)')).toBeInTheDocument();
+    expect(screen.getAllByText('Main')).toHaveLength(2);
   });
 
   it('shows an error when the stats request fails', async () => {

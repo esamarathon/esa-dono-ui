@@ -124,7 +124,12 @@ export interface DonorWallet extends Donor {
   auction_wins?: WalletAuctionWin[];
 }
 
-export interface Reward {
+export interface IncentiveAllocation {
+  allocated_cents?: number;
+  allocated_source_cents?: { donor: number; auto: number; moderator: number };
+  live_count?: number;
+}
+export interface Reward extends IncentiveAllocation {
   id: string;
   title: string;
   description?: string | null;
@@ -146,7 +151,7 @@ export interface PollOption {
   custom_entry_id?: string | null;
 }
 
-export interface Poll {
+export interface Poll extends IncentiveAllocation {
   id: string;
   title: string;
   description?: string | null;
@@ -168,7 +173,7 @@ export interface CustomEntry {
   option?: { status: string; votes: { amount_cents: number }[] } | null;
 }
 
-export interface Goal {
+export interface Goal extends IncentiveAllocation {
   id: string;
   title: string;
   description?: string | null;
@@ -187,6 +192,9 @@ export interface Channel {
   is_active: boolean;
   /** Ordered own/shared goal ids. Ineligible entries are preserved. */
   default_goals?: string[];
+  default_goal?: { id: string; title: string } | null;
+  fallback_goal?: { id: string; title: string } | null;
+  has_eligible_default?: boolean;
 }
 
 /** A charity Event (a marathon, or a one-day stream event) that groups
@@ -442,8 +450,63 @@ export interface BlockedWord {
 
 export type DonationStatus = 'PENDING' | 'COMPLETED' | 'REFUNDED' | 'CHARGEBACK';
 
+export type PoolCategory = 'reward' | 'poll' | 'goal';
+export interface StaffAllocation {
+  id: string;
+  label: string;
+  channel: string;
+  amount_cents: number;
+  source: 'donor' | 'auto' | 'moderator';
+  status?: string;
+  allocated_by?: string | null;
+  allocated_at?: string | null;
+  recorded_amount_cents?: number;
+  current_price_cents?: number;
+  chargeback_flagged_at?: string | null;
+}
+export interface PoolAccounting {
+  live_cents: number;
+  outstanding_credit_cents: number;
+  pool_credit_cents: number;
+  unused_cents: number;
+  used_cents: number;
+}
+export interface DonationReversalPreview {
+  donation_id: string;
+  status: 'REFUNDED' | 'CHARGEBACK';
+  accounting: 'POOLED' | 'LEGACY';
+  wallet_adjustment_cents: number;
+  money_before_cents: number;
+  money_after_cents: number;
+  reversed_rows: Record<PoolCategory, number>;
+  retained_claim_ids: string[];
+  cleared_pool_credit_cents: Record<PoolCategory, number>;
+  reversed_allocation_ids: Record<PoolCategory, string[]>;
+  cleared_unused_cents: { poll: number; goal: number };
+}
+export interface AdminDonationDetail extends AdminDonation {
+  donor_id: string;
+  external_id: string;
+  pledge_amount_cents: number | null;
+  wallet_applied_cents: number;
+  allocations: Record<PoolCategory, StaffAllocation[]>;
+  pools: Record<PoolCategory, PoolAccounting>;
+  flags: string[];
+  needs_attention: boolean;
+  ended_target_changes: (PaymentRefundShrink['affected_targets'][number] & {
+    payment_refund_id: string;
+  })[];
+  event: { id: string; name: string; ended_at: string | null } | null;
+  action_disabled_reasons: Record<'REFUNDED' | 'CHARGEBACK', string | null>;
+}
 export interface AdminDonation {
   id: string;
+  pledge_amount_cents?: number | null;
+  wallet_applied_cents?: number;
+  allocations?: Record<PoolCategory, StaffAllocation[]>;
+  unused_cents?: { poll: number; goal: number };
+  flags?: string[];
+  needs_attention?: boolean;
   amount_cents: number;
   donor_name?: string | null;
   comment?: string | null;
@@ -462,21 +525,25 @@ export interface AdminDonation {
   event_id?: string | null;
   status: DonationStatus;
   refund_id?: string | null;
-  // What the donor selected/pledged toward (#58) — human-readable labels
-  // only (e.g. "Best Runner: Runner A", "T-shirt"), never a raw target_id.
-  // Only present on the moderator donations list; undefined elsewhere.
+  // Legacy moderator API compatibility only. Staff pages use current live
+  // allocations, not immutable Pending-pledge choices or top_up_cents.
   pledge_items?: { kind: string; label: string; amount_cents: number }[];
   top_up_cents?: number | null;
 }
 
 export interface AdminClaim {
   id: string;
+  amount_cents: number;
+  donation_id: string | null;
+  funding_donation_ids: string[];
+  toggle_disabled_reason: string | null;
+  chargeback_flagged_at: string | null;
   status: string;
   claim_data?: unknown;
   created_at: string;
   donor?: { email?: string } | null;
-  // Human-readable donor identity for the moderator view (#57) — sourced
-  // from the donor's most recent Donation.donor_name, never email/id.
+  // Own donation name first, including null. Only an unlinked claim uses the
+  // donor's newest donation name. Never private email.
   donor_name?: string | null;
   reward?: {
     title?: string;
@@ -488,6 +555,9 @@ export interface AdminClaim {
 
 export interface SpendRecord {
   id: string;
+  donation_id?: string | null;
+  source?: string;
+  funding_donation_ids?: string[];
   amount_cents: number;
   reversed_at?: string | null;
   status?: string;
@@ -513,6 +583,11 @@ export interface AdminDonorSummary {
 
 export interface AdminDonorWallet {
   email?: string;
+  balance_held_cents: number;
+  pool_credits: {
+    wallet_credit_cents: number;
+    events: import('@dono/shared').CreditEventSummary[];
+  };
   total_donated: number;
   balance_remaining: number;
   role?: Role;
@@ -663,6 +738,17 @@ export type PaymentRefundPreview =
       pool_shrink: PaymentRefundShrink;
     };
 
+export interface ReversalPreview {
+  destinations: {
+    destination:
+      'Wallet credit' | 'Pool credit' | 'Unused pool money' | 'Expired reward Pool credit';
+    category: PoolCategory;
+    donation_id: string | null;
+    credit_id: string | null;
+    amount_cents: number;
+  }[];
+}
+
 export interface RefundResult {
   success: boolean;
   refunded_count: number;
@@ -671,6 +757,9 @@ export interface RefundResult {
 
 export interface AdminPledgeItem {
   id: string;
+  unit_price_cents: number | null;
+  current_price_cents: number | null;
+  label: string;
   kind: string;
   target_id: string;
   amount_cents: number;
@@ -679,6 +768,7 @@ export interface AdminPledgeItem {
 }
 
 export interface AdminPledge {
+  wallet_held_cents: number;
   format: 'POOLED' | 'LEGACY';
   pledge_amount_cents: number | null;
   new_money_cents: number | null;
@@ -689,6 +779,10 @@ export interface AdminPledge {
   non_payment_confirmed_at: string | null;
   reconciled_at: string | null;
   admin_review_required: boolean;
+  /** Canonical outcome: late LEGACY cash is LEGACY_PAID while raw status stays EXPIRED. */
+  payment_state: PledgePaymentState;
+  overdue: boolean;
+  shipping_cents: number | null;
   id: string;
   status: string;
   donor_email?: string | null;
@@ -698,7 +792,7 @@ export interface AdminPledge {
   relay_key_id?: string | null;
   expires_at: string;
   created_at: string;
-  fulfilled_by?: { donor?: { email?: string } | null; amount_cents: number } | null;
+  fulfilled_by?: { id: string; donor?: { email?: string } | null; amount_cents: number } | null;
 }
 
 /** Generic editable form record used by admin/moderator CRUD modals. */

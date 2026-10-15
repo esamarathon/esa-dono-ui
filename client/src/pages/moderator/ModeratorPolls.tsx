@@ -5,6 +5,7 @@ import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
 import ChannelPill from '../../components/ChannelPill';
+import { AllocationSources } from '../../components/StaffAmounts';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Poll, type CustomEntry } from '../../types';
 
@@ -204,10 +205,11 @@ export default function ModeratorPolls() {
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/55">
-                  total votes: {fmt(poll.total_votes_cents)}
+                  allocated: {fmt(poll.allocated_cents ?? poll.total_votes_cents)}
                   {poll.allow_custom_entries &&
                     ` · custom entries ${poll.auto_approve === false ? '(needs approval)' : '(auto-approved)'}`}
                 </p>
+                <AllocationSources row={poll} />
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
                 </div>
@@ -350,7 +352,7 @@ export default function ModeratorPolls() {
                             {e.label}
                           </span>
                           {e.option?.votes?.[0] && (
-                            <span className="font-data text-xs text-d-yellow ml-2">
+                            <span className="font-data text-xs text-off-white ml-2">
                               {fmt(e.option.votes[0].amount_cents)}
                             </span>
                           )}

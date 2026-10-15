@@ -4,11 +4,13 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 const mocks = vi.hoisted(() => ({
   adminClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   refundGoal: vi.fn(),
+  getReversalPreview: vi.fn(),
 }));
 
 vi.mock('../../src/api/admin', () => ({
   default: mocks.adminClient,
   refundGoal: mocks.refundGoal,
+  getReversalPreview: mocks.getReversalPreview,
 }));
 
 import AdminGoals from '../../src/pages/admin/AdminGoals';
@@ -27,6 +29,17 @@ const goal = {
 describe('AdminGoals', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'goal',
+          donation_id: 'd1',
+          credit_id: null,
+          amount_cents: 750,
+        },
+      ],
+    });
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal(
       'confirm',
@@ -82,14 +95,17 @@ describe('AdminGoals', () => {
     await waitFor(() => expect(mocks.adminClient.delete).toHaveBeenCalledWith('/goals/g1'));
   });
 
-  it('shows the mark-complete checkbox when editing a goal', async () => {
+  it('does not offer or send a manual completion override when editing a goal', async () => {
     mocks.adminClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/goals' ? [goal] : [] }),
     );
     mocks.adminClient.put.mockResolvedValue({ data: goal });
     render(<AdminGoals />);
     fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
-    expect(screen.getByLabelText('mark complete')).toBeInTheDocument();
+    expect(screen.queryByLabelText('mark complete')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    await waitFor(() => expect(mocks.adminClient.put).toHaveBeenCalled());
+    expect(mocks.adminClient.put.mock.calls[0]![1]).not.toHaveProperty('is_complete');
   });
 
   it('shows the complete badge for a finished goal', async () => {
@@ -112,8 +128,11 @@ describe('AdminGoals', () => {
 
     render(<AdminGoals />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'refund contributions' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'reverse contributions' }));
 
     await waitFor(() => expect(mocks.refundGoal).toHaveBeenCalledWith('g1'));
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('+$7.50 goal Pool credit of donation d1'),
+    );
   });
 });

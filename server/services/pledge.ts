@@ -44,7 +44,7 @@ export interface CreatePledgeInput {
 
 type StoredPledge = Prisma.PendingPledgeGetPayload<{ include: { items: true } }>;
 
-function pledgePaymentState(pledge: StoredPledge) {
+export function pledgePaymentState(pledge: StoredPledge) {
   if (
     pledge.status === 'FULFILLED' ||
     pledge.status === 'LEGACY_PAID' ||

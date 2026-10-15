@@ -3,6 +3,30 @@ import prisma from '../lib/prisma.js';
 import { httpError } from '../lib/httpError.js';
 import { assertUsableSlug, availableSlugFrom } from '../lib/slugs.js';
 import { activeEventWithPrimary } from './events.js';
+import { defaultGoal } from './defaultGoal.js';
+
+/** Live staff editor projection; uses the fulfillment resolver, never private donor data. */
+export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
+  const channels = await tx.channel.findMany({
+    orderBy: { created_at: 'asc' },
+    include: { default_goals: { orderBy: { position: 'asc' }, include: { goal: true } } },
+  });
+  const goal = async (id: string | null) =>
+    id ? tx.fundGoal.findUnique({ where: { id }, select: { id: true, title: true } }) : null;
+  return Promise.all(
+    channels.map(async (channel) => ({
+      ...channelResponse(channel),
+      default_goal: await goal(await defaultGoal(tx, channel.id)),
+      fallback_goal: await goal(await defaultGoal(tx, channel.id, true)),
+      has_eligible_default: channel.default_goals.some(
+        ({ goal }) =>
+          goal.is_active &&
+          !goal.is_complete &&
+          (goal.channel_id === null || goal.channel_id === channel.id),
+      ),
+    })),
+  );
+}
 
 /**
  * Channel create / update / deactivate, shared by the admin and moderator routes.
