@@ -4744,10 +4744,10 @@ components:
           {
             type: string,
             nullable: true,
-            enum: [REJECTED, RETURNED_OUTSIDE_APP, WALLET_CREDIT, SETTLED_BY_DISPUTE],
+            enum: [REJECTED, RETURNED_OUTSIDE_APP, WALLET_CREDIT, SETTLED_BY_DISPUTE, null],
           }
         shipping_resolution:
-          { type: string, nullable: true, enum: [RETURNED_OUTSIDE_APP, KEPT_BY_AGREEMENT] }
+          { type: string, nullable: true, enum: [RETURNED_OUTSIDE_APP, KEPT_BY_AGREEMENT, null] }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -5057,7 +5057,8 @@ components:
         insertion_order: { type: integer, minimum: 0 }
         quantity: { type: integer, minimum: 1 }
         unit_price_cents: { type: integer, minimum: 1, nullable: true }
-        reward_type: { type: string, nullable: true, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+        reward_type:
+          { type: string, nullable: true, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM, null] }
         data:
           {
             nullable: true,

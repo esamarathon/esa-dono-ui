@@ -1,5 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import yaml from 'js-yaml';
 import prisma from '../../lib/prisma.js';
 import { planPledge, type PledgePlan } from '@dono/shared';
 import { createPledge, type PledgeItemInput } from '../../services/pledge.js';
@@ -231,8 +233,30 @@ describe('pooled pledge creation on SQLite', () => {
     });
     expect(confirmed).toMatchObject({
       format: 'POOLED',
-      plan: { selections: [{ target_id: goal.id, insertion_order: 1 }] },
+      plan: { selections: [{ target_id: goal.id, insertion_order: 1, reward_type: null }] },
     });
+    const spec = yaml.load(
+      readFileSync(new URL('../../openapi.yaml', import.meta.url), 'utf8'),
+    ) as {
+      components: {
+        schemas: {
+          PlannedSelection: {
+            required: string[];
+            properties: { reward_type: { type: string; nullable: boolean; enum: unknown[] } };
+          };
+        };
+      };
+    };
+    if (confirmed.format !== 'POOLED') throw new Error('Expected a pooled pledge');
+    const selection = spec.components.schemas.PlannedSelection;
+    expect(selection.required).toContain('reward_type');
+    const rewardType = selection.properties.reward_type;
+    expect(rewardType).toMatchObject({ type: 'string', nullable: true });
+    // Focused enum acceptance checks, not full OpenAPI instance validation.
+    expect(rewardType.enum).toContain(confirmed.plan.selections[0]!.reward_type);
+    for (const value of ['DIGITAL', 'PHYSICAL', 'SHOUTOUT', 'CUSTOM'])
+      expect(rewardType.enum).toContain(value);
+    for (const value of ['null', 'INVALID']) expect(rewardType.enum).not.toContain(value);
   });
 
   it.each([

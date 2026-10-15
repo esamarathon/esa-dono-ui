@@ -446,16 +446,17 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'confirm corrected review' }));
     expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeEnabled();
-    vi.mocked(createPledge).mockResolvedValue(
-      payment({
-        draft_id: 'draft-one',
-        payment_state: 'READY',
-        has_checkout: false,
-        plan: corrected,
-        pledge_amount_cents: 1000,
-      }),
-    );
-    vi.mocked(reconcilePledge).mockResolvedValue(payment({ payment_state: 'READY' }));
+    const confirmed = payment({
+      draft_id: 'draft-one',
+      payment_state: 'READY',
+      has_checkout: false,
+      pledge_amount_cents: 1000,
+      wallet_applied_cents: 500,
+      new_money_cents: 500,
+      plan: corrected,
+    });
+    vi.mocked(createPledge).mockResolvedValue(confirmed);
+    vi.mocked(reconcilePledge).mockResolvedValue(confirmed);
     fireEvent.click(screen.getByRole('button', { name: 'confirm & pay $5.00' }));
     expect(await screen.findByRole('heading', { name: /Pending pledge/ })).toBeInTheDocument();
     expect(createPledge).toHaveBeenLastCalledWith(
@@ -467,6 +468,10 @@ describe('amount-first donate through the routed flow', () => {
       }),
     );
     expect(localStorage.getItem('donation_draft_v1')).toContain('pending-one');
+    await waitFor(() => expect(reconcilePledge).toHaveBeenCalledWith('pending-one'));
+    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$5.00');
+    expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$5.00');
   });
 
   it('shows blocked-word validation without deleting the draft, and accepts Anonymous', async () => {
@@ -738,19 +743,35 @@ describe('amount-first donate through the routed flow', () => {
 
   it('does not let a delayed initial OPEN reconciliation overwrite a later cancellation outcome', async () => {
     save(saved());
-    vi.mocked(createPledge).mockResolvedValue(payment({ pledge_amount_cents: 1000 }));
+    const pending = payment({
+      pledge_amount_cents: 1000,
+      wallet_applied_cents: 0,
+      new_money_cents: 1000,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: [],
+      }),
+    });
+    vi.mocked(createPledge).mockResolvedValue(pending);
     const initial = deferred<Pledge>();
     vi.mocked(reconcilePledge).mockReturnValue(initial.promise);
-    vi.mocked(cancelPledge).mockResolvedValue(payment({ payment_state: 'PROCESSING' }));
+    vi.mocked(cancelPledge).mockResolvedValue({ ...pending, payment_state: 'PROCESSING' });
     renderAt();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeEnabled(),
     );
     fireEvent.click(screen.getByRole('button', { name: /confirm & pay/ }));
+    await screen.findByRole('heading', { name: /Pending pledge/ });
+    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$0.00');
+    expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$10.00');
     fireEvent.click(await screen.findByRole('button', { name: /edit — cancel/ }));
     expect(await screen.findByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
-    await act(async () => initial.resolve(payment({ can_continue: true })));
+    await act(async () => initial.resolve({ ...pending, can_continue: true }));
     expect(screen.getByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
+    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$10.00');
     expect(screen.queryByRole('button', { name: 'continue to payment' })).not.toBeInTheDocument();
   });
 
