@@ -919,6 +919,106 @@ paths:
         '429':
           description: Global API rate limit (RATE_LIMIT_API per minute per IP)
 
+  /tiltify/campaign/{id}/lookup/rewards/{reward_id}:
+    get:
+      tags: [Tiltify]
+      summary: Optional ESA reward lookup within an Event
+      description: |
+        ESA-only capability, not an ordinary Tiltify endpoint. The context id is a
+        known Channel or Event, including inactive history. The reward must be
+        shared or owned by a Channel in that same Event. Returns its true owning
+        Channel UUID (null for shared) and the exact existing bare reward DTO.
+        Public and read-only; no donor, staff or private claim data. Does not widen
+        existing lists, reassign donations or change resource ids.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Context Channel or Event UUID (inactive identities still resolve)
+          schema: { type: string, format: uuid }
+        - name: reward_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Owner and current public reward, including inactive rewards
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EsaDonoRewardLookup'
+        '404':
+          description: Unknown context or reward, or the reward owner belongs to another Event
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/lookup/targets/{target_id}:
+    get:
+      tags: [Tiltify]
+      summary: Optional ESA target lookup within an Event
+      description: |
+        ESA-only capability, not an ordinary Tiltify endpoint. The context id is a
+        known Channel or Event, including inactive history. The target must be
+        shared or owned by a Channel in that same Event. Returns its true owning
+        Channel UUID (null for shared) and the exact existing bare target DTO with
+        current progress. Public and read-only; no donor or staff data. Existing
+        lists, donation routing and resource ids are unchanged.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Context Channel or Event UUID (inactive identities still resolve)
+          schema: { type: string, format: uuid }
+        - name: target_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Owner and current public target, including inactive targets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EsaDonoTargetLookup'
+        '404':
+          description: Unknown context or target, or the target owner belongs to another Event
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
+  /tiltify/campaign/{id}/lookup/polls/{poll_id}:
+    get:
+      tags: [Tiltify]
+      summary: Optional ESA poll lookup within an Event
+      description: |
+        ESA-only capability, not an ordinary Tiltify endpoint. The context id is a
+        known Channel or Event, including inactive history. The poll must be
+        shared or owned by a Channel in that same Event. Returns its true owning
+        Channel UUID (null for shared) and the exact existing bare poll DTO with
+        current amounts and approved options only. Public and read-only; no donor
+        or staff data. Existing lists and ordinary poll detail remain own/shared
+        only (Event lists remain empty); donation routing and ids are unchanged.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Context Channel or Event UUID (inactive identities still resolve)
+          schema: { type: string, format: uuid }
+        - name: poll_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Owner and current public poll, including inactive or ended polls
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EsaDonoPollLookup'
+        '404':
+          description: Unknown context or poll, or the poll owner belongs to another Event
+        '429':
+          description: Global API rate limit (RATE_LIMIT_API per minute per IP)
+
   /tiltify/campaign/{id}/milestones:
     get:
       tags: [Tiltify]
@@ -4827,6 +4927,39 @@ components:
               id: { type: string, format: uuid }
               name: { type: string }
               amount_raised: { $ref: '#/components/schemas/TiltifyAmount' }
+    EsaDonoRewardLookup:
+      type: object
+      required: [campaign_id, incentive]
+      additionalProperties: false
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: True owning Channel UUID; null for a shared reward (never the request context)
+        incentive: { $ref: '#/components/schemas/TiltifyReward' }
+    EsaDonoTargetLookup:
+      type: object
+      required: [campaign_id, incentive]
+      additionalProperties: false
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: True owning Channel UUID; null for a shared target (never the request context)
+        incentive: { $ref: '#/components/schemas/TiltifyTarget' }
+    EsaDonoPollLookup:
+      type: object
+      required: [campaign_id, incentive]
+      additionalProperties: false
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: True owning Channel UUID; null for a shared poll (never the request context)
+        incentive: { $ref: '#/components/schemas/TiltifyPoll' }
     UnusedDonation:
       type: object
       description: Safe projection; no donor email, private claim data or Pool credit.
