@@ -14,18 +14,32 @@ const event = {
   primary_channel_id: null,
   ended_at: null,
 };
-const preview = {
-  event_id: 'e1',
-  slug: 'marathon',
-  action: 'END',
-  can_apply: true,
-  blockers: [],
-  pool_credit_cents: { poll: 123, goal: 456, reward: 789 },
-  unshipped_physical_donations: 2,
-  open_pledges: 3,
-  requested_payment_refunds: 0,
-  consuming_assignments: [],
-};
+function preview({
+  poll,
+  goal,
+  reward,
+  physicalDonations,
+  openPledges,
+}: Readonly<{
+  poll: number;
+  goal: number;
+  reward: number;
+  physicalDonations: number;
+  openPledges: number;
+}>) {
+  return {
+    event_id: 'e1',
+    slug: 'marathon',
+    action: 'END',
+    can_apply: true,
+    blockers: [],
+    pool_credit_cents: { poll, goal, reward },
+    unshipped_physical_donations: physicalDonations,
+    open_pledges: openPledges,
+    requested_payment_refunds: 0,
+    consuming_assignments: [],
+  };
+}
 function renderPage(admin = true) {
   return render(
     <MemoryRouter initialEntries={[admin ? '/admin/events' : '/moderate/events']}>
@@ -38,12 +52,21 @@ function renderPage(admin = true) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  client.get.mockImplementation((path: string) =>
-    Promise.resolve({ data: path === '/events' ? [event] : path === '/channels' ? [] : preview }),
-  );
   client.post.mockResolvedValue({ data: {} });
 });
 it('previews conversion, expiry/refund window and pledges; requires exact slug and posts only on confirmation', async () => {
+  const conversion = preview({
+    poll: 123,
+    goal: 456,
+    reward: 789,
+    physicalDonations: 2,
+    openPledges: 3,
+  });
+  client.get.mockImplementation((path: string) =>
+    Promise.resolve({
+      data: path === '/events' ? [event] : path === '/channels' ? [] : conversion,
+    }),
+  );
   renderPage();
   fireEvent.click(await screen.findByRole('button', { name: 'end Event' }));
   expect(await screen.findByText(/poll Pool credit.*\$1.23/)).toBeInTheDocument();
@@ -70,7 +93,13 @@ it('ended Events cannot activate; only admins see Undo end and blocked preview c
           : path === '/channels'
             ? []
             : {
-                ...preview,
+                ...preview({
+                  poll: 123,
+                  goal: 456,
+                  reward: 789,
+                  physicalDonations: 2,
+                  openPledges: 3,
+                }),
                 action: 'UNDO_END',
                 can_apply: false,
                 blockers: ['Reverse consuming assignments first'],
@@ -98,7 +127,16 @@ it('keeps server errors visible and supports Undo end confirmation', async () =>
           ? [{ ...event, ended_at: '2026-10-01T00:00:00Z' }]
           : path === '/channels'
             ? []
-            : { ...preview, action: 'UNDO_END' },
+            : {
+                ...preview({
+                  poll: 123,
+                  goal: 456,
+                  reward: 789,
+                  physicalDonations: 2,
+                  openPledges: 3,
+                }),
+                action: 'UNDO_END',
+              },
     }),
   );
   client.post.mockRejectedValue({

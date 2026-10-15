@@ -202,9 +202,17 @@ async function intakeDonationInner(input: DonationIntake) {
           shipping_cents: shippingCents,
           shipping_recorded_at: new Date(),
           payment_intent: input.source === 'stripe' ? input.paymentIntent : null,
-          donor_name:
-            pledge?.display_name ?? (wallet ? input.pledge.display_name : input.donorName),
-          comment: pledge?.comment ?? (input.source === 'admin' ? (input.comment ?? null) : null),
+          // A confirmed blank is intentional Anonymous, not missing provider data.
+          donor_name: pledge
+            ? pledge.display_name
+            : wallet
+              ? input.pledge.display_name
+              : input.donorName,
+          comment: pledge
+            ? pledge.comment
+            : input.source === 'admin'
+              ? (input.comment ?? null)
+              : null,
           channel_id: route.channelId,
           event_id: route.eventId,
           ...(input.source === 'admin' && input.occurredAt ? { created_at: input.occurredAt } : {}),
@@ -228,8 +236,8 @@ async function intakeDonationInner(input: DonationIntake) {
             where: { id: donation.id },
             data: {
               pledge: { connect: { id: pledge.id } },
-              ...(pledge.comment ? { comment: pledge.comment } : {}),
-              ...(pledge.display_name ? { donor_name: pledge.display_name } : {}),
+              comment: pledge.comment,
+              donor_name: pledge.display_name,
             },
           });
           if (pooled && pledge.held_wallet_cents > 0) {

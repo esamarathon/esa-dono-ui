@@ -30,8 +30,8 @@ const detail = {
     CHARGEBACK: 'Cannot record a chargeback for zero money',
   },
 };
-beforeEach(() => {
-  vi.clearAllMocks();
+beforeEach(() => vi.clearAllMocks());
+it('routed detail shows source rows, server-disabled cash0 action and confirms a server preview', async () => {
   api.get.mockImplementation((path: string) =>
     Promise.resolve({
       data:
@@ -54,8 +54,6 @@ beforeEach(() => {
             : { records: [], total: 0, offset: 0, limit: 50 },
     }),
   );
-});
-it('routed detail shows source rows, server-disabled cash0 action and confirms a server preview', async () => {
   api.patch.mockResolvedValue({ data: {} });
   localStorage.setItem('admin_key', 'test');
   localStorage.setItem('donation_draft_v1', 'unrelated-browser-draft');

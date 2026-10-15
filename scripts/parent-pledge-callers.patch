@@ -219,3 +219,47 @@
 -raise SystemExit(subprocess.run(['docker', 'exec', '-i', 'esa-consumers-staging-overlay-1', 'node', '-e', probe],
 +raise SystemExit(subprocess.run([args.engine, 'exec', '-i', args.overlay, 'node', '-e', probe],
                                 input=json.dumps(data), text=True, timeout=160).returncode)
+--- a/scripts/e2e-incentives-browser.ts
++++ b/scripts/e2e-incentives-browser.ts
+@@ -103,15 +103,20 @@ async function main() {
+       const items = label === 'donations' ? donation.locator('.donation-redeem') : donation.locator('.flex-fill');
+       assert.equal(await items.count(), mixed.rewards + mixed.pollNames.length + mixed.goalNames.length);
+       for (const name of [...mixed.pollNames, ...mixed.goalNames]) assert.ok((await donation.innerText()).includes(name));
+-      assert.ok((await donation.innerText()).includes('3.00 USD'));
+-      assert.ok((await donation.innerText()).includes('4.00 USD'));
++      for (const name of mixed.goalNames) {
++        const goal = report.fixtures.goals.find(goal => goal.title === name);
++        assert.ok(goal, `Missing expected goal fixture: ${name}`);
++        const row = items.filter({ hasText: name });
++        assert.equal(await row.count(), 1, `Expected one received goal: ${name}`);
++        assert.ok((await row.innerText()).includes(`${(goal.expectedCents / 100).toFixed(2)} USD`), `Wrong received amount for ${name}`);
++      }
+       if (label !== 'donations') {
+         for (const name of [...mixed.pollNames, ...mixed.goalNames]) await page!.getByRole('heading', { name, exact: true }).waitFor({ state: 'visible', timeout: 10000 });
+       }
+     });
+     await page.screenshot({ path: `/results/screenshots/kollekt-${label}.png`, fullPage: true });
+     if (label === 'prompter') {
+-      for (const width of [1024, 768, 1500]) await check(`Prompter containment at ${width}px`, async () => {
++      for (const width of [1024, 1500]) await check(`Prompter containment at ${width}px`, async () => {
+         await page!.setViewportSize({ width, height: 600 });
+         const bounds = await page!.evaluate(() => {
+           const outer = document.querySelector('.page')!;
+@@ -127,6 +132,8 @@ async function main() {
+             itemsOutsideCard: [...card.querySelectorAll('.flex-fill')].filter(el => { const r = rectangle(el); return r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1; }).length,
+           };
+         });
++        assert.equal(bounds.outer.width, 1024, 'Prompter hardware canvas width must stay fixed');
++        assert.equal(bounds.outer.height, 600, 'Prompter hardware canvas height must stay fixed');
+         assert.ok(bounds.outer.right <= bounds.viewport + 1, 'Prompter canvas extends beyond viewport width');
+         assert.ok(bounds.scrollWidth <= bounds.clientWidth + 1, 'Prompter has horizontal overflow');
+         assert.ok(bounds.scrollHeight <= bounds.clientHeight + 1, `Content bleeds outside canvas: ${bounds.scrollHeight}px content in ${bounds.clientHeight}px box`);
+@@ -264,7 +271,7 @@ finally {
+   await browser?.close();
+   const output = { runId: report.runId, generatedAt: new Date().toISOString(), results, pageErrors: errors };
+   writeFileSync('/results/browser-results.json', JSON.stringify(output, null, 2));
+-  const shots = ['prompter-navigation.png', 'prompter-last-donation.png', 'kollekt-donations.png', 'kollekt-reader.png', 'kollekt-prompter.png', 'kollekt-rewards.png', 'kollekt-polls.png', 'kollekt-goals.png', ...[1024, 768, 1500].map(w => `prompter-layout-${w}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered poll:') && r.status === 'PASS').map((_, i) => `overlay-poll-${i + 1}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered target:') && r.status === 'PASS').map((_, i) => `overlay-target-${i + 1}.png`), 'overlay-final.png'].filter(s => existsSync(`/results/screenshots/${s}`));
++  const shots = ['prompter-navigation.png', 'prompter-last-donation.png', 'kollekt-donations.png', 'kollekt-reader.png', 'kollekt-prompter.png', 'kollekt-rewards.png', 'kollekt-polls.png', 'kollekt-goals.png', ...[1024, 1500].map(w => `prompter-layout-${w}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered poll:') && r.status === 'PASS').map((_, i) => `overlay-poll-${i + 1}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered target:') && r.status === 'PASS').map((_, i) => `overlay-target-${i + 1}.png`), 'overlay-final.png'].filter(s => existsSync(`/results/screenshots/${s}`));
+   writeFileSync('/results/index.html', `<!doctype html><html><head><meta charset="utf-8"><title>Incentive browser evidence</title><style>body{font:16px system-ui;margin:2rem}img{max-width:100%}.FAIL{color:#a00}.PASS{color:#080}.BLOCKED{color:#a60}</style></head><body><h1>Browser evidence: ${escape(report.prefix)}</h1><p>Read-only views. No Replicant injection or fulfillment status changes.</p>${results.map(r => `<p class="${r.status}"><b>${r.status}</b> ${escape(r.case)}: ${escape(r.detail)}</p>`).join('')}${shots.map(s => `<h2>${s}</h2><a href="screenshots/${s}"><img src="screenshots/${s}" loading="lazy"></a>`).join('')}</body></html>`);
+   process.exitCode = results.some(r => r.status === 'FAIL') ? 1 : 0;
+ }

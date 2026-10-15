@@ -15,12 +15,28 @@ const donors: string[] = [],
   rewards: string[] = [],
   polls: string[] = [],
   goals: string[] = [];
-async function fixture() {
+async function fixture({
+  cash,
+  pledge,
+  walletApplied,
+  shipping,
+  availableWallet,
+  heldWallet,
+  goalTarget,
+}: Readonly<{
+  cash: number;
+  pledge: number;
+  walletApplied: number;
+  shipping: number;
+  availableWallet: number;
+  heldWallet: number;
+  goalTarget: number;
+}>) {
   const donor = await prisma.donor.create({
     data: {
       email: `PRIVATE-${crypto.randomUUID()}@marker.example`,
-      balance_remaining: 123,
-      balance_held_cents: 456,
+      balance_remaining: availableWallet,
+      balance_held_cents: heldWallet,
     },
   });
   donors.push(donor.id);
@@ -44,10 +60,10 @@ async function fixture() {
     data: {
       donor_id: donor.id,
       external_id: crypto.randomUUID(),
-      amount_cents: 700,
-      pledge_amount_cents: 1000,
-      wallet_applied_cents: 300,
-      shipping_cents: 200,
+      amount_cents: cash,
+      pledge_amount_cents: pledge,
+      wallet_applied_cents: walletApplied,
+      shipping_cents: shipping,
       channel_id: a.id,
       event_id: event.id,
       comment: 'choice',
@@ -63,7 +79,7 @@ async function fixture() {
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal B', channel_id: b.id, target_cents: 1000 },
+    data: { title: 'Goal B', channel_id: b.id, target_cents: goalTarget },
   });
   goals.push(goal.id);
   return { donor, event, a, b, donation, reward, poll, goal };
@@ -203,7 +219,15 @@ async function assertPublished() {
 }
 
 it('publishes the same safe aggregation through real admin/moderator stats and cached public gauges', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await credit(f, 'poll', 75);
   await prisma.rewardClaim.create({
     data: {
@@ -239,7 +263,15 @@ it('publishes the same safe aggregation through real admin/moderator stats and c
 it.each(['donor', 'auto', 'moderator'])(
   'publishes %s poll/goal cents once at current stored amounts, even with reduced redemption history',
   async (source) => {
-    const f = await fixture();
+    const f = await fixture({
+      cash: 700,
+      pledge: 1000,
+      walletApplied: 300,
+      shipping: 200,
+      availableWallet: 123,
+      heldWallet: 456,
+      goalTarget: 1000,
+    });
     const staff = source === 'moderator' ? { allocated_by: 'staff', allocated_at: new Date() } : {};
     const vote = await prisma.pollVote.create({
       data: {
@@ -330,7 +362,15 @@ it.each(['donor', 'auto', 'moderator'])(
 );
 
 it('counts legacy linked and unlinked live claims at recorded amounts and excludes reversed claims regardless of status', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await prisma.donation.update({
     where: { id: f.donation.id },
     data: { pledge_amount_cents: null, wallet_applied_cents: 0 },
@@ -368,7 +408,15 @@ it('counts legacy linked and unlinked live claims at recorded amounts and exclud
 });
 
 it('counts current D, not original cash, only for pooled counted statuses; Wallet-only pledges add no money', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await prisma.donation.update({
     where: { id: f.donation.id },
     data: { pledge_amount_cents: 800, amount_cents: 500 },
@@ -404,7 +452,15 @@ it('counts current D, not original cash, only for pooled counted statuses; Walle
 });
 
 it('groups distinct unused donations by nonblank comment without counting fully assigned, terminal, legacy or ended work', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   for (const [status, pledge, comment] of [
     ['COMPLETED', 200, null],
     ['COMPLETED', 300, '  '],
@@ -448,7 +504,15 @@ it('groups distinct unused donations by nonblank comment without counting fully 
   await prisma.fundContribution.create({
     data: { donor_id: f.donor.id, donation_id: full.id, goal_id: f.goal.id, amount_cents: 50 },
   });
-  const ended = await fixture();
+  const ended = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await prisma.event.update({ where: { id: ended.event.id }, data: { ended_at: new Date() } });
   const { moderator } = await assertPublished();
   expect(moderator.body.unused_pool).toEqual({
@@ -460,7 +524,15 @@ it('groups distinct unused donations by nonblank comment without counting fully 
 });
 
 it("reads its caller's uncommitted accounting snapshot, with no global-client escape", async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await expect(
     prisma.$transaction(async (tx) => {
       await tx.donation.update({
@@ -476,7 +548,15 @@ it("reads its caller's uncommitted accounting snapshot, with no global-client es
 });
 
 it('retains stats authentication and role boundaries', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   const token = crypto.randomUUID();
   await prisma.donor.update({
     where: { id: f.donor.id },
@@ -497,7 +577,15 @@ it('retains stats authentication and role boundaries', async () => {
 });
 
 it('reports OPEN/overdue separately from completed Sessions and all six refund record states', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   const now = new Date();
   for (const [status, session, deadline] of [
     ['OPEN', null, -1],
@@ -596,7 +684,15 @@ it('reports OPEN/overdue separately from completed Sessions and all six refund r
 });
 
 it('separates source money and pledge from incentive allocations and shared rows', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await prisma.rewardClaim.create({
     data: {
       donor_id: f.donor.id,
@@ -663,7 +759,15 @@ it('separates source money and pledge from incentive allocations and shared rows
 });
 
 it('counts one multi-source reward entitlement with effective component cents, not its whole price per source', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   const second = await prisma.donation.create({
     data: {
       donor_id: f.donor.id,
@@ -747,7 +851,15 @@ it('counts one multi-source reward entitlement with effective component cents, n
 });
 
 it('derives ended credit conversion before clamping Unused and excludes ended Events from moderator work', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    cash: 700,
+    pledge: 1000,
+    walletApplied: 300,
+    shipping: 200,
+    availableWallet: 123,
+    heldWallet: 456,
+    goalTarget: 1000,
+  });
   await prisma.donation.update({
     where: { id: f.donation.id },
     data: { failed_payment_wallet_credit_cents: 100 },

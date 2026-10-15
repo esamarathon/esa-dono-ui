@@ -35,20 +35,28 @@ function app() {
   app.use(express.json());
   return app;
 }
-async function pending() {
+async function pending({
+  availableWallet,
+  pledgeCents,
+  paidCents,
+}: Readonly<{ availableWallet: number; pledgeCents: number; paidCents: number }>) {
   const channel = await createTestChannel(prisma);
   channels.push(channel.id);
   const donor = await prisma.donor.create({
-    data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: 975 },
+    data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: availableWallet },
   });
   donors.push(donor.id);
   const pledge = await createPledge({
     draft_id: crypto.randomUUID(),
-    pledge_amount_cents: 1000,
+    pledge_amount_cents: pledgeCents,
     items: [],
     channel_id: channel.id,
     walletDonorId: donor.id,
-    plan: planPledge({ pledge_amount_cents: 1000, selections: [], available_wallet_cents: 975 }),
+    plan: planPledge({
+      pledge_amount_cents: pledgeCents,
+      selections: [],
+      available_wallet_cents: availableWallet,
+    }),
   });
   tokens.push(pledge.pledge_token);
   const id = `cs_${crypto.randomUUID()}`;
@@ -58,7 +66,7 @@ async function pending() {
     id,
     status: 'complete',
     payment_status: 'paid',
-    amount_total: 50,
+    amount_total: paidCents,
     customer_details: { email: donor.email, name: 'Reader' },
     metadata: { pledge_token: pledge.pledge_token },
   };
@@ -176,7 +184,11 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
     expect(await prisma.balanceAdjustment.count({ where: { donor_id: donor.id } })).toBe(1);
   });
   it('verifies the raw signed body and fulfills duplicate paid notifications once', async () => {
-    const { session, donor } = await pending();
+    const { session, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      paidCents: 50,
+    });
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test');
     const results = await Promise.all([
       notify('checkout.session.completed', session, 'valid'),
@@ -191,7 +203,11 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
     });
   });
   it('rejects an invalid signature before accounting', async () => {
-    const { session, donor } = await pending();
+    const { session, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      paidCents: 50,
+    });
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'whsec_test');
     expect((await notify('checkout.session.completed', session, 't=12345,v1=invalid')).status).toBe(
       400,
@@ -199,7 +215,11 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
     expect(await prisma.donation.count({ where: { donor_id: donor.id } })).toBe(0);
   });
   it('leaves completed/unpaid processing held and accepts later async success', async () => {
-    const { session, donor } = await pending();
+    const { session, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      paidCents: 50,
+    });
     expect(
       (await notify('checkout.session.completed', { ...session, payment_status: 'unpaid' })).status,
     ).toBe(200);
@@ -213,7 +233,11 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
   it.each(['checkout.session.expired', 'checkout.session.async_payment_failed'])(
     'reconciles %s and releases the hold once',
     async (type) => {
-      const { session, donor, pledge } = await pending();
+      const { session, donor, pledge } = await pending({
+        availableWallet: 975,
+        pledgeCents: 1000,
+        paidCents: 50,
+      });
       stripe.retrieve.mockResolvedValue({ ...session, payment_status: 'unpaid' });
       const notification = {
         ...session,
@@ -232,7 +256,11 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
     },
   );
   it('records shipping outside money and never stores a shipping address', async () => {
-    const { session, donor } = await pending();
+    const { session, donor } = await pending({
+      availableWallet: 975,
+      pledgeCents: 1000,
+      paidCents: 50,
+    });
     expect(
       (
         await notify('checkout.session.completed', {
@@ -257,7 +285,7 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
   it.each(['checkout.session.completed', 'checkout.session.expired'])(
     'preserves the separate auction %s branch',
     async (type) => {
-      const { donor } = await pending();
+      const { donor } = await pending({ availableWallet: 975, pledgeCents: 1000, paidCents: 50 });
       const auction = await prisma.auction.create({
         data: {
           title: 'Auction item',

@@ -5,6 +5,9 @@ import prisma from '../../lib/prisma.js';
 import { intakeDonation } from '../../services/donation.js';
 import { createPledge as createPooledPledge } from '../../services/pledge.js';
 import { planPledge } from '@dono/shared';
+import { getPledge, reconcileCheckoutNotification } from '../../services/checkout.js';
+import { createDonationPublisher } from '../../services/webhooks/donationPublisher.js';
+import type { TiltifyMessage } from '../../services/webhooks/tiltifyPayload.js';
 import { sendMagicLink } from '../../services/email.js';
 import { drainDestination } from '../../services/webhooks/dispatcher.js';
 import { createTestChannel, createLegacyPledge as createPledge } from '../helpers/fixtures.js';
@@ -86,6 +89,130 @@ afterAll(() => prisma.$disconnect());
 afterEach(() => vi.unstubAllEnvs());
 
 describe('Donation intake on SQLite', () => {
+  it.each(
+    ['', '   ', null, 'Chosen handle'].flatMap((displayName) =>
+      ['cash', 'wallet', 'legacy-late', 'payment-review'].map((path) => ({ displayName, path })),
+    ),
+  )(
+    'preserves confirmed public name $displayName through $path receipt and publication',
+    async ({ displayName, path }) => {
+      const email = `${crypto.randomUUID()}@example.test`;
+      emails.push(email);
+      const channel = await createTestChannel(prisma);
+      channels.push(channel.id);
+      const donor = await prisma.donor.create({
+        data: {
+          email,
+          balance_remaining: path === 'wallet' ? 1000 : path === 'payment-review' ? 400 : 0,
+          magic_token: crypto.randomUUID(),
+        },
+      });
+      const confirmed = await createPooledPledge({
+        draft_id: crypto.randomUUID(),
+        pledge_amount_cents: 1000,
+        channel_id: channel.id,
+        walletDonorId: donor.id,
+        display_name: displayName,
+        comment: null,
+        items: [],
+        plan: planPledge({
+          pledge_amount_cents: 1000,
+          available_wallet_cents: donor.balance_remaining,
+          selections: [],
+        }),
+      });
+      pledges.push(confirmed.pledge_token);
+      const expectedName = displayName === 'Chosen handle' ? 'Chosen handle' : null;
+      expect(confirmed.display_name).toBe(expectedName);
+      const externalId = `cs_${crypto.randomUUID()}`;
+      await prisma.pendingPledge.update({
+        where: { pledge_token: confirmed.pledge_token },
+        data: {
+          checkout_session_id: path === 'wallet' ? null : externalId,
+          ...(path === 'legacy-late'
+            ? { format: 'LEGACY', status: 'EXPIRED', total_cents: 1000, pledge_amount_cents: null }
+            : {}),
+          ...(path === 'payment-review'
+            ? {
+                status: 'CANCELLED',
+                wallet_hold_status: 'RELEASED',
+                non_payment_confirmed_at: new Date(),
+              }
+            : {}),
+        },
+      });
+      // A contradictory late payment cannot borrow already-used original Wallet funding.
+      if (path === 'payment-review')
+        await prisma.donor.update({
+          where: { id: donor.id },
+          data: { balance_remaining: 0, balance_held_cents: 0 },
+        });
+      if (path === 'wallet')
+        await intakeDonation({
+          source: 'wallet',
+          donor,
+          pledge: await getPledge(confirmed.pledge_token),
+        });
+      else
+        await reconcileCheckoutNotification('checkout.session.completed', {
+          id: externalId,
+          status: 'complete',
+          payment_status: 'paid',
+          amount_total: path === 'payment-review' ? 600 : 1000,
+          total_details: { amount_shipping: 0, amount_discount: 0, amount_tax: 0 },
+          customer_details: {
+            email,
+            name: 'PRIVATE LEGAL NAME',
+            address: null,
+            business_name: null,
+            individual_name: null,
+            phone: null,
+            tax_exempt: null,
+            tax_ids: null,
+          },
+          metadata: { pledge_token: confirmed.pledge_token },
+        });
+      const receipt = await prisma.donation.findFirstOrThrow({ where: { donor_id: donor.id } });
+      expect(receipt).toMatchObject({
+        donor_name: expectedName,
+        comment: null,
+        amount_cents: path === 'wallet' ? 0 : path === 'payment-review' ? 600 : 1000,
+        pledge_amount_cents: ['legacy-late', 'payment-review'].includes(path) ? null : 1000,
+        wallet_applied_cents: path === 'wallet' ? 1000 : 0,
+        wallet_credit_granted_cents: 0,
+        channel_id: channel.id,
+      });
+      expect(await getPledge(confirmed.pledge_token)).toMatchObject({
+        status:
+          path === 'legacy-late'
+            ? 'EXPIRED'
+            : path === 'payment-review'
+              ? 'PAYMENT_REVIEW'
+              : 'FULFILLED',
+        fulfilled_by_donation_id: receipt.id,
+      });
+      const native: unknown[] = [];
+      const tiltify: TiltifyMessage[] = [];
+      await prisma.$transaction(async (tx) => {
+        await createDonationPublisher(
+          tx,
+          async (_type, build) => {
+            native.push(build());
+          },
+          async () => true,
+          async (messages) => {
+            tiltify.push(...messages);
+          },
+        ).publish(receipt.id, null);
+      });
+      expect(native).toMatchObject([{ data: { donor_name: expectedName, donor_comment: null } }]);
+      expect(tiltify[0]!.payload).toMatchObject({
+        donor_name: expectedName ?? 'Anonymous',
+        donor_comment: null,
+      });
+      expect(JSON.stringify({ receipt, native, tiltify })).not.toContain('PRIVATE LEGAL NAME');
+    },
+  );
   it.each(['own-list', 'primary-list', 'closest-own', 'closest-shared', 'none'] as const)(
     'routes an unselected goal Pool through %s, never defaults polls, and permits overshoot',
     async (stage) => {

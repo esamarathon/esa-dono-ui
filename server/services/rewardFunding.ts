@@ -1,4 +1,15 @@
-import type { Prisma } from '@prisma/client';
+import type { PledgeItem, Prisma } from '@prisma/client';
+
+/** Confirmed initial reward type wins; historical rows fall back to the catalog. */
+export function confirmedRewardType(
+  claim: { reward_id: string; reward: { type: string } },
+  items: readonly Pick<PledgeItem, 'kind' | 'target_id' | 'confirmed_reward_type'>[] | undefined,
+): string {
+  return (
+    items?.find((item) => item.kind === 'REWARD' && item.target_id === claim.reward_id)
+      ?.confirmed_reward_type ?? claim.reward.type
+  );
+}
 
 /** Redemptions are canonical funding, even when a whole entitlement has donation_id=null. */
 export async function readRewardFundingTx(

@@ -16,7 +16,7 @@ const donors: string[] = [],
   polls: string[] = [],
   goals: string[] = [],
   destinations: string[] = [];
-async function fixture(cents = 37) {
+async function fixture({ cents, goalTarget }: Readonly<{ cents: number; goalTarget: number }>) {
   const event = await prisma.event.create({ data: { name: 'Unused', slug: crypto.randomUUID() } });
   events.push(event.id);
   const channel = await prisma.channel.create({
@@ -43,7 +43,7 @@ async function fixture(cents = 37) {
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal', target_cents: 10, channel_id: channel.id },
+    data: { title: 'Goal', target_cents: goalTarget, channel_id: channel.id },
   });
   goals.push(goal.id);
   return { event, channel, donor, donation, poll, goal };
@@ -81,7 +81,7 @@ it.each([
   { status: 'CHARGEBACK', pledge: 37 },
   { status: 'PENDING', pledge: 37 },
 ])('legacy and $status non-live sources have no assignable Unused', async ({ status, pledge }) => {
-  const f = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
   await prisma.donation.update({
     where: { id: f.donation.id },
     data: { status, pledge_amount_cents: pledge },
@@ -94,7 +94,7 @@ it.each([
   });
 });
 it('reserves live rows, raw credit and the failed Payment refund gap; defaults comments on', async () => {
-  const f = await fixture(1000);
+  const f = await fixture({ cents: 1000, goalTarget: 10 });
   const old = await prisma.pollVote.create({
     data: {
       donor_id: f.donor.id,
@@ -136,8 +136,8 @@ it('reserves live rows, raw credit and the failed Payment refund gap; defaults c
   await assign(f.donation.id, 'poll', f.poll.options[0]!.id, 400);
 });
 it('allows old donations and shared targets but excludes pending, ended, inactive and other-Channel targets', async () => {
-  const f = await fixture();
-  const other = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
+  const other = await fixture({ cents: 37, goalTarget: 10 });
   await prisma.donation.update({
     where: { id: f.donation.id },
     data: { created_at: new Date('2000-01-01') },
@@ -166,14 +166,14 @@ it('allows old donations and shared targets but excludes pending, ended, inactiv
 it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
   'rejects invalid expected cents %s',
   async (cents) => {
-    const f = await fixture();
+    const f = await fixture({ cents: 37, goalTarget: 10 });
     await expect(assign(f.donation.id, 'poll', f.poll.options[0]!.id, cents)).rejects.toMatchObject(
       { status: 400 },
     );
   },
 );
 it('undoes an open goal assignment back to derived Unused without a grant', async () => {
-  const f = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
   await prisma.fundGoal.update({ where: { id: f.goal.id }, data: { target_cents: 1000 } });
   const row = await assign(f.donation.id, 'goal', f.goal.id, 37);
   await withWebhooks((tx, _emit, publisher) =>
@@ -189,7 +189,7 @@ it('undoes an open goal assignment back to derived Unused without a grant', asyn
 });
 
 it('blocks unassigned sources and refuses Undo once a goal closes after overshoot', async () => {
-  const f = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
   const row = await assign(f.donation.id, 'goal', f.goal.id, 37);
   await expect(
     withWebhooks((tx, _emit, publisher) => undoUnusedTx(tx, 'goal', row.id, 'staff', publisher)),
@@ -202,7 +202,7 @@ it('blocks unassigned sources and refuses Undo once a goal closes after overshoo
 it.each(['tally', 'outbox'])(
   'rolls back row, totals and outbox after a late %s failure, then publishes once per assignment/undo',
   async (failure) => {
-    const f = await fixture();
+    const f = await fixture({ cents: 37, goalTarget: 10 });
     const destination = await prisma.webhookDestination.create({
       data: { url: 'http://127.0.0.1:1', secret: 's', event_types: '["donation.updated"]' },
     });
@@ -255,7 +255,7 @@ it.each(['tally', 'outbox'])(
 );
 
 it('assigns ALL positive sub-dollar unused, previews overshoot and undoes without donor credit', async () => {
-  const f = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
   const targets = await prisma.$transaction((tx) => unusedTargetsTx(tx, f.donation.id, 'goal'));
   expect(targets).toMatchObject({
     amount_cents: 37,
@@ -285,8 +285,8 @@ it('assigns ALL positive sub-dollar unused, previews overshoot and undoes withou
 });
 
 it('rejects stale/concurrent assignments without overspending and filters eligible scope', async () => {
-  const f = await fixture();
-  const other = await fixture();
+  const f = await fixture({ cents: 37, goalTarget: 10 });
+  const other = await fixture({ cents: 37, goalTarget: 10 });
   await expect(assign(f.donation.id, 'poll', other.poll.options[0]!.id, 37)).rejects.toMatchObject({
     status: 409,
   });
@@ -305,7 +305,7 @@ it('rejects stale/concurrent assignments without overspending and filters eligib
 });
 
 it('terminal sources never convert their retained raw reservation into Unused', async () => {
-  const f = await fixture(100);
+  const f = await fixture({ cents: 100, goalTarget: 10 });
   const prior = await prisma.pollVote.create({
     data: {
       donor_id: f.donor.id,
@@ -338,7 +338,7 @@ it('terminal sources never convert their retained raw reservation into Unused', 
 });
 
 it('assigns converted credit after end exactly once even though raw grants survive', async () => {
-  const f = await fixture(100);
+  const f = await fixture({ cents: 100, goalTarget: 10 });
   const prior = await prisma.pollVote.create({
     data: {
       donor_id: f.donor.id,

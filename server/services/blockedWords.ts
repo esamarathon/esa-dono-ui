@@ -1,5 +1,10 @@
 import prisma from '../lib/prisma.js';
 
+/** Pure tokenizer shared by global and transaction-local dictionary checks. */
+export function textWordTokens(text: string): ReadonlySet<string> {
+  return new Set(text.toLowerCase().match(/\b\w+\b/g) ?? []);
+}
+
 /**
  * Check text against the global blocked-words dictionary.
  * Returns an error message string if a blocked word is found, or null if clean.
@@ -9,7 +14,7 @@ export async function checkBlockedWords(text: string | null | undefined): Promis
   const blockedWords = await prisma.blockedWord.findMany();
   if (blockedWords.length === 0) return null;
 
-  const words = text.toLowerCase().match(/\b\w+\b/g) || [];
+  const words = textWordTokens(text);
   const lowerBlocked = new Set(blockedWords.map((w) => w.word.toLowerCase()));
 
   for (const word of words) {

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import { readDonationAccountingTx, type CategoryAmounts } from './poolAccounting.js';
+import { confirmedRewardType } from './rewardFunding.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -36,7 +37,7 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
         select: {
           items: {
             where: { kind: 'REWARD' },
-            select: { target_id: true, confirmed_reward_type: true },
+            select: { kind: true, target_id: true, confirmed_reward_type: true },
           },
         },
       },
@@ -54,12 +55,9 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
     if (
       donation.status === 'COMPLETED' &&
       donation.pledge_amount_cents !== null &&
-      donation.reward_claims.some((claim) => {
-        const confirmed = donation.pledge?.items.find(
-          (item) => item.target_id === claim.reward_id,
-        )?.confirmed_reward_type;
-        return (confirmed ?? claim.reward.type) === 'PHYSICAL';
-      })
+      donation.reward_claims.some(
+        (claim) => confirmedRewardType(claim, donation.pledge?.items) === 'PHYSICAL',
+      )
     )
       physical++;
     const state = await readDonationAccountingTx(tx, donation.id);

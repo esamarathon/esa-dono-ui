@@ -45,7 +45,21 @@ const donors: string[] = [],
   events: string[] = [],
   channels: string[] = [],
   destinations: string[] = [];
-async function fixture(item = 300, cash = 1000, wallet = 0, shipping = 200) {
+async function fixture({
+  item,
+  cash,
+  wallet,
+  shipping,
+  availableWallet,
+  allocationCents,
+}: Readonly<{
+  item: number;
+  cash: number;
+  wallet: number;
+  shipping: number;
+  availableWallet: number;
+  allocationCents: number;
+}>) {
   const event = await prisma.event.create({
     data: { name: 'Payment refund', slug: crypto.randomUUID() },
   });
@@ -58,7 +72,7 @@ async function fixture(item = 300, cash = 1000, wallet = 0, shipping = 200) {
     data: {
       email: `${crypto.randomUUID()}@marker.invalid`,
       total_donated: cash,
-      balance_remaining: 50,
+      balance_remaining: availableWallet,
     },
   });
   donors.push(donor.id);
@@ -95,8 +109,8 @@ async function fixture(item = 300, cash = 1000, wallet = 0, shipping = 200) {
       title: 'Ended poll',
       is_active: false,
       ends_at: new Date(0),
-      total_votes_cents: cash + wallet,
-      options: { create: { label: 'A', votes_cents: cash + wallet } },
+      total_votes_cents: allocationCents,
+      options: { create: { label: 'A', votes_cents: allocationCents } },
     },
     include: { options: true },
   });
@@ -107,14 +121,14 @@ async function fixture(item = 300, cash = 1000, wallet = 0, shipping = 200) {
       donation_id: donation.id,
       poll_id: poll.id,
       poll_option_id: poll.options[0]!.id,
-      amount_cents: cash + wallet,
+      amount_cents: allocationCents,
     },
   });
   const goal = await prisma.fundGoal.create({
     data: {
       title: 'Completed goal',
-      target_cents: cash + wallet,
-      current_cents: cash + wallet,
+      target_cents: allocationCents,
+      current_cents: allocationCents,
       is_complete: true,
     },
   });
@@ -124,7 +138,7 @@ async function fixture(item = 300, cash = 1000, wallet = 0, shipping = 200) {
       donor_id: donor.id,
       donation_id: donation.id,
       goal_id: goal.id,
-      amount_cents: cash + wallet,
+      amount_cents: allocationCents,
     },
   });
   return { event, channel, donor, donation, reward, claim, poll, vote, goal, contribution };
@@ -220,7 +234,14 @@ afterAll(() => prisma.$disconnect());
 
 describe('physical Payment refund public interface / real SQLite and outbox', () => {
   it('admin-only read/preview/list/retry/item/shipping API and signed raw refund notifications share the real state machine', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const app = express();
     app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
     app.use(express.json());
@@ -341,7 +362,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   });
 
   it('resolves and durably stores the exact Checkout PaymentIntent before Stripe create, outside SQLite transactions', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     await prisma.donation.update({ where: { id: f.donation.id }, data: { payment_intent: null } });
     stripe.retrieveCheckoutSession.mockImplementationOnce(async (id) => {
       expect(id).toBe(f.donation.external_id);
@@ -362,7 +390,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['error', 'failed', 'canceled'])(
     'definite creation rejection (%s) resolves REJECTED, unlocks PENDING and changes no money',
     async (kind) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const { native, tiltify } = await messages();
       if (kind === 'error')
         stripe.createPaymentRefund.mockRejectedValueOnce(
@@ -418,7 +453,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   ])(
     'unknown Stripe creation leaves REQUESTED and every conflict locked until metadata-match retry',
     async (error) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       stripe.createPaymentRefund.mockRejectedValueOnce(error);
       const result = await requestPaymentRefund(f.claim.id, 'admin');
       if (!result) throw new Error('No refund record');
@@ -478,7 +520,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['COMPLETED', 'REFUNDED', 'CHARGEBACK'])(
     'later failure on %s has explicit at-most-once item and separate shipping resolutions',
     async (status) => {
-      const f = await fixture(300, 800, 200);
+      const f = await fixture({
+        item: 300,
+        cash: 800,
+        wallet: 200,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const result = await requestPaymentRefund(f.claim.id, 'admin');
       if (!result) throw new Error('No refund record');
       const receipt = {
@@ -574,7 +623,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['APPROVED', 'REJECTED'] as const)(
     'REQUESTED blocks %s write-in moderation on the same funding donation',
     async (action) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const entry = await prisma.pollCustomEntry.create({
         data: { poll_id: f.poll.id, donor_id: f.donor.id, label: 'Pending choice' },
       });
@@ -594,7 +650,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('outside item and shipping returns do not repair accounting or grant any credit', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const result = await requestPaymentRefund(f.claim.id, 'admin');
     if (!result) throw new Error('No refund record');
     await reconcilePaymentRefund({
@@ -622,7 +685,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['pending', 'requires_action', 'succeeded'])(
     'webhook %s before the create response applies once; stale pending cannot undo a later failure/resolution',
     async (accepted) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const create = stripe.createPaymentRefund.getMockImplementation()!;
       stripe.createPaymentRefund.mockImplementationOnce(async (input) => {
         const receipt = { ...(await create(input)), status: accepted };
@@ -644,7 +714,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['metadata', 'amount', 'payment_intent', 'stripe_id', 'donation', 'claim'])(
     'mismatched %s receipt cannot apply or change our record; unrelated refunds are ignored',
     async (mismatch) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const record = await requestPaymentRefund(f.claim.id, 'admin');
       if (!record) throw new Error('No record');
       const receipt = {
@@ -675,7 +752,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('settled success is monotonic against old pending/requires_action notifications', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const record = await requestPaymentRefund(f.claim.id, 'admin');
     if (!record) throw new Error('No record');
     const receipt = {
@@ -697,7 +781,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['rejected', 'unknown', 'accepted'])(
     'per-donation serialization locks another claim until %s outcome',
     async (outcome) => {
-      const f = await fixture(200);
+      const f = await fixture({
+        item: 200,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const second = await prisma.rewardClaim.create({
         data: {
           donor_id: f.donor.id,
@@ -740,7 +831,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('last noncanceled physical claim includes fulfilled claims; nonphysical and reversed claims do not reserve shipping', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const other = await prisma.rewardClaim.create({
       data: {
         reward_id: f.reward.id,
@@ -767,7 +865,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['PHYSICAL', 'DIGITAL'])(
     'confirmed %s wins over an opposite catalog type edit',
     async (confirmed) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       await prisma.pendingPledge.create({
         data: {
           pledge_token: crypto.randomUUID(),
@@ -801,7 +906,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('credit funding never becomes physical-refund eligible after catalog type changes, even with a matching original pledge item', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const origin = await prisma.rewardClaim.create({
       data: {
         reward_id: f.reward.id,
@@ -920,7 +1032,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   });
 
   it('a retry with no metadata match reuses the exact record id and amounts after exhaustive discovery, not a new refund record', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     stripe.createPaymentRefund.mockRejectedValueOnce(new Error('timeout'));
     const record = await requestPaymentRefund(f.claim.id, 'admin');
     const result = await retryPaymentRefund(record!.id);
@@ -935,7 +1054,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['REFUNDED', 'CHARGEBACK'])(
     'a later %s uses only reduced D and remaining cash',
     async (status) => {
-      const f = await fixture(300, 800, 200);
+      const f = await fixture({
+        item: 300,
+        cash: 800,
+        wallet: 200,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       await requestPaymentRefund(f.claim.id, 'admin');
       const { tiltify } = await messages();
       await withWebhooks((tx, _emit, pub) =>
@@ -954,7 +1080,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('recorded item price is capped at remaining new money and a zero-funded poll/goal is retired, never a wire-visible vote', async () => {
-    const f = await fixture(1500, 1000);
+    const f = await fixture({
+      item: 1500,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const { native, tiltify } = await messages();
     expect(await requestPaymentRefund(f.claim.id, 'admin')).toMatchObject({ item_cents: 1000 });
     expect(
@@ -979,7 +1112,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   });
 
   it('Unused shrinks before live funding and outstanding credit; largest remainders total exact cents on ended targets', async () => {
-    const f = await fixture(501);
+    const f = await fixture({
+      item: 501,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     await prisma.pollVote.update({ where: { id: f.vote.id }, data: { amount_cents: 333 } });
     await prisma.pollOption.update({
       where: { id: f.vote.poll_option_id },
@@ -1034,7 +1174,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['poll', 'goal'] as const)(
     'shrunk consumed %s credit restores only effective original grant funding after a later ordinary reversal',
     async (category) => {
-      const f = await fixture(333);
+      const f = await fixture({
+        item: 333,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       await withWebhooks((tx, _emit, pub) =>
         reverseSpendTx(
           tx,
@@ -1155,7 +1302,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('a physical cancellation preserves a whole nonphysical entitlement funded by multiple sources and locks its all-source mutations while REQUESTED', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const digital = await prisma.reward.create({
       data: {
         title: 'One whole digital entitlement',
@@ -1273,7 +1427,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   });
 
   it('Event end closes eligibility and Undo end reopens it without repair', async () => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     await prisma.$transaction((tx) => endEventTx(tx, f.event.id, f.event.slug, 'admin'));
     expect(await prisma.$transaction((tx) => previewPaymentRefundTx(tx, f.claim.id))).toMatchObject(
       { eligible: false },
@@ -1296,7 +1457,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
     'unknown_shipping',
     'zero_cash',
   ])('eligibility rejects %s without contacting Stripe', async (boundary) => {
-    const f = await fixture();
+    const f = await fixture({
+      item: 300,
+      cash: 1000,
+      wallet: 0,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     if (boundary === 'legacy')
       await prisma.donation.update({
         where: { id: f.donation.id },
@@ -1337,7 +1505,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   it.each(['request', 'acceptance', 'resolution'])(
     'late outbox failure rolls back %s completely and retries safely',
     async (stage) => {
-      const f = await fixture();
+      const f = await fixture({
+        item: 300,
+        cash: 1000,
+        wallet: 0,
+        shipping: 200,
+        availableWallet: 50,
+        allocationCents: 1000,
+      });
       const { native, tiltify } = await messages();
       let record: Awaited<ReturnType<typeof requestPaymentRefund>> | null = null;
       if (stage !== 'request') {
@@ -1399,7 +1574,14 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
   );
 
   it('acceptance cancels one recorded-price claim, preserves W, shrinks ended targets without reopening and publishes money once', async () => {
-    const f = await fixture(300, 800, 200);
+    const f = await fixture({
+      item: 300,
+      cash: 800,
+      wallet: 200,
+      shipping: 200,
+      availableWallet: 50,
+      allocationCents: 1000,
+    });
     const { native, tiltify } = await messages();
     const preview = await prisma.$transaction((tx) => previewPaymentRefundTx(tx, f.claim.id));
     expect(preview).toMatchObject({

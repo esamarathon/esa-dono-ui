@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import crypto from 'crypto';
@@ -27,9 +27,27 @@ let rewardId: string;
 let pollId: string;
 let claimId: string;
 const marker = `private-${crypto.randomUUID()}@example.com`;
-beforeAll(async () => {
+async function fixture({
+  availableWallet,
+  heldWallet,
+  cash,
+  pledge,
+  latestCash,
+  recordedClaim,
+  currentPrice,
+  pollAllocation,
+}: Readonly<{
+  availableWallet: number;
+  heldWallet: number;
+  cash: number;
+  pledge: number;
+  latestCash: number;
+  recordedClaim: number;
+  currentPrice: number;
+  pollAllocation: number;
+}>) {
   const donor = await prisma.donor.create({
-    data: { email: marker, balance_remaining: 100, balance_held_cents: 200 },
+    data: { email: marker, balance_remaining: availableWallet, balance_held_cents: heldWallet },
   });
   donorId = donor.id;
   channelId = (await createTestChannel(prisma)).id;
@@ -38,8 +56,8 @@ beforeAll(async () => {
       external_id: crypto.randomUUID(),
       donor_id: donorId,
       channel_id: channelId,
-      amount_cents: 0,
-      pledge_amount_cents: 1000,
+      amount_cents: cash,
+      pledge_amount_cents: pledge,
       donor_name: null,
     },
   });
@@ -48,26 +66,31 @@ beforeAll(async () => {
     data: {
       external_id: crypto.randomUUID(),
       donor_id: donorId,
-      amount_cents: 100,
+      amount_cents: latestCash,
       donor_name: 'Newest name',
       created_at: new Date(Date.now() + 1000),
     },
   });
   rewardId = (
     await prisma.reward.create({
-      data: { title: 'Recorded reward', type: 'DIGITAL', cost_cents: 900 },
+      data: { title: 'Recorded reward', type: 'DIGITAL', cost_cents: currentPrice },
     })
   ).id;
   claimId = (
     await prisma.rewardClaim.create({
-      data: { donor_id: donorId, donation_id: donationId, reward_id: rewardId, amount_cents: 500 },
+      data: {
+        donor_id: donorId,
+        donation_id: donationId,
+        reward_id: rewardId,
+        amount_cents: recordedClaim,
+      },
     })
   ).id;
   await prisma.rewardClaim.create({
     data: {
       donor_id: donorId,
       reward_id: rewardId,
-      amount_cents: 500,
+      amount_cents: recordedClaim,
       status: 'REVERSED',
       reversed_at: new Date(),
     },
@@ -83,12 +106,12 @@ beforeAll(async () => {
       donation_id: donationId,
       poll_id: pollId,
       poll_option_id: poll.options[0]!.id,
-      amount_cents: 700,
+      amount_cents: pollAllocation,
       source: 'auto',
     },
   });
-});
-afterAll(async () => {
+}
+afterEach(async () => {
   const ids = [donorId, ...extraDonors];
   await prisma.paymentRefund.deleteMany({ where: { donation: { donor_id: { in: ids } } } });
   await prisma.balanceAdjustment.deleteMany({ where: { donor_id: { in: ids } } });
@@ -106,8 +129,9 @@ afterAll(async () => {
   await prisma.reward.deleteMany({ where: { id: { in: [rewardId, ...extraRewards] } } });
   await prisma.poll.delete({ where: { id: pollId } });
   await prisma.channel.delete({ where: { id: channelId } });
-  await prisma.$disconnect();
+  extraDonors.length = extraRewards.length = extraGoals.length = 0;
 });
+afterAll(() => prisma.$disconnect());
 function privateFree(value: unknown) {
   expect(JSON.stringify(value)).not.toContain(marker);
   if (value && typeof value === 'object')
@@ -117,6 +141,16 @@ function privateFree(value: unknown) {
     }
 }
 it('shows moderator live allocations, not stale pledge choices, and preserves own-donation null names', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const claims = await request(app).get('/api/moderator/claims').set(AUTH).expect(200);
   const own = claims.body.filter((c: { reward_id: string }) => c.reward_id === rewardId);
   expect(own).toEqual([
@@ -135,6 +169,16 @@ it('shows moderator live allocations, not stale pledge choices, and preserves ow
   expect(detail.body.pools.reward.live_cents).toBe(500);
 });
 it('paginates/filter pledges without changing the legacy array contract, and shows current versus confirmed reward prices', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const pledge = await prisma.pendingPledge.create({
     data: {
       pledge_token: crypto.randomUUID(),
@@ -183,6 +227,16 @@ it('paginates/filter pledges without changing the legacy array contract, and sho
 });
 
 it('shares the actual Default goal recipient and fallback safely with moderators', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const goal = await prisma.fundGoal.create({
     data: { title: 'Shared fallback', target_cents: 1000 },
   });
@@ -206,6 +260,16 @@ it('shares the actual Default goal recipient and fallback safely with moderators
 });
 
 it('filters canonical late LEGACY cash outcomes while preserving stored EXPIRED and original historical FULFILLED', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const receipt = await prisma.donation.create({
     data: { external_id: crypto.randomUUID(), donor_id: donorId, amount_cents: 1000 },
   });
@@ -266,6 +330,16 @@ it('filters canonical late LEGACY cash outcomes while preserving stored EXPIRED 
 });
 
 it('rejects manual payment-status changes server-side', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   await request(app)
     .patch(`/api/admin/donations/${donationId}/status`)
     .set(AUTH)
@@ -278,6 +352,16 @@ it('rejects manual payment-status changes server-side', async () => {
     .expect(400);
 });
 it('previews category credit, original redemption destinations and legacy Wallet without exposing private identity', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const votes = await prisma.pollVote.findMany({ where: { donation_id: donationId } });
   const response = await request(app)
     .get(`/api/admin/donors/${donorId}/reverse-spend-preview`)
@@ -337,6 +421,16 @@ it('previews category credit, original redemption destinations and legacy Wallet
 });
 
 it('GET donor detail returns the private admin Wallet and safe category summary through SQLite', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const response = await request(app).get(`/api/admin/donors/${donorId}`).set(AUTH).expect(200);
   expect(response.body.email).toBe(marker);
   expect(response.body.pool_credits).toMatchObject({ events: [] });
@@ -352,6 +446,16 @@ it('GET donor detail returns the private admin Wallet and safe category summary 
 });
 
 it('keeps one multisource claim, source-local allocations, original-grant previews and all-source locks without breaking retained-claim terminal actions', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const owner = await prisma.donor.create({
     data: { email: `multi-${crypto.randomUUID()}@example.com` },
   });
@@ -484,12 +588,32 @@ it('keeps one multisource claim, source-local allocations, original-grant previe
 it.each(['rewards', 'polls', 'goals', 'events', 'stats'])(
   'new moderator %s projection recursively omits private donor email',
   async (path) => {
+    await fixture({
+      availableWallet: 100,
+      heldWallet: 200,
+      cash: 0,
+      pledge: 1000,
+      latestCash: 100,
+      recordedClaim: 500,
+      currentPrice: 900,
+      pollAllocation: 700,
+    });
     const response = await request(app).get(`/api/moderator/${path}`).set(AUTH).expect(200);
     privateFree(response.body);
   },
 );
 
 it('reads recorded ended/completed target changes and resolved-item shipping attention, with moderator source attribution and destination preview', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   const owner = await prisma.donor.create({
     data: { email: `snapshot-${crypto.randomUUID()}@example.com` },
   });
@@ -660,6 +784,16 @@ it('reads recorded ended/completed target changes and resolved-item shipping att
 });
 
 it('sweeps available Wallet only, preserving held credit', async () => {
+  await fixture({
+    availableWallet: 100,
+    heldWallet: 200,
+    cash: 0,
+    pledge: 1000,
+    latestCash: 100,
+    recordedClaim: 500,
+    currentPrice: 900,
+    pollAllocation: 700,
+  });
   await request(app)
     .post('/api/admin/donors/sweep-credits')
     .set(AUTH)

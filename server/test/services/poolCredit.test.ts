@@ -26,7 +26,10 @@ const donors: string[] = [],
   polls: string[] = [],
   goals: string[] = [],
   destinations: string[] = [];
-async function extraCredits(f: Awaited<ReturnType<typeof fixture>>) {
+async function extraCredits(
+  f: Awaited<ReturnType<typeof fixture>>,
+  { goalTarget }: Readonly<{ goalTarget: number }>,
+) {
   const foreign = await prisma.channel.create({
     data: { event_id: f.event.id, name: crypto.randomUUID(), slug: crypto.randomUUID() },
   });
@@ -36,7 +39,7 @@ async function extraCredits(f: Awaited<ReturnType<typeof fixture>>) {
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Foreign goal', channel_id: foreign.id, target_cents: 1 },
+    data: { title: 'Foreign goal', channel_id: foreign.id, target_cents: goalTarget },
   });
   goals.push(goal.id);
   for (const { donation } of f.sources) {
@@ -82,9 +85,21 @@ async function extraCredits(f: Awaited<ReturnType<typeof fixture>>) {
   }
   return { poll, goal, foreign };
 }
-async function fixture() {
+async function fixture({
+  sourceGrants,
+  rewardPrice,
+  stock,
+  availableWallet,
+  reviewedRewardCents,
+}: Readonly<{
+  sourceGrants: readonly number[];
+  rewardPrice: number;
+  stock: number;
+  availableWallet: number;
+  reviewedRewardCents: number;
+}>) {
   const donor = await prisma.donor.create({
-    data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: 123 },
+    data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: availableWallet },
   });
   donors.push(donor.id);
   const event = await prisma.event.create({ data: { name: 'Credits', slug: crypto.randomUUID() } });
@@ -93,11 +108,16 @@ async function fixture() {
     data: { name: crypto.randomUUID(), slug: crypto.randomUUID(), event_id: event.id },
   });
   const reward = await prisma.reward.create({
-    data: { title: 'One entitlement', type: 'DIGITAL', cost_cents: 1000, quantity_total: 3 },
+    data: {
+      title: 'One entitlement',
+      type: 'DIGITAL',
+      cost_cents: rewardPrice,
+      quantity_total: stock,
+    },
   });
   rewards.push(reward.id);
   const sources = [];
-  for (const [index, cents] of [600, 400].entries()) {
+  for (const [index, cents] of sourceGrants.entries()) {
     const donation = await prisma.donation.create({
       data: {
         donor_id: donor.id,
@@ -133,13 +153,13 @@ async function fixture() {
   }
   const request = {
     idempotency_key: crypto.randomUUID(),
-    reviewed_credit_cents: { reward: 1000, poll: 0, goal: 0 },
+    reviewed_credit_cents: { reward: reviewedRewardCents, poll: 0, goal: 0 },
     selections: [
       {
         kind: 'REWARD' as const,
         target_id: reward.id,
         quantity: 1,
-        unit_price_cents: 1000,
+        unit_price_cents: rewardPrice,
         reward_type: 'DIGITAL',
       },
     ],
@@ -205,7 +225,13 @@ async function subscribers() {
   return { native, tiltify, read };
 }
 it('HTTP reads/writes are owner-scoped, safe and preserve one whole donor entitlement', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const token = crypto.randomUUID();
   await prisma.donor.update({
     where: { id: f.donor.id },
@@ -259,7 +285,13 @@ it('HTTP reads/writes are owner-scoped, safe and preserve one whole donor entitl
   ).toBe(409);
 });
 it('native publishes both source shares; Tiltify lists ONE whole entitlement on stable oldest carrier and republishes all status/reversal sources', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const messages = await subscribers();
   const result = await f.apply();
   const native = await messages.read(messages.native.id);
@@ -327,8 +359,14 @@ it.each([
   'fractional',
   'REQUESTED',
 ])('invalid reviewed batch (%s) applies NONE of its otherwise valid selections', async (change) => {
-  const f = await fixture();
-  const { poll, goal } = await extraCredits(f);
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
+  const { poll, goal } = await extraCredits(f, { goalTarget: 1 });
   const reviewed: CreditApplyRequest = {
     ...f.request,
     reviewed_credit_cents: { reward: 1000, poll: 1000, goal: 1000 },
@@ -397,8 +435,14 @@ it.each([
 it.each(['PoolCreditRedemption', 'WebhookDelivery'])(
   'late %s failure rolls back credit, entitlement, stock, tallies, batch and outbox',
   async (table) => {
-    const f = await fixture();
-    const { goal } = await extraCredits(f);
+    const f = await fixture({
+      sourceGrants: [600, 400],
+      rewardPrice: 1000,
+      stock: 3,
+      availableWallet: 123,
+      reviewedRewardCents: 1000,
+    });
+    const { goal } = await extraCredits(f, { goalTarget: 1 });
     const messages = await subscribers();
     const reviewed: CreditApplyRequest = {
       ...f.request,
@@ -431,7 +475,13 @@ it.each(['PoolCreditRedemption', 'WebhookDelivery'])(
   },
 );
 it('concurrent shared-entitlement reversals restore original funding and stock exactly once', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const applied = await f.apply();
   const reverse = () =>
     withWebhooks((tx, _emit, publisher) =>
@@ -445,7 +495,13 @@ it('concurrent shared-entitlement reversals restore original funding and stock e
   });
 });
 it('several whole units keep one claim per unit, split financial components and restore stock once per entitlement', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   await prisma.reward.update({ where: { id: f.reward.id }, data: { cost_cents: 350 } });
   f.request.selections[0]!.unit_price_cents = 350;
   f.request.selections[0]!.quantity = 2;
@@ -462,7 +518,13 @@ it('several whole units keep one claim per unit, split financial components and 
   });
 });
 it('an inconsistent second source budget rolls back the already reduced first source', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   await prisma.donation.update({
     where: { id: f.sources[1]!.donation.id },
     data: { pledge_amount_cents: 100 },
@@ -473,7 +535,13 @@ it('an inconsistent second source budget rolls back the already reduced first so
   expect(await prisma.poolCreditBatch.count({ where: { donor_id: f.donor.id } })).toBe(0);
 });
 it('competing different batches cannot consume reviewed funds twice', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const other = { ...f.request, idempotency_key: crypto.randomUUID() };
   const results = await Promise.allSettled([
     f.apply(),
@@ -487,7 +555,13 @@ it('competing different batches cannot consume reviewed funds twice', async () =
   });
 });
 it('partial reward draw uses oldest donation then oldest grant and leaves a positive unaffordable remainder', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   await prisma.rewardClaim.update({
     where: { id: f.sources[0]!.grant.source_claim_id! },
     data: { amount_cents: 400 },
@@ -536,7 +610,13 @@ it('partial reward draw uses oldest donation then oldest grant and leaves a posi
   });
 });
 it('a cleared original grant can restore ONLY retained funding after Wallet refund, never the extinguished remainder', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   await prisma.reward.update({ where: { id: f.reward.id }, data: { cost_cents: 700 } });
   f.request.selections[0]!.unit_price_cents = 700;
   const result = await f.apply();
@@ -565,7 +645,13 @@ it('a cleared original grant can restore ONLY retained funding after Wallet refu
 it.each(['REFUNDED', 'CHARGEBACK'])(
   'terminal action on A cancels one shared whole claim, extinguishes A and restores B (%s)',
   async (status) => {
-    const f = await fixture();
+    const f = await fixture({
+      sourceGrants: [600, 400],
+      rewardPrice: 1000,
+      stock: 3,
+      availableWallet: 123,
+      reviewedRewardCents: 1000,
+    });
     const result = await f.apply();
     await withWebhooks((tx, _emit, publisher) =>
       setDonationStatusTx(tx, f.sources[0]!.donation.id, status, undefined, 'admin', publisher),
@@ -583,7 +669,13 @@ it.each(['REFUNDED', 'CHARGEBACK'])(
   },
 );
 it('retained whole claim uses source-local 600 max rule, then restores retained REFUNDED credit without another Wallet grant', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   // A has D1000, of which the retained credit component consumes 600, not the whole 1000 entitlement.
   await prisma.donation.update({
     where: { id: f.sources[0]!.donation.id },
@@ -621,7 +713,13 @@ it.each([
 ] as const)(
   'terminal action on A (%s) retains its fulfilled shared claim despite B (%s)',
   async (status, otherStatus) => {
-    const f = await fixture();
+    const f = await fixture({
+      sourceGrants: [600, 400],
+      rewardPrice: 1000,
+      stock: 3,
+      availableWallet: 123,
+      reviewedRewardCents: 1000,
+    });
     // A retains 600 of its D1000; B funds the other 400 of ONE whole entitlement.
     await prisma.donation.update({
       where: { id: f.sources[0]!.donation.id },
@@ -709,7 +807,13 @@ it.each([
 it.each(['REQUESTED', 'CHARGEBACK'])(
   'every funding source protects whole claim from status/reverse and terminal actions (%s)',
   async (status) => {
-    const f = await fixture();
+    const f = await fixture({
+      sourceGrants: [600, 400],
+      rewardPrice: 1000,
+      stock: 3,
+      availableWallet: 123,
+      reviewedRewardCents: 1000,
+    });
     const result = await f.apply();
     if (status === 'REQUESTED')
       await prisma.paymentRefund.create({
@@ -752,7 +856,13 @@ it.each(['REQUESTED', 'CHARGEBACK'])(
   },
 );
 it('concurrent lost-response retries return the original result before changed catalog/ended checks', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const [a, b] = await Promise.all([f.apply(), f.apply()]);
   expect(b).toEqual(a);
   await prisma.reward.update({
@@ -765,7 +875,13 @@ it('concurrent lost-response retries return the original result before changed c
   await expect(f.apply()).rejects.toMatchObject({ status: 409 });
 });
 it('source-local native accounting projects 600/400, not two whole entitlements', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   const result = await f.apply();
   const a = await prisma.$transaction((tx) =>
     readDonationAccountingTx(tx, f.sources[0]!.donation.id),
@@ -784,8 +900,14 @@ it('source-local native accounting projects 600/400, not two whole entitlements'
   expect(b.allocations.reward).toMatchObject([{ id: result.claim_ids[0], amount_cents: 400 }]);
 });
 it('cross-Channel poll cents, shared rewards and goal overshoot split sources; reversing restores original grants only', async () => {
-  const f = await fixture();
-  const { poll, goal } = await extraCredits(f);
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
+  const { poll, goal } = await extraCredits(f, { goalTarget: 1 });
   const request = {
     ...f.request,
     reviewed_credit_cents: { reward: 1000, poll: 1000, goal: 1000 },
@@ -814,7 +936,13 @@ it('cross-Channel poll cents, shared rewards and goal overshoot split sources; r
   expect(await prisma.poolCredit.count({ where: { donation: { donor_id: f.donor.id } } })).toBe(6);
 });
 it('A600+B400 buys one C1000 entitlement, stock once, and reversal restores original grants repeatedly', async () => {
-  const f = await fixture();
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 123,
+    reviewedRewardCents: 1000,
+  });
   for (let cycle = 0; cycle < 3; cycle++) {
     f.request.idempotency_key = crypto.randomUUID();
     const applied = await f.apply();
