@@ -47,12 +47,14 @@ pledges add no money and pooled fulfillment creates no Wallet credit. To choose
 fallbacks, update `/api/admin/channels/:id` (or the moderator equivalent) with
 `default_goals: [goalId, …]`: own/shared ids only, in order; inactive/completed entries
 are preserved. See `docs/simulating-donations.md` for the simulator's real API boundaries.
-The old donate UI is intentionally not compatible with this intermediate backend;
-#186/#187 and coordinated sibling callers #194 must land before deployment.
+The amount-first donate UI and backend ship together. The coordinated parent callers
+and cold cross-Channel Kollekt dependency are described in `docs/api-consumers.md`;
+local tests or seeding do not establish the runtime release gates in `docs/deployment.md`.
 
-The banner uses the keys from `MODERATOR_API_KEY` and `ADMIN_API_KEY` env vars (defaults:
-`key_mod_dev-moderator-key` and `key_admin_change-me`). The accounts and banner survive
-restarts and are preserved on staging through daily resets — the banner always displays
+The banner uses the keys from `MODERATOR_API_KEY` and `ADMIN_API_KEY` env vars (seed defaults:
+raw `dev-moderator-key` and `dev-admin-key`; configure matching backend keys explicitly).
+The accounts and banner survive restarts and are preserved on staging through daily
+resets — the banner always displays
 the current API keys from the `.env` file.
 
 To re-run the seed (e.g., after clearing the DB or updating env keys):

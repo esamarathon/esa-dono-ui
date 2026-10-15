@@ -9,7 +9,11 @@
 2. **Register in Stripe**: In the Stripe Dashboard, add a webhook endpoint:
 
    - **URL**: `https://<your-ngrok-url>/api/webhooks/stripe`
-   - **Events**: Select `checkout.session.completed`
+   - **Events**: Select `checkout.session.completed`, `checkout.session.expired`,
+     `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`
+     and `refund.*` (including created, updated and failed). Preserve auction subscriptions.
+     Check the endpoint's actual API version against the installed Stripe SDK; see
+     `docs/deployment.md` for the coordinated transition and refund recovery runbooks.
 
 3. **Set the secret**: Copy the signing secret (`whsec_…`) and set it in `.env`:
 

@@ -2,8 +2,9 @@ openapi: '3.0.3'
 info:
   title: ESA Dono API
   description: |
-    Donation platform with Stripe checkout, wallet balance, pledge (smart cart)
-    auto-fulfillment, rewards, polls, fund goals, channels, and moderator/admin tooling.
+    Donation platform with amount-first pledges, independent incentive Pools,
+    held Wallet funding, Stripe checkout, rewards, polls, fund goals, Channels,
+    and moderator/admin tooling.
 
     ## Authentication
 
@@ -36,14 +37,17 @@ info:
 
     ## Channels
 
-    Every donation routes to exactly one channel (`GET /api/channels` lists the active
-    ones). Rewards, polls, and fund goals may be tied to a specific channel
-    (`channel_id` set) or shared across all channels (`channel_id` null). `POST
-    /api/pledge` requires `channel_id` and rejects any cart item whose incentive
-    belongs to a different channel — incentives cannot be mixed across channels in
-    a single donation. Channels are managed via `/api/admin/channels` and
-    `/api/moderator/channels`; per-channel raised totals are admin-only
-    (`GET /api/admin/stats`).
+    Every pledge routes to exactly one Channel (`GET /api/channels` lists the active
+    ones); a donation without a pledge may remain unassigned until admin routing.
+    Rewards, polls and fund goals may belong to one Channel (`channel_id` set) or
+    be shared (`channel_id` null). `POST /api/pledge` requires `channel_id`; removed
+    foreign selections return a corrected review (409), with no pledge or hold.
+    Later category Pool-credit spending can fund another Channel's incentives within
+    the same Event, or shared incentives, without changing donation routing. Ordinary
+    Tiltify lists/poll detail remain own/shared; optional ESA lookup envelopes alone
+    resolve same-Event/shared owners. Channels are managed via `/api/admin/channels` and
+    `/api/moderator/channels`; per-Channel staff stats are admin-only
+    (`GET /api/admin/stats`), while Tiltify campaign reads expose public money totals.
 
     ## Wallet funding and Pools
 
@@ -1346,8 +1350,11 @@ paths:
         Copied/recovered token metadata cannot consume pooled funding. Complete/unpaid
         retains funding. Expiry and verified async failure use common reconciliation.
         Existing legacy failure returns a legacy_async_failure receipt for #188's
-        chargeback handler; no reversal accounting is invented here. Auction
-        completed/expired handling remains separate.
+        chargeback handler. Signed refund.* objects go through Payment-refund
+        identity validation and the same acceptance/later-failure state machine used
+        by admin retry; acceptance lowers item money once, shipping stays separate,
+        and later failure requires explicit resolution. Auction completed/expired
+        handling remains separate.
       requestBody:
         content:
           application/json:

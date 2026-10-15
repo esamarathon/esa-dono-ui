@@ -129,12 +129,14 @@ export default function StaffHelp({ role }: { role: Role }) {
           <Term>Wallet credit</Term> is available or held. A Pending pledge holds Wallet credit
           until payment or non-payment is verified. Signing out or passing the deadline does not
           release it. <Term>Pool credit</Term> is category-specific credit in one Event after an
-          allocation is reversed. It cannot buy physical rewards.
+          allocation is reversed. It can fund open items of that category across Channels in the
+          same Event or shared items, but cannot buy physical rewards.
         </p>
         <p>
           <Term>Unused pool money</Term> is unallocated poll or goal Pool budget, not donor credit.
-          Staff assign the whole available category amount, with a server preview. Undo is available
-          only while the target remains open; an admin can use the ordinary reversal otherwise.
+          Staff assign the whole available category amount to an own-Channel or shared target, with
+          a server preview. Undo is available only while the target remains open; an admin can use
+          the ordinary reversal otherwise.
         </p>
         <p>
           <Term>Default goal list</Term> is an ordered list of own-Channel or shared goals. The
@@ -672,7 +674,10 @@ export default function StaffHelp({ role }: { role: Role }) {
           <li>
             Review the submitted text against the blocked-words policy and content guidelines.
           </li>
-          <li>Click Approve to activate the option, or Reject to refund the donor.</li>
+          <li>
+            Click Approve to activate the option, or Reject to reverse its funding. Pooled funding
+            returns poll Pool credit; legacy funding returns Wallet credit, not a Payment refund.
+          </li>
         </ol>
 
         <p className="pt-2">
