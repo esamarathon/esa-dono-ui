@@ -371,9 +371,11 @@ schema. Follow the guard below before considering a backup restore; otherwise fi
 ### Amount-first transition: one release between Events
 
 This is an operator procedure, **not authorization to deploy**. Rehearse on a disposable
-copy first. Ship the complete pooled release, not individual slices. The unresolved cold
-cross-Channel Kollekt hydration acceptance is a release HOLD: do not prewarm caches,
-widen producer lists, reassign donations or drop assertions to make it pass.
+copy first. Ship the complete pooled release, not individual slices. Cold/warm cross-Channel
+Kollekt hydration requires the coordinated PR44 fix and scoped ESA lookup described in
+`docs/api-consumers.md`; ordinary own/shared lists stay unchanged. Until the actual pinned
+runtime report and final release review pass, release acceptance is **PENDING**. Do not
+prewarm caches, widen producer lists, reassign donations or drop assertions to clear a HOLD.
 
 Tools: `server/scripts/transition-cli.ts --help` (run with `node --import tsx` from
 the release root). They never load `.env` or default to `DATABASE_URL`. Every operation
@@ -565,8 +567,10 @@ Do not change shared build/CI configuration or sibling source. Run the patched
 The staging probe refuses defaults and mismatched project labels before reading a key.
 No live-looking default containers, reused overlays, schedules or deployment APIs are
 allowed. Tear down only that project/volumes and its private engine socket/helpers.
-Report producer/overlay gates, baseline Kollekt target-value limitations and the cold
-cross-Channel HOLD separately; a partial matrix is **not full E2E success**.
+Record exact producer, Kollekt and overlay source/image hashes and actual results for
+public and direct callers, browser/staff workflows, per-target allocation values, repeated
+updates and cold/warm cross-Channel hydration. Keep unrun/failed gates explicit; a partial
+matrix, unit tests or an applied caller patch is **not full E2E success**.
 
 ### Rollback without erasing writes
 

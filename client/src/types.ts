@@ -42,8 +42,8 @@ export interface DonationRecord {
   donor_name?: string | null;
   created_at: string;
   donor?: { email?: string } | null;
-  // Which channel this donation was routed to, or null/absent for a shared
-  // (unscoped) donation (#53).
+  // Which Channel this donation was routed to, or null/absent while unassigned.
+  // Only incentives are shared; an unassigned donation has no routing yet.
   channel?: { id: string; name: string } | null;
 }
 

@@ -8,13 +8,20 @@ Visit `/admin/simulate` (nav label "add donation"), fill in donor email + amount
 
 ## Option B — curl (direct webhook POST)
 
-When `STRIPE_WEBHOOK_SECRET` is unset, HMAC verification is skipped:
+On a disposable local backend only, when `STRIPE_WEBHOOK_SECRET` is unset, HMAC
+verification is skipped. A completed notification still needs `status: complete` and
+`payment_status: paid`; the message type alone is not proof of payment:
 
 ```bash
 curl -X POST http://localhost:3001/api/webhooks/stripe \
   -H "Content-Type: application/json" \
-  -d '{"type":"checkout.session.completed","data":{"object":{"id":"cs_test_123","amount_total":1000,"customer_details":{"email":"test@example.com","name":"Test"}}}}'
+  -d '{"type":"checkout.session.completed","data":{"object":{"id":"cs_test_123","status":"complete","payment_status":"paid","amount_total":1000,"total_details":{"amount_shipping":0},"customer_details":{"email":"test@example.com","name":"Test"}}}}'
 ```
+
+This tokenless example creates a legacy donation without Pools. It does not exercise
+Stripe or pooled checkout: a pooled webhook must name the exact persisted Session and
+pledge token. Use the admin simulated-intake boundary below for pooled fixtures, not
+fabricated unbound Stripe Sessions.
 
 ## Option C — Admin API
 
@@ -78,7 +85,9 @@ is checked by `GET /api/pledge/:token` (`POOLED` + `FULFILLED`), never by obsole
 `total_cents`/discount fields or a zero-charge estimate. A 409 is logged for correction,
 not silently reconfirmed. The simulator does not complete Stripe or release Wallet
 holds; an OPEN pledge keeps held funding until checkout reconciliation proves non-payment.
-Do not run this intermediate branch against a deployment; #186/#187/#194 complete the release.
+Run only against an explicitly owned test/demo target. The complete release, coordinated
+callers and consumer acceptance are separate gates in `docs/deployment.md`; a simulator
+run is not Stripe, browser or combined-consumer runtime proof.
 
 `--traffic phased` (default) adds seeded quiet/normal/busy periods; `--traffic steady` retains constant-rate exponential delays. The phases are normalized to preserve the expected mean waiting time specified by `--rate`. Execution remains serial, so HTTP latency adds to run duration. Changing traffic mode does not change the non-timing decisions.
 

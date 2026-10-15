@@ -48,9 +48,14 @@ cross-Channel metadata. Donation source Channel routing, money and ids never cha
 
 Existing Channel lists remain own plus shared; Event incentive lists remain `[]`.
 Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
-Event or another Channel's poll). Nothing changes overlay list scope. The matching
-Kollekt transport/ingestion fix is coordinated separately; this producer addition alone
-does not establish combined-consumer release readiness.
+Event or another Channel's poll). Nothing changes overlay list scope. The focused
+[Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a
+coordinated dependency for cold/stale cross-Channel hydration, not an optional operator
+briefing. It retains verified incentive ownership, consumes supplied per-target allocation
+values and preserves processed claim state on donation replacement. The original PRD's
+"no consumer change" assumption does not cover this case. Producer/unit/wire tests alone
+do not establish combined-consumer release readiness: cold and warm runtime checks must
+use pinned source/image revisions without prewarming, list widening or donation rerouting.
 
 ## Test and staging tooling (parent folder)
 
@@ -179,6 +184,14 @@ Pooled row reversals create category Pool credit (donor/auto) or computed Unused
 (moderator), never Wallet credit. Legacy rows retain one-to-one Wallet refunds at recorded
 prices. Goal completion is recomputed against its target after ordinary reversals; chargebacks
 keep completed goals complete. Shared services and moderator responses never include donor email.
+
+Pool credit is combined per category across the donor's source donations in one Event,
+with own-Event/all-Channel and shared targets. Draws use oldest donation first. Canonical
+`PoolCreditRedemption` rows can fund one whole reward claim from several donations; a null
+claim donation id is not proof of legacy Wallet spending. Effective component funding is
+original consumption minus audited refund reduction. Native allocations show source-local
+shares, while Tiltify carries the whole claim once under its stable oldest-source carrier.
+Reversal restores original grants. This does not widen ordinary incentive list scope.
 
 Native `donation.created` adds status, pledge amount, Wallet funding and live `allocations`
 with source. New `donation.updated` carries the same full safe data and requires explicit
