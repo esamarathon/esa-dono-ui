@@ -54,7 +54,7 @@ export default function Home() {
           className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
           style={{ background: 'var(--d-yellow)' }}
         >
-          contribute now
+          donate now
         </Link>
       </div>
     </div>
