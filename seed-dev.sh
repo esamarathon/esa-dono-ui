@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seed a running esa-dono-ui backend with demo data: channels, rewards,
+# Seed a running esa-dono-ui backend with demo data: an Event, Channels, rewards,
 # auctions, polls, goals, donations, claims, votes, and contributions.
 #
 # Every incentive type (rewards, auctions, polls, goals) is seeded with at
@@ -30,7 +30,7 @@
 # Secrets are not printed: output often lands in logs (the nightly reset runs
 # under systemd, so it goes to the journal). The admin key is masked, and the
 # demo wallet magic links are shown only on an interactive terminal.
-set -e
+set -eo pipefail
 
 BASE=${1:-http://localhost:3001}
 CLIENT=${2:-http://localhost:5173}
@@ -77,17 +77,32 @@ IMG_AUCTION_STREAM=$(upload_image "auction-stream" "UklGRvwAAABXRUJQVlA4IPAAAADw
 echo "   6 test images uploaded."
 
 # --- Channels ---
-# Channels replace the former "events": a donation routes to exactly one
-# channel, and incentives are either shared (no channel_id) or channel-scoped.
-echo "==> Creating channels..."
-C_MAIN=$(curl -sf -X POST $BASE/api/admin/channels \
-  -H "Content-Type: application/json" -H "$AUTH" \
-  -d '{"name":"Main Marathon","slug":"main-marathon","is_active":true}' | jq -r .id)
+# Reuse the migration's Default Event, or create it on a schema-only database.
+# Name the parent explicitly: channel creation cannot infer it with 0 or 2+ Events.
+echo "==> Preparing Event and Channels..."
+EVENT=$(curl -sf "$BASE/api/admin/events" -H "$AUTH" \
+  | jq -r '.[] | select(.slug == "default-event") | .id')
+if [ -z "$EVENT" ]; then
+  EVENT=$(curl -sf -X POST "$BASE/api/admin/events" \
+    -H "Content-Type: application/json" -H "$AUTH" \
+    -d '{"name":"Default Event","slug":"default-event"}' | jq -er .id)
+fi
 
-C_BONUS=$(curl -sf -X POST $BASE/api/admin/channels \
+C_MAIN=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d '{"name":"Bonus Stream","slug":"bonus-stream","is_active":true}' | jq -r .id)
+  -d "{\"name\":\"Main Marathon\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
 
+C_BONUS=$(curl -sf -X POST "$BASE/api/admin/channels" \
+  -H "Content-Type: application/json" -H "$AUTH" \
+  -d "{\"name\":\"Bonus Stream\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
+
+# Activate before incentives/donations, not in the later accounts/banner seed.
+curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \
+  -H "Content-Type: application/json" -H "$AUTH" \
+  -d "{\"primary_channel_id\":\"$C_MAIN\",\"is_active\":true}" \
+  | jq -e --arg primary "$C_MAIN" '.is_active == true and .primary_channel_id == $primary' >/dev/null
+
+echo "   Event: $EVENT (Default Event; active)"
 echo "   Channels: $C_MAIN (Main Marathon) $C_BONUS (Bonus Stream)"
 
 # --- Rewards ---

@@ -13,11 +13,112 @@ import pledgeRouter from '../../routes/pledge.js';
 import rewardsRouter from '../../routes/rewards.js';
 import pollsRouter from '../../routes/polls.js';
 import goalsRouter from '../../routes/goals.js';
+import eventsRouter from '../../routes/events.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 const exec = promisify(execFile);
 afterAll(() => prisma.$disconnect());
+
+it('the demo bootstrap creates an active public Event with both Channels before seeding incentives', async () => {
+  const original = await prisma.event.findUnique({ where: { slug: 'default-event' } });
+  const other = await prisma.event.create({
+    data: { name: 'Another Event', slug: `another-${crypto.randomUUID()}` },
+  });
+  const app = express();
+  app.use(express.json());
+  app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  app.use('/api/admin', adminRouter);
+  app.use('/api/events', eventsRouter);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+  try {
+    const source = await readFile(new URL('../../../seed-dev.sh', import.meta.url), 'utf8');
+    const shell =
+      source.slice(0, source.indexOf('# --- Test images ---')) +
+      source.slice(source.indexOf('# --- Channels ---'), source.indexOf('# --- Rewards ---'));
+    await exec('bash', ['-c', shell, 'seed-dev.sh', `http://127.0.0.1:${address.port}`], {
+      env: { ...process.env, ADMIN_API_KEY: 'test-admin-key' },
+    });
+    const response = await request(app).get('/api/events');
+    expect(response.status).toBe(200);
+    const event = await prisma.event.findUniqueOrThrow({ where: { slug: 'default-event' } });
+    const channels = await prisma.channel.findMany({
+      where: { slug: { in: ['main-marathon', 'bonus-stream'] } },
+    });
+    expect(channels).toHaveLength(2);
+    expect(channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ slug: 'main-marathon', event_id: event.id, is_active: true }),
+        expect.objectContaining({ slug: 'bonus-stream', event_id: event.id, is_active: true }),
+      ]),
+    );
+    const main = channels.find((channel) => channel.slug === 'main-marathon')!;
+    expect(event).toMatchObject({ is_active: true, primary_channel_id: main.id });
+    expect(response.body).toContainEqual(
+      expect.objectContaining({
+        id: event.id,
+        primary_channel_id: main.id,
+        channels: expect.arrayContaining([
+          expect.objectContaining({ slug: 'main-marathon' }),
+          expect.objectContaining({ slug: 'bonus-stream' }),
+        ]),
+      }),
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await prisma.event.updateMany({
+      where: { slug: 'default-event' },
+      data: {
+        is_active: original?.is_active ?? false,
+        primary_channel_id: original?.primary_channel_id ?? null,
+      },
+    });
+    await prisma.channel.deleteMany({ where: { slug: { in: ['main-marathon', 'bonus-stream'] } } });
+    await prisma.event.delete({ where: { id: other.id } });
+    if (!original) await prisma.event.deleteMany({ where: { slug: 'default-event' } });
+  }
+});
+
+it.each([503, 200])(
+  'the demo bootstrap fails on an unusable Channel response (HTTP %i)',
+  async (status) => {
+    const app = express();
+    app.get('/api/health', (_req, res) => res.json({ ok: true }));
+    app.get('/api/admin/events', (_req, res) =>
+      res.json([{ slug: 'default-event', id: 'demo-event' }]),
+    );
+    app.post('/api/admin/channels', (_req, res) =>
+      res.status(status).json({ error: 'Channel unavailable' }),
+    );
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+    try {
+      const source = await readFile(new URL('../../../seed-dev.sh', import.meta.url), 'utf8');
+      const shell =
+        source.slice(0, source.indexOf('# --- Test images ---')) +
+        source.slice(source.indexOf('# --- Channels ---'), source.indexOf('# --- Rewards ---'));
+      await expect(
+        exec('bash', ['-c', shell, 'seed-dev.sh', `http://127.0.0.1:${address.port}`], {
+          env: { ...process.env, ADMIN_API_KEY: 'test-admin-key' },
+        }),
+      ).rejects.toMatchObject({
+        code: expect.any(Number),
+        stdout: expect.not.stringContaining('   Channels:'),
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  },
+);
 
 it('the exact demo claim/vote/contribution/summary shell completes with a cash-funded physical pledge, never a Wallet bypass', async () => {
   const main = await createTestChannel(prisma);

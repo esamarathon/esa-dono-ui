@@ -35,14 +35,14 @@
 #                (default http://localhost:3001)
 #     CLIENT     frontend base URL for magic links
 #                (default http://localhost:5173, only used in echoed output)
-#     ADMIN_KEY  admin API key (default $ADMIN_API_KEY or "change-me")
+#     ADMIN_KEY  admin API key (default $ADMIN_API_KEY; required)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 BASE=${1:-http://localhost:3001}
 CLIENT=${2:-http://localhost:5173}
-KEY=${3:-${ADMIN_API_KEY:-change-me}}
+KEY=${3:-${ADMIN_API_KEY:-}}
 COMPOSE="docker compose"
 SEED_HELPER_IMAGE="debian:12-slim" # has bash; curl+jq installed on the fly
 
@@ -52,6 +52,33 @@ if [ "${DEMO_RESET_ALLOWED:-}" != "1" ]; then
   echo "This script runs 'docker compose down -v' (destroys the DB volume)." >&2
   echo "Set DEMO_RESET_ALLOWED=1 only on the demo host." >&2
   exit 1
+fi
+
+# A manual invocation does not inherit systemd's EnvironmentFile. Never wipe
+# the database and then discover that the seed used a guessed admin key.
+if [ -z "$KEY" ]; then
+  echo "REFUSING to reset: ADMIN_API_KEY (or the third argument) is required." >&2
+  echo "For the configured staging environment, run: sudo systemctl start demo-reset.service" >&2
+  exit 1
+fi
+
+# Validate the supplied credential against the running backend before teardown.
+# Run inside it so this also works when no backend port is published to the host.
+if [ -n "$($COMPOSE ps -q dono-backend)" ]; then
+  echo "==> Checking admin authentication before reset"
+  if ! ADMIN_API_KEY="$KEY" $COMPOSE exec -T -e ADMIN_API_KEY dono-backend node --input-type=module -e '
+    const response = await fetch("http://127.0.0.1:3001/api/admin/events", {
+      headers: { Authorization: `Bearer key_admin_${process.env.ADMIN_API_KEY}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      console.error(`Admin API preflight failed (HTTP ${response.status})`);
+      process.exit(1);
+    }
+  '; then
+    echo "REFUSING to reset: admin API authentication check failed; no data was deleted." >&2
+    exit 1
+  fi
 fi
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
