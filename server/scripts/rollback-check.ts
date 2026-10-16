@@ -35,7 +35,11 @@ export async function captureCheckpoint(db: Reader, backupAt: Date): Promise<Che
         const date =
           value instanceof Date
             ? value
-            : new Date(typeof value === 'bigint' || typeof value === 'number' ? Number(value) : String(value));
+            : new Date(
+                typeof value === 'bigint' || typeof value === 'number'
+                  ? Number(value)
+                  : String(value),
+              );
         return Number.isFinite(date.getTime()) && date > backupAt;
       }),
     ).length;

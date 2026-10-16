@@ -69,12 +69,10 @@ router.post('/', async (req: Request, res: Response) => {
     });
   } catch (err) {
     const error = err as Error & { status?: number; plan?: PledgePlan; items?: unknown };
-    res
-      .status(error.status || 500)
-      .json({
-        error: error.message,
-        ...(error.plan ? { plan: error.plan, items: error.items } : {}),
-      });
+    res.status(error.status || 500).json({
+      error: error.message,
+      ...(error.plan ? { plan: error.plan, items: error.items } : {}),
+    });
   }
 });
 

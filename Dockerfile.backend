@@ -61,6 +61,11 @@ RUN --mount=type=cache,target=/root/.npm,id=npm \
 # ---------- Test target (distributed testing / CI) ----------
 FROM deps AS test
 
+# Shell-seed integration tests run the real scripts, which require curl and jq.
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends curl jq \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=test \
     DATABASE_URL="file:/app/server/prisma/dev.db" \
     PATH="/app/node_modules/.bin:${PATH}"
