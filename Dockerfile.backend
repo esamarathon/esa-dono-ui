@@ -62,21 +62,13 @@ RUN --mount=type=cache,target=/root/.npm,id=npm \
 FROM deps AS test
 
 ENV NODE_ENV=test \
-    DATABASE_URL="file:/app/server/prisma/dev.db" \
     PATH="/app/node_modules/.bin:${PATH}"
 
 COPY --chown=dono:dono . .
 
-# NOTE: DATABASE_URL must point at the exact path server/vitest.config.ts
-# forces at test-run time (file:<server>/prisma/dev.db). The prisma CLI
-# resolves a *relative* sqlite URL against the schema file's directory, but
-# a generated PrismaClient (as used by vitest) resolves it against
-# process.cwd() instead — an absolute path here sidesteps that mismatch by
-# being unambiguous for both. If this ever drifts from vitest.config.ts's
-# DATABASE_URL again, every test hits "table does not exist" (P2021)
-# because db push wrote the schema to a different file than tests open.
-RUN DATABASE_URL="file:/app/server/prisma/dev.db" npx prisma generate --schema=./server/prisma/schema.prisma \
-  && DATABASE_URL="file:/app/server/prisma/dev.db" npx prisma db push --accept-data-loss --schema=./server/prisma/schema.prisma \
+# Server tests create and migrate their own temp SQLite DB per run
+# (server/test/global-setup.ts), so no database is prepared here.
+RUN npx prisma generate --schema=./server/prisma/schema.prisma \
   && chown -R dono:dono /app
 
 USER dono
