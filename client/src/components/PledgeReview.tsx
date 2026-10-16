@@ -70,8 +70,7 @@ export default function PledgeReview({
           )}
           {category === 'poll' && plan.usage_cents.poll === 0 && (
             <p className="font-body text-sm text-off-white/55">
-              Unused poll money: {fmt(plan.pledge_amount_cents)} reserved for a moderator. Polls
-              have no default.
+              Unused poll money: {fmt(plan.pledge_amount_cents)}. Polls have no default.
             </p>
           )}
           {category === 'goal' && plan.usage_cents.goal === 0 && (
@@ -84,14 +83,17 @@ export default function PledgeReview({
                 : previewError
                   ? ' (live preview unavailable)'
                   : ' (now: no eligible goal; Unused pool money)'}
-              . The ordered Default goal list, then the primary Channel list, then closest
-              own/shared goal are checked again when your payment completes.
+              . The destination may change when your payment completes.
+            </p>
+          )}
+          {category !== 'reward' && plan.usage_cents[category] > 0 && (
+            <p className="font-body text-sm text-off-white/55">
+              Selections are subject to availability when payment completes.
             </p>
           )}
           {category !== 'reward' && (
             <p className="font-body text-sm text-off-white/55">
-              Eligibility is checked again when your payment completes. Unused pool money stays
-              reserved, not spendable Wallet credit.
+              Unused pool money does not become spendable Wallet credit.
             </p>
           )}
         </section>

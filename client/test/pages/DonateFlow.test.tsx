@@ -211,6 +211,45 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.queryByText(/Wallet credit returned/i)).not.toBeInTheDocument();
   });
 
+  it('keeps empty poll review customer-facing without staff reservation details', async () => {
+    save(saved({ amountCents: 5000 }));
+    renderAt();
+    const polls = await screen.findByRole('region', { name: 'polls review' });
+    expect(polls).toHaveTextContent('Unused poll money: $50.00. Polls have no default.');
+    expect(polls).toHaveTextContent('Unused pool money does not become spendable Wallet credit.');
+    expect(polls).not.toHaveTextContent(/moderator|reserv|eligibility|subject to availability/i);
+  });
+
+  it('shows the availability notice only for selected goals, not empty polls', async () => {
+    save(
+      saved({
+        selections: [
+          {
+            kind: 'GOAL',
+            target_id: 'g1',
+            label: 'Glitch run',
+            amount_cents: 200,
+            insertion_order: 0,
+          },
+        ],
+      }),
+    );
+    vi.mocked(getGoals).mockResolvedValue([
+      { id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
+    ]);
+    renderAt();
+    const goals = await screen.findByRole('region', { name: 'fund goals review' });
+    await waitFor(() =>
+      expect(goals).toHaveTextContent(
+        'Selections are subject to availability when payment completes.',
+      ),
+    );
+    expect(goals).not.toHaveTextContent('The destination may change');
+    expect(screen.getByRole('region', { name: 'polls review' })).not.toHaveTextContent(
+      /eligibility|subject to availability/i,
+    );
+  });
+
   it('browses tabs freely with three meters, an overage and an explicit raise action', async () => {
     vi.mocked(getRewards).mockResolvedValue([{ ...reward, cost_cents: 2500 }]);
     renderAt();
@@ -267,7 +306,15 @@ describe('amount-first donate through the routed flow', () => {
     await waitFor(() => expect(polls).toHaveTextContent('$2.00 + $8.00'));
     expect(polls).toHaveTextContent('auto (locked) — topped up in proportion');
     expect(within(polls).queryByRole('button')).not.toBeInTheDocument();
+    expect(polls).toHaveTextContent(
+      'Selections are subject to availability when payment completes.',
+    );
     expect(await screen.findByText(/now: Glitch run/)).toBeInTheDocument();
+    const goals = screen.getByRole('region', { name: 'fund goals review' });
+    expect(goals).toHaveTextContent('The destination may change when your payment completes.');
+    expect(goals).not.toHaveTextContent(
+      /eligibility|subject to availability|ordered Default goal list/i,
+    );
   });
 
   it('recalculates Wallet credit on review and separates new money and shipping', async () => {
