@@ -61,11 +61,8 @@ export default function Navbar() {
         borderColor: 'rgba(239,238,236,.08)',
       }}
     >
-      <Link
-        to="/"
-        className="font-display text-2xl tracking-wide text-off-white no-underline uppercase"
-      >
-        esa dono
+      <Link to="/" className="shrink-0" aria-label="ESA home">
+        <img src="/brand/emblem-dark.svg" alt="ESA" width={40} height={40} />
       </Link>
       <NavLink
         to="/"

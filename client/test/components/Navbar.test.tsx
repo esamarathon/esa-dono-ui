@@ -67,6 +67,19 @@ describe('Navbar', () => {
     vi.mocked(getFeatureFlags).mockResolvedValue({});
   });
 
+  it('shows the dark-background ESA emblem linked to the homepage', async () => {
+    renderNavbar();
+
+    const homeLink = await screen.findByRole('link', { name: 'ESA home' });
+    expect(homeLink).toHaveAttribute('href', '/');
+    expect(homeLink).toContainElement(screen.getByRole('img', { name: 'ESA' }));
+    expect(screen.getByRole('img', { name: 'ESA' })).toHaveAttribute(
+      'src',
+      '/brand/emblem-dark.svg',
+    );
+    expect(screen.queryByText('esa dono')).not.toBeInTheDocument();
+  });
+
   it('shows a plain login link when no donor token is present', async () => {
     renderNavbar();
     expect(await screen.findByText('login')).toBeDefined();
