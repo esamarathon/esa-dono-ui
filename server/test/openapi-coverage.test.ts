@@ -155,6 +155,13 @@ function contractErrors(spec: unknown) {
 }
 
 describe('OpenAPI route coverage', () => {
+  it('publishes the current server package version', async () => {
+    const { default: yaml } = await import('js-yaml');
+    const spec = yaml.load(readFileSync(resolve(__dirname, '..', 'openapi.yaml'), 'utf8'));
+    const { version } = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8'));
+    expect(spec).toMatchObject({ info: { version } });
+  });
+
   it.each(['responses', 'schemas'] as const)(
     'publishes valid parsed OpenAPI 3.0 %s object fields',
     async (kind) => {

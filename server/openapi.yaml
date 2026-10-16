@@ -75,7 +75,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '1.0.0'
+  version: '0.3.0'
 
 servers:
   - url: /api

@@ -7,9 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
-## [0.3.0] — 2026-10-15
-
-Amount-first donations with independent incentive Pools (#151, PRD-0003).
+Planned version: **0.3.0** — amount-first donations with independent incentive Pools
+(#151, PRD-0003).
 
 **Release preparation only.** Kollekt claim retirement and prompter rendering remain
 release blockers, and the corrected browser matrix must be rerun. This version bump
@@ -74,6 +73,12 @@ does not clear those gates or authorize deployment.
 - Incentive titles, prices, targets, Channel IDs and stock are validated. Allocation
   history protects deletion, Channel moves and reward-type changes. Goal completion
   is derived, not manually toggled.
+- The homepage fundraising summary uses larger text and wraps totals. Donation links
+  say "donate" and "donate now".
+- The navbar uses the dark-background ESA emblem instead of "ESA DONO", retaining
+  an accessible homepage link.
+- Pledge review shows availability notices only for selected poll/goal incentives
+  and simplifies unused-Pool explanations.
 
 ### Fixed
 
@@ -87,17 +92,24 @@ does not clear those gates or authorize deployment.
   fulfillment safely redistributes selections invalidated by live text policy.
 - Staff immediately see definite Stripe refund rejection reasons. Moderator/shared
   responses retain the donor-email privacy boundary.
-- Published OpenAPI response/schema descriptions parse correctly and distinguish
-  pooled remedies from legacy Wallet credit.
-
-## [0.2.1] — 2026-10-13
-
-### Fixed
-
+- Published OpenAPI response/schema descriptions parse correctly, distinguish
+  pooled remedies from legacy Wallet credit and support nullable enum values.
+  The API document version matches the server package version.
 - Rejected async route and middleware handlers no longer crash the backend (#175).
   Failing requests return an error status, unexpected 500s use a generic message,
   and the server continues serving requests. Deletes with allocation history return
-  500 until the incentive lifecycle rules are implemented.
+  409 with guidance to deactivate instead.
+- Demo seeding creates or reuses the Default Event, attaches both Channels and
+  activates routing before donations. Failed bootstrap requests stop the script.
+- Demo reset requires an explicit admin credential and checks it before deleting
+  data when a backend container already exists.
+- Backend test images include curl and jq for shell-seed integration tests; these
+  tools are not added to the runtime image.
+
+### Security
+
+- Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
+  libvips dependencies.
 
 ## [0.2.0] — 2026-09-29
 
@@ -286,8 +298,6 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.3.0...HEAD
-[0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
-[0.2.1]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.1
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.0...HEAD
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0
