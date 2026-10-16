@@ -3,6 +3,30 @@ import prisma from '../lib/prisma.js';
 import { httpError } from '../lib/httpError.js';
 import { assertUsableSlug, availableSlugFrom } from '../lib/slugs.js';
 import { activeEventWithPrimary } from './events.js';
+import { defaultGoal } from './defaultGoal.js';
+
+/** Live staff editor projection; uses the fulfillment resolver, never private donor data. */
+export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
+  const channels = await tx.channel.findMany({
+    orderBy: { created_at: 'asc' },
+    include: { default_goals: { orderBy: { position: 'asc' }, include: { goal: true } } },
+  });
+  const goal = async (id: string | null) =>
+    id ? tx.fundGoal.findUnique({ where: { id }, select: { id: true, title: true } }) : null;
+  return Promise.all(
+    channels.map(async (channel) => ({
+      ...channelResponse(channel),
+      default_goal: await goal(await defaultGoal(tx, channel.id)),
+      fallback_goal: await goal(await defaultGoal(tx, channel.id, true)),
+      has_eligible_default: channel.default_goals.some(
+        ({ goal }) =>
+          goal.is_active &&
+          !goal.is_complete &&
+          (goal.channel_id === null || goal.channel_id === channel.id),
+      ),
+    })),
+  );
+}
 
 /**
  * Channel create / update / deactivate, shared by the admin and moderator routes.
@@ -14,6 +38,13 @@ export interface ChannelInput {
   slug?: unknown;
   event_id?: unknown;
   is_active?: unknown;
+  /** Update only: ordered goal ids (own or shared), including ineligible entries. */
+  default_goals?: unknown;
+}
+
+/** Public identity projection; never traverses donors or allocation actors. */
+export function channelResponse<T extends { default_goals: { goal_id: string }[] }>(channel: T) {
+  return { ...channel, default_goals: channel.default_goals.map((entry) => entry.goal_id) };
 }
 
 /** Map a Prisma unique-constraint error to a 409 (the slug check can race with another writer). */
@@ -116,7 +147,33 @@ export async function updateChannel(id: string, input: ChannelInput) {
       if (movingEvent) data.event_id = await resolveEventId(tx, eventId);
       if (isActive !== undefined) data.is_active = isActive;
 
-      return tx.channel.update({ where: { id }, data });
+      if (input.default_goals !== undefined) {
+        const ids = input.default_goals;
+        if (
+          !Array.isArray(ids) ||
+          ids.some((goalId) => typeof goalId !== 'string') ||
+          new Set(ids).size !== ids.length
+        ) {
+          throw httpError(400, 'default_goals must be an ordered list of unique goal ids');
+        }
+        for (const goalId of ids) {
+          const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
+          if (!goal || (goal.channel_id !== null && goal.channel_id !== id)) {
+            throw httpError(400, 'Default goals must belong to this Channel or be shared');
+          }
+        }
+        await tx.channelDefaultGoal.deleteMany({ where: { channel_id: id } });
+        await tx.channelDefaultGoal.createMany({
+          data: ids.map((goalId, position) => ({ channel_id: id, goal_id: goalId, position })),
+        });
+      }
+      return channelResponse(
+        await tx.channel.update({
+          where: { id },
+          data,
+          include: { default_goals: { orderBy: { position: 'asc' } } },
+        }),
+      );
     });
   } catch (e) {
     throw uniqueConflict(e) ?? e;

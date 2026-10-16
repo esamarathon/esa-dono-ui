@@ -2,7 +2,7 @@
 
 Admins configure **Destinations** at `/admin/destinations`. A Destination receives a **webhook message** when something happens on the platform: a new donation, a moderation change, or an incentive change (create, enable, disable, value change) for rewards, polls and goals. Vocabulary: see [`CONTEXT.md`](../CONTEXT.md).
 
-**Message types:** `donation.created`, `donation.moderated`, `donation.hidden`, `donation.unhidden`, `incentive.created`, `incentive.enabled`, `incentive.disabled`, `incentive.value_changed`, plus `ping` from the admin "Test ping" button.
+**Message types:** `donation.created`, `donation.updated`, `donation.moderated`, `donation.hidden`, `donation.unhidden`, `incentive.created`, `incentive.enabled`, `incentive.disabled`, `incentive.value_changed`, plus `ping` from the admin "Test ping" button.
 
 Each Destination picks a transport:
 
@@ -14,23 +14,29 @@ Each Destination picks a transport:
 Each Destination also picks a **payload format**. Design: [ADR-0009](adr/0009-tiltify-compatible-messages.md).
 
 - **Native** (default). The envelope `{ id, type, created_at, data }`, one message type per change, filtered by the Destination's `event_types`, sent with its routing key.
-  - `donation.created` carries `donation_id`, `external_id`, `amount_cents`, `channel_id`, `event_id`, `donor_ref`, `donor_name`, `donor_comment` and `hidden_from_overlay`.
+  - `donation.created` carries `donation_id`, `external_id`, `amount_cents` (new money), `status`, nullable `pledge_amount_cents`, `wallet_applied_cents`, `channel_id`, `event_id`, `donor_ref`, `donor_name`, `donor_comment`, `hidden_from_overlay` and `allocations`.
+  - **`donation.updated` is opt-in**, through an explicit `event_types` subscription. No existing Destination is changed automatically. It carries the same full current `data` as creation. Replace the stored state by `donation_id`, not by adding allocation deltas. It is queued only when this stable content changes, not because a new message id or timestamp was generated.
+  - `allocations` has `reward`, `poll` and `goal` arrays, live rows only. Every row carries `id`, `amount_cents` and `source` (`donor`, `auto`, `moderator`; claims are always `donor`). Rewards add `reward_id` and claim `status`; polls add `poll_id`, `poll_option_id` and option `status` (pending write-ins included); goals add `goal_id`. No claim answers, email or staff identities are included.
+  - A credit-funded reward remains one whole claim even when several donations fund it. Its `amount_cents` is this source donation's effective share, not the whole price; `entitlement_amount_cents` and `carrier_donation_id` identify the full recorded price and stable oldest-source carrier. The same claim id can therefore appear in several native donation states: count the entitlement once, not once per funding component. Payment-refund reductions change effective funding without multiplying or cancelling other reward entitlements.
   - `donor_name` and `donor_comment` are the donor's public display data. They are null while the donation is hidden from the overlay.
   - `donation.hidden` / `donation.unhidden` are sent when a moderator hides or shows a donation.
   - Unassigned donations publish nothing until an admin assigns them.
   - `incentive.*` messages carry `channel_id`: the Channel the incentive belongs to, or null when every Channel shares it.
 - **Tiltify-compatible** (`TILTIFY`, RabbitMQ only). Bare Tiltify-v5 objects for kollekt and esa-layouts-v2, with no envelope. The Destination's event types and routing key are ignored. The exchange defaults to `tiltify` and is declared `topic, durable, autoDelete`.
 
-  | Routing key               | Body                                                                                                                                                                                                     | Sent when                                                               |
-  | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-  | `<channel-slug>.donation` | the donation: `id`, `amount {currency, value, value_cents}`, `donor_name`, `donor_comment`, `created_at`, `completed_at`, `campaign_id` (Channel), `team_event_id` (Event), incentive scalars and arrays | created, assigned, hidden, shown again                                  |
-  | `<slug>.fact.updated`     | `{ id, slug, name, total_amount_raised: {currency, value} }`                                                                                                                                             | created, assigned, chargeback: once for the Channel, once for its Event |
+  | Routing key               | Body                                                                                                                                                                                                     | Sent when                                                                        |
+  | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+  | `<channel-slug>.donation` | the donation: `id`, `amount {currency, value, value_cents}`, `donor_name`, `donor_comment`, `created_at`, `completed_at`, `campaign_id` (Channel), `team_event_id` (Event), incentive scalars and arrays | introduced or changed public content (including reversals and write-in approval) |
+  | `<slug>.fact.updated`     | `{ id, slug, name, total_amount_raised: {currency, value} }`                                                                                                                                             | counted money changes: once per affected Channel and Event                       |
   - `amount.value` is a string with two decimals.
   - A hidden donation is sent as `donor_name: "Anonymous"`, `donor_comment: null`, **without `completed_at`**. The overlay removes it, and an overlay that never saw it stays silent.
   - **`"Anonymous"` consequence:** a donor without a display name is also sent as `"Anonymous"`. The overlay therefore removes an anonymous donation after **any** republish of it: hide, show again, or an admin requeue. The fix is on the overlay side (esa-layouts-v2#5).
   - Showing a donation again re-adds it to the overlay **and plays the alert**.
   - The `moderated` review toggle and incentive changes are not sent in this format. Consumers read incentives from the REST API.
-  - A refund goes to the donor's wallet, so the totals do not change. A chargeback lowers them.
+  - Every reversal, Pool credit spend, moderator assignment/undo and Payment refund calls the centralized publisher. A changed donation is re-published under the **same id**, excluding reversed rows. Identical Tiltify content is suppressed so staff actions do not replay alerts. The transition corrections are the only forced publications.
+  - `amount` is donation money, never the sum of incentive allocations. Scalars retain the first selection, lists the full set, and `target_contributions[].amount` is the goal allocation. Pooled donor/auto rows are combined per option/goal. Source and staff identity are never sent in this format. A $10 donation can back $10 in each of three categories while `amount` remains $10.
+  - A multi-source credit-funded reward appears once with quantity 1 under its stable oldest-source carrier donation. Donation `campaign_id`, money and ids stay source-routed even when the incentive belongs to another Channel; do not infer incentive ownership from the donation Channel.
+  - A Wallet refund keeps money counted; a chargeback removes the remaining money. Totals are compared by counted amount, not just status: a Payment refund and a failed Payment refund restored as Wallet credit change totals even while status stays `COMPLETED`. Acceptance of `pending`, `requires_action` or `succeeded` lowers counted money immediately, not on final settlement. `REQUESTED` claim locking and creation rejection/restoration change native claim status only; identical Tiltify content and unchanged totals are suppressed. Later `failed`/`canceled` settlement is flagged without automatic accounting repair; only explicit Wallet-credit resolution restores item money. Shipping is never included in money, Wallet or Pool totals.
 
 **Message identity.** Each message has one UUID, `message_id`, which is the AMQP `messageId`. For the native format it is also the envelope `id`. A requeue sends the same `message_id` again. Consumers deduplicate on it, or on the donation `id` (Tiltify consumers upsert by it).
 
@@ -41,7 +47,7 @@ No environment variables are needed. Destinations, secrets and RabbitMQ URLs are
 kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible messages** (a `TILTIFY` Destination, § Formats) and the **Tiltify-compatible REST API** at `<APP_BASE_URL>/api/tiltify/` ([ADR-0010](adr/0010-tiltify-compatible-rest-api.md)).
 
 - **REST API.** It serves bare Tiltify-v5 objects and needs no key. The global per-IP API limit applies (`RATE_LIMIT_API`, default 600/min). kollekt polls about 36 times/min per Channel.
-- **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same number as the `fact.updated` message.
+- **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same money total as the `fact.updated` message. Incentive totals are allocated amounts, not money totals; their sum may exceed money. Never reconcile incentive sums against donation money.
 - **Shared incentives** (no Channel) are listed under every Channel, and an Event lists none of its own.
 - **Always empty:** milestones and matches are `[]`.
 
@@ -56,7 +62,7 @@ A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Eve
 | esa-layouts-v2 | `tiltify.teamCampaign.{slug,id}`           | the Event's slug and uuid                                                                                |
 | esa-layouts-v2 | `tiltify.campaigns[].{slug,id,thisStream}` | each Channel's slug and uuid; `thisStream: true` on the one this layout instance shows                   |
 
-**Before two Channels of one Event take donations,** kollekt must look up incentives by id across campaigns (kollekt#36). Otherwise its sync of the second Channel fails on a duplicate key.
+**Coordinated consumer dependency:** pooled credit can attach another Channel's incentive to a source-routed donation. Cold or stale Kollekt caches therefore require the focused Kollekt [PR44](https://github.com/esamarathon/kollekt/pull/44) lookup/ingestion fix, in addition to global shared-id handling (kollekt#36). The authorized fix uses the optional same-Event/shared owner lookup in `docs/api-consumers.md`; ordinary Channel lists and poll detail remain own/shared, Event lists remain empty, and overlays do not gain foreign incentives. The bare Tiltify payload is unchanged, but an unqualified "no consumer change" claim is false for this case. Verify cold and warm hydration, allocation values and repeat-update claim preservation using pinned producer/consumer revisions before release. Unit/wire tests or prewarmed caches are not combined runtime acceptance.
 
 ## Delivery guarantees
 

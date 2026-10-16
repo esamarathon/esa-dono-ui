@@ -58,6 +58,10 @@ export default function ModeratorClaims() {
                   <p className="font-data text-xs text-off-white/55">
                     donor: {c.donor_name || 'Anonymous'}
                   </p>
+                  <p className="font-data text-xs text-off-white/55">
+                    Recorded allocation: ${(c.amount_cents / 100).toFixed(2)} (price now $
+                    {((c.reward?.cost_cents ?? 0) / 100).toFixed(2)})
+                  </p>
                   {name && (
                     <p className="font-data text-xs text-off-white/55">entered name: {name}</p>
                   )}

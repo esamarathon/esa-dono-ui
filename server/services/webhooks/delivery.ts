@@ -1,6 +1,9 @@
 import type { TiltifyMessage } from './tiltifyPayload.js';
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
+import type { readDonationAccountingTx } from '../poolAccounting.js';
+
+type NativeAllocations = Awaited<ReturnType<typeof readDonationAccountingTx>>['allocations'];
 
 /** A Destination's payload format (ADR-0009): our envelope, or bare Tiltify-v5 objects. */
 export const PAYLOAD_FORMATS = ['NATIVE', 'TILTIFY'] as const;
@@ -11,6 +14,7 @@ export const TILTIFY_DEFAULT_EXCHANGE = 'tiltify';
 
 export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
+  'donation.updated',
   'donation.moderated',
   'donation.hidden',
   'donation.unhidden',
@@ -34,6 +38,10 @@ export type WebhookPayloadDonationCreated = {
     donation_id: string;
     external_id: string;
     amount_cents: number;
+    status: string;
+    pledge_amount_cents: number | null;
+    wallet_applied_cents: number;
+    allocations: NativeAllocations;
     channel_id: string | null;
     event_id: string | null;
     donor_ref: string;
@@ -43,6 +51,9 @@ export type WebhookPayloadDonationCreated = {
     donor_comment: string | null;
     hidden_from_overlay: boolean;
   };
+};
+export type WebhookPayloadDonationUpdated = Omit<WebhookPayloadDonationCreated, 'type'> & {
+  type: 'donation.updated';
 };
 /** A moderator hid a donation from the overlay, or showed it again (PRD-0002 §N2, §T5–T6). */
 export type WebhookPayloadDonationVisibility = {
@@ -154,6 +165,7 @@ export type WebhookPayloadIncentiveValueChanged = {
 
 export type WebhookPayload =
   | WebhookPayloadDonationCreated
+  | WebhookPayloadDonationUpdated
   | WebhookPayloadDonationModerated
   | WebhookPayloadDonationVisibility
   | WebhookPayloadIncentiveCreated
@@ -284,6 +296,9 @@ export interface DonationForPayload {
   donor_name: string | null;
   comment: string | null;
   hidden_from_overlay: boolean;
+  status: string;
+  pledge_amount_cents: number | null;
+  wallet_applied_cents: number;
 }
 
 /**
@@ -291,25 +306,49 @@ export interface DonationForPayload {
  * never the donor's email. A donation already hidden from the overlay sends them as
  * null, so a moderator's decision holds downstream.
  */
+export function buildDonationStateData(
+  donation: DonationForPayload,
+  allocations: NativeAllocations,
+): WebhookPayloadDonationCreated['data'] {
+  const hidden = donation.hidden_from_overlay;
+  return {
+    donation_id: donation.id,
+    external_id: donation.external_id,
+    amount_cents: donation.amount_cents,
+    status: donation.status,
+    pledge_amount_cents: donation.pledge_amount_cents,
+    wallet_applied_cents: donation.wallet_applied_cents,
+    allocations,
+    channel_id: donation.channel_id,
+    event_id: donation.event_id,
+    donor_ref: donation.donor_id,
+    donor_name: hidden ? null : donation.donor_name,
+    donor_comment: hidden ? null : donation.comment,
+    hidden_from_overlay: hidden,
+  };
+}
+
 export function buildDonationCreatedPayload(
   donation: DonationForPayload,
+  allocations: NativeAllocations = { reward: [], poll: [], goal: [] },
 ): WebhookPayloadDonationCreated {
-  const hidden = donation.hidden_from_overlay;
   return {
     id: crypto.randomUUID(),
     type: 'donation.created',
     created_at: new Date().toISOString(),
-    data: {
-      donation_id: donation.id,
-      external_id: donation.external_id,
-      amount_cents: donation.amount_cents,
-      channel_id: donation.channel_id,
-      event_id: donation.event_id,
-      donor_ref: donation.donor_id,
-      donor_name: hidden ? null : donation.donor_name,
-      donor_comment: hidden ? null : donation.comment,
-      hidden_from_overlay: hidden,
-    },
+    data: buildDonationStateData(donation, allocations),
+  };
+}
+
+/** Envelopes are generated only when queued, never compared as state. */
+export function buildDonationUpdatedPayload(
+  data: WebhookPayloadDonationCreated['data'],
+): WebhookPayloadDonationUpdated {
+  return {
+    id: crypto.randomUUID(),
+    type: 'donation.updated',
+    created_at: new Date().toISOString(),
+    data,
   };
 }
 

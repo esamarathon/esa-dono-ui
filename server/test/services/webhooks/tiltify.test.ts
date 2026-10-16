@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import adminRouter from '../../../routes/admin.js';
-import { createPledge } from '../../../services/pledge.js';
+import { createLegacyPledge as createPledge } from '../../helpers/fixtures.js';
+import { createPledge as createPooledPledge } from '../../../services/pledge.js';
+import { planPledge } from '@dono/shared';
+
+vi.mock('../../../services/email.js', () => ({
+  sendMagicLink: vi.fn().mockResolvedValue(undefined),
+}));
 
 /**
  * Golden contract tests for the Tiltify format (PRD-0002 §T, #116). The shapes here
@@ -103,6 +109,7 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       where: { destination_id: { in: ids.destinations } },
     });
     await prisma.webhookDestination.deleteMany({ where: { id: { in: ids.destinations } } });
+    await prisma.poolCredit.deleteMany({ where: { donation_id: { in: ids.donations } } });
     await prisma.rewardClaim.deleteMany({ where: { reward_id: { in: ids.rewards } } });
     // Everything a test donor created, before the donor itself (FKs).
     await prisma.pollCustomEntry.deleteMany({ where: { donor_id: { in: ids.donors } } });
@@ -202,6 +209,110 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     });
     return { donationId, reward, poll, goal, total: pledge.total_cents };
   }
+
+  it('keeps pooled incentive amounts separate from money and combines donor/auto provenance on the existing wire', async () => {
+    const reward = await prisma.reward.create({
+      data: { title: 'Pooled', type: 'DIGITAL', cost_cents: 1000 },
+    });
+    ids.rewards.push(reward.id);
+    const poll = await prisma.poll.create({
+      data: { title: 'Pooled poll', options: { create: [{ label: 'A' }] } },
+      include: { options: true },
+    });
+    ids.polls.push(poll.id);
+    const goal = await prisma.fundGoal.create({
+      data: { title: 'Pooled goal', target_cents: 10000 },
+    });
+    ids.goals.push(goal.id);
+    const items = [
+      {
+        kind: 'REWARD' as const,
+        target_id: reward.id,
+        unit_price_cents: 1000,
+        reward_type: 'DIGITAL',
+        amount_cents: 1000,
+        insertion_order: 0,
+      },
+      {
+        kind: 'POLL_VOTE' as const,
+        target_id: poll.options[0]!.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        insertion_order: 1,
+      },
+      { kind: 'GOAL' as const, target_id: goal.id, amount_cents: 100, insertion_order: 2 },
+    ];
+    const pledge = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channelId,
+      items,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        selections: items,
+        available_wallet_cents: null,
+      }),
+    });
+    ids.pledges.push(
+      (
+        await prisma.pendingPledge.findUniqueOrThrow({
+          where: { pledge_token: pledge.pledge_token },
+        })
+      ).id,
+    );
+    const before = await lastSeq(tiltifyDest);
+    const donationId = await donate({
+      email: `pooled-${rand()}@example.com`,
+      amount_cents: 1000,
+      pledge_token: pledge.pledge_token,
+    });
+    const d = nth(await messages(tiltifyDest, before), 0).body;
+    expect(d.amount).toEqual({ currency: 'USD', value: '10.00', value_cents: 1000 });
+    expect(d.reward_claims).toHaveLength(1);
+    expect(d.poll_votes).toEqual([{ poll_id: poll.id, poll_option_id: poll.options[0]!.id }]);
+    expect(d.target_contributions).toEqual([
+      { target_id: goal.id, amount: { currency: 'USD', value: '10.00' } },
+    ]);
+    expect(JSON.stringify(d)).not.toContain('source');
+    // One $10 payment backs $10 in EACH category, never $30 of money.
+    const donation = await prisma.donation.findUniqueOrThrow({ where: { id: donationId } });
+    const claim = await prisma.rewardClaim.findFirstOrThrow({ where: { donation_id: donationId } });
+    const afterCreation = await lastSeq(tiltifyDest);
+    await request(createApp())
+      .post(`/api/admin/donors/${donation.donor_id}/reverse-spend`)
+      .set(AUTH)
+      .send({ spend_type: 'claim', spend_id: claim.id })
+      .expect(200);
+    await request(createApp())
+      .post(`/api/admin/polls/options/${poll.options[0]!.id}/refund`)
+      .set(AUTH)
+      .expect(200);
+    await request(createApp()).post(`/api/admin/goals/${goal.id}/refund`).set(AUTH).expect(200);
+    const corrections = await messages(tiltifyDest, afterCreation);
+    expect(corrections.map((row) => row.message_type)).toEqual([
+      'tiltify.donation',
+      'tiltify.donation',
+      'tiltify.donation',
+    ]);
+    expect(corrections.map((row) => row.body.id)).toEqual([donationId, donationId, donationId]);
+    expect(nth(corrections, 2).body).toMatchObject({
+      amount: { value: '10.00' },
+      reward_id: null,
+      reward_claims: [],
+      poll_id: null,
+      poll_votes: [],
+      target_id: null,
+      target_contributions: [],
+    });
+    expect(JSON.stringify(corrections)).not.toContain('source');
+    expect(JSON.stringify(corrections)).not.toContain('allocated_by');
+    expect(await prisma.balanceAdjustment.count({ where: { donor_id: donation.donor_id } })).toBe(
+      0,
+    );
+    expect(await prisma.donor.findUnique({ where: { id: donation.donor_id } })).toMatchObject({
+      balance_remaining: 0,
+    });
+  });
 
   it('rejects TILTIFY on an HTTP Destination (§T1)', async () => {
     const res = await request(createApp()).post('/api/admin/destinations').set(AUTH).send({
@@ -391,6 +502,14 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     expect((await messages(nativeDest, nativeBefore)).map((m) => m.message_type)).toEqual([
       'donation.moderated',
     ]);
+    const repeatedAfter = await lastSeq(nativeDest);
+    await request(app)
+      .patch(`/api/moderator/donations/${donationId}`)
+      .set({ Authorization: 'Bearer key_admin_test-admin-key' })
+      .send({ moderated: true })
+      .expect(200);
+    expect(await messages(nativeDest, repeatedAfter)).toEqual([]);
+    expect(await messages(tiltifyDest, before)).toEqual([]);
   });
 
   it('a refund publishes nothing; a chargeback publishes lower totals (§T7, lib/donationTotals.ts)', async () => {
@@ -404,7 +523,20 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       amount_cents: 2500,
       channel_id: channelId,
     });
+    const zero = await donate({
+      email: `zero-${rand()}@example.com`,
+      amount_cents: 100,
+      channel_id: channelId,
+    });
+    // Zero-money donations cannot record a chargeback.
+    await prisma.donation.update({ where: { id: zero }, data: { amount_cents: 0 } });
     const beforeAll = await lastSeq(tiltifyDest);
+    await request(createApp())
+      .patch(`/api/admin/donations/${zero}/status`)
+      .set(AUTH)
+      .send({ status: 'CHARGEBACK' })
+      .expect(400);
+    expect(await messages(tiltifyDest, beforeAll)).toEqual([]);
 
     // A refund goes to the donor's wallet: the charity keeps the money, no total moves.
     await request(createApp())
@@ -538,11 +670,56 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       ).id,
     );
     const before = await lastSeq(tiltifyDest);
-    await donate({ email, amount_cents: pledge.total_cents, pledge_token: pledge.pledge_token });
+    const donationId = await donate({
+      email,
+      amount_cents: pledge.total_cents,
+      pledge_token: pledge.pledge_token,
+    });
     const d = nth(await messages(tiltifyDest, before), 0).body;
     expect(d.poll_votes).toEqual([]);
     expect(d.poll_id).toBeNull();
     expect(d.poll_option_id).toBeNull();
+
+    const entry = await prisma.pollCustomEntry.findFirstOrThrow({ where: { poll_id: poll.id } });
+    const option = await prisma.pollOption.findUniqueOrThrow({
+      where: { custom_entry_id: entry.id },
+    });
+    const { default: moderatorRouter } = await import('../../../routes/moderator.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/moderator', moderatorRouter);
+    const approvedAfter = await lastSeq(tiltifyDest);
+    const nativeAfter = await lastSeq(nativeDest);
+    await request(app)
+      .patch(`/api/moderator/polls/custom-entries/${entry.id}`)
+      .set(AUTH)
+      .send({ status: 'APPROVED' })
+      .expect(200);
+    const approved = await messages(tiltifyDest, approvedAfter);
+    expect(approved).toHaveLength(1);
+    expect(nth(approved, 0)).toEqual({
+      message_type: 'tiltify.donation',
+      routing_key: `${channelSlug}.donation`,
+      body: {
+        ...d,
+        id: donationId,
+        poll_id: poll.id,
+        poll_option_id: option.id,
+        poll_votes: [{ poll_id: poll.id, poll_option_id: option.id }],
+      },
+    });
+    expect(await messages(nativeDest, nativeAfter)).toEqual([]);
+
+    const twiceAfter = await lastSeq(tiltifyDest);
+    await request(app)
+      .patch(`/api/moderator/polls/custom-entries/${entry.id}`)
+      .set(AUTH)
+      .send({ status: 'APPROVED' })
+      .expect(400);
+    expect(await messages(tiltifyDest, twiceAfter)).toEqual([]);
+    expect(await prisma.poll.findUnique({ where: { id: poll.id } })).toMatchObject({
+      total_votes_cents: 300,
+    });
   });
 
   it('an unassigned donation publishes nothing until it is assigned (§E6)', async () => {
@@ -558,6 +735,18 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
         event_id: orphanEvent.id,
       });
       expect(await messages(tiltifyDest, before)).toHaveLength(0);
+      const nativeBefore = await lastSeq(nativeDest);
+      const { default: moderatorRouter } = await import('../../../routes/moderator.js');
+      const app = express();
+      app.use(express.json());
+      app.use('/api/moderator', moderatorRouter);
+      await request(app)
+        .patch(`/api/moderator/donations/${donationId}`)
+        .set(AUTH)
+        .send({ moderated: true })
+        .expect(200);
+      expect(await messages(nativeDest, nativeBefore)).toEqual([]);
+      expect(await messages(tiltifyDest, before)).toEqual([]);
 
       const res = await request(createApp())
         .patch(`/api/admin/donations/${donationId}/channel`)

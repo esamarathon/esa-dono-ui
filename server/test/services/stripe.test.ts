@@ -4,17 +4,22 @@ import {
   createAuctionCheckoutSession,
   verifyWebhook,
   isStripeConfigured,
+  createPaymentRefund,
+  listPaymentRefunds,
 } from '../../services/stripe.js';
 
 const mocks = vi.hoisted(() => ({
   sessionsCreate: vi.fn(),
   constructEvent: vi.fn(),
+  refundsCreate: vi.fn(),
+  refundsList: vi.fn(),
 }));
 
 vi.mock('stripe', () => ({
   default: class {
     checkout = { sessions: { create: mocks.sessionsCreate } };
     webhooks = { constructEvent: mocks.constructEvent };
+    refunds = { create: mocks.refundsCreate, list: mocks.refundsList };
   },
 }));
 
@@ -30,6 +35,46 @@ describe('stripe service', () => {
     else delete process.env.STRIPE_WEBHOOK_SECRET;
   });
 
+  it('creates exactly the recorded item plus shipping with record-id key and exact metadata', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    mocks.refundsCreate.mockResolvedValue({ id: 're_test', status: 'pending' });
+    expect(
+      await createPaymentRefund({
+        refundId: 'record',
+        donationId: 'donation',
+        claimId: 'claim',
+        paymentIntent: 'pi_test',
+        itemCents: 300,
+        shippingCents: 200,
+      }),
+    ).toMatchObject({ id: 're_test' });
+    expect(mocks.refundsCreate).toHaveBeenCalledWith(
+      {
+        payment_intent: 'pi_test',
+        amount: 500,
+        metadata: { payment_refund_id: 'record', donation_id: 'donation', claim_id: 'claim' },
+      },
+      { idempotencyKey: 'record' },
+    );
+  });
+
+  it('exhausts Stripe auto-pagination past two full pages; never truncates retry discovery or filters by age', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    mocks.refundsList.mockImplementation(() =>
+      (async function* () {
+        for (let i = 0; i < 251; i++)
+          yield { id: `re_${i}`, metadata: { payment_refund_id: i === 250 ? 'wanted' : 'other' } };
+      })(),
+    );
+    const records = await listPaymentRefunds('pi_test');
+    expect(records).toHaveLength(251);
+    expect(records.at(-1)).toMatchObject({
+      id: 're_250',
+      metadata: { payment_refund_id: 'wanted' },
+    });
+    expect(mocks.refundsList).toHaveBeenCalledWith({ payment_intent: 'pi_test', limit: 100 });
+  });
+
   it('isStripeConfigured is false without a secret key', () => {
     delete process.env.STRIPE_SECRET_KEY;
     expect(isStripeConfigured()).toBe(false);
@@ -42,21 +87,30 @@ describe('stripe service', () => {
 
   it('createCheckoutSession throws without a key', async () => {
     delete process.env.STRIPE_SECRET_KEY;
-    await expect(createCheckoutSession({ pledgeToken: 'tok', amountCents: 100 })).rejects.toThrow(
-      'STRIPE_SECRET_KEY is not configured',
-    );
+    await expect(
+      createCheckoutSession({
+        pledgeToken: 'tok',
+        amountCents: 100,
+        expiresAt: new Date(Date.now() + 7200000),
+      }),
+    ).rejects.toThrow('STRIPE_SECRET_KEY is not configured');
   });
 
   it('createCheckoutSession creates a session when configured', async () => {
     process.env.STRIPE_SECRET_KEY = 'sk_test';
     mocks.sessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe.com' });
 
-    const result = await createCheckoutSession({ pledgeToken: 'tok', amountCents: 1000 });
+    const result = await createCheckoutSession({
+      pledgeToken: 'tok',
+      amountCents: 1000,
+      expiresAt: new Date(Date.now() + 7200000),
+    });
 
     expect(result.id).toBe('cs_1');
     expect(result.url).toBe('https://checkout.stripe.com');
     expect(mocks.sessionsCreate).toHaveBeenCalledWith(
       expect.objectContaining({ client_reference_id: 'tok' }),
+      { idempotencyKey: 'tok' },
     );
   });
 

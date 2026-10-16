@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Navbar from '../../src/components/Navbar';
-import { CartProvider } from '../../src/context/CartContext';
+import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPledgeContext';
 import type { DonorWallet } from '../../src/types';
 
 vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
@@ -67,10 +67,29 @@ describe('Navbar', () => {
     vi.mocked(getFeatureFlags).mockResolvedValue({});
   });
 
+  it('shows the dark-background ESA emblem linked to the homepage', async () => {
+    renderNavbar();
+
+    const homeLink = await screen.findByRole('link', { name: 'ESA home' });
+    expect(homeLink).toHaveAttribute('href', '/');
+    expect(homeLink).toContainElement(screen.getByRole('img', { name: 'ESA' }));
+    expect(screen.getByRole('img', { name: 'ESA' })).toHaveAttribute(
+      'src',
+      '/brand/emblem-dark.svg',
+    );
+    expect(screen.queryByText('esa dono')).not.toBeInTheDocument();
+  });
+
   it('shows a plain login link when no donor token is present', async () => {
     renderNavbar();
     expect(await screen.findByText('login')).toBeDefined();
     expect(screen.queryByText('logged in as')).toBeNull();
+  });
+
+  it('labels the primary donation link donate when no draft exists', async () => {
+    renderNavbar();
+    expect(await screen.findByRole('link', { name: 'donate' })).toHaveAttribute('href', '/donate');
+    expect(screen.queryByRole('link', { name: 'contribute' })).not.toBeInTheDocument();
   });
 
   it('combines wallet/logout into a user dropdown for a plain USER donor, hiding moderate/admin', async () => {
@@ -117,20 +136,33 @@ describe('Navbar', () => {
     expect(await screen.findByText('admin')).toBeDefined();
   });
 
-  it('shows a cart badge when items are in the cart', async () => {
-    sessionStorage.setItem(
-      'donation_cart_v1',
+  it('offers resume to the saved Channel and step outside donate, with no cart button', async () => {
+    localStorage.setItem(
+      'donation_draft_v1',
       JSON.stringify({
-        cart: [{ kind: 'REWARD', target_id: 'r1', amount_cents: 1000, label: 'T-shirt' }],
-        topUp: '',
+        id: 'nav-draft',
+        updatedAt: Date.now(),
+        amountCents: 2500,
+        selections: [],
+        channelId: 'c1',
+        eventSlug: 'marathon',
+        path: '/donate/marathon/main',
         comment: '',
-        channelId: null,
+        displayName: '',
+        lastStep: 'browse',
+        tab: 'polls',
+        pendingToken: null,
       }),
     );
-
+    vi.mocked(getChannels).mockResolvedValue([
+      { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true },
+    ]);
     renderNavbar();
-
-    expect(await screen.findByText(/1/)).toBeDefined();
+    expect(await screen.findByRole('link', { name: 'resume $25.00 donation' })).toHaveAttribute(
+      'href',
+      '/donate/marathon/main?step=browse&tab=polls&channel=c1',
+    );
+    expect(screen.queryByRole('button', { name: /cart/i })).not.toBeInTheDocument();
   });
 
   it('hides the auctions nav link when the auctions feature flag is disabled/absent', async () => {

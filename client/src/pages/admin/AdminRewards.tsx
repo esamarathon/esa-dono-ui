@@ -97,7 +97,10 @@ export default function AdminRewards() {
     const data = {
       ...form,
       cost_cents: Math.round(parseFloat(String(form.cost_dollars)) * 100),
-      quantity_total: form.quantity_total === '' ? null : parseInt(String(form.quantity_total)),
+      quantity_total:
+        form.quantity_total === '' || form.quantity_total === null
+          ? null
+          : Number(form.quantity_total),
     };
     try {
       if (modal === 'create') {
@@ -137,7 +140,16 @@ export default function AdminRewards() {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-              {['', 'title', 'type', 'cost', 'qty', 'channel', 'active', 'actions'].map((h) => (
+              {[
+                '',
+                'title',
+                'type',
+                'current price',
+                'claims / allocated',
+                'channel',
+                'active',
+                'actions',
+              ].map((h) => (
                 <th
                   key={h}
                   className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
@@ -170,7 +182,8 @@ export default function AdminRewards() {
                 </td>
                 <td className="px-4 py-2 font-data text-off-white">{fmt(r.cost_cents)}</td>
                 <td className="px-4 py-2 font-data text-off-white/55">
-                  {r.quantity_total ?? '∞'} ({r.quantity_claimed} claimed)
+                  {r.quantity_total ?? '∞'} ({r.live_count ?? r.quantity_claimed} claimed ·{' '}
+                  {fmt(r.allocated_cents ?? 0)} allocated)
                 </td>
                 <td className="px-4 py-2 font-data text-off-white/55">
                   {channelName(r.channel_id)}

@@ -49,9 +49,32 @@ async function fund(): Promise<void> {
   fetchMock.mockClear();
 }
 
-function expectPost(path: string, body: unknown, authorization = 'Bearer token1'): void {
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  const call = fetchMock.mock.calls[0]!;
+function preparePledge(
+  state: unknown = { format: 'POOLED', status: 'FULFILLED' },
+  reward = false,
+  postStatus = 200,
+) {
+  fetchMock.mockResolvedValueOnce(response({ balance_remaining: 5000 }));
+  if (reward)
+    fetchMock.mockResolvedValueOnce(
+      response([{ id: 'reward-id', cost_cents: 100, type: 'DIGITAL' }]),
+    );
+  fetchMock.mockResolvedValueOnce(
+    response({ pledge_token: 'confirmed', new_money_cents: 0 }, postStatus),
+  );
+  if (postStatus === 200) fetchMock.mockResolvedValueOnce(response(state));
+}
+
+function expectPost(
+  path: string,
+  body: Record<string, unknown>,
+  authorization = 'Bearer token1',
+): void {
+  if (path !== '/api/pledge') expect(fetchMock).toHaveBeenCalledTimes(1);
+  const call = fetchMock.mock.calls.find(
+    ([url, init]) => url === `${baseUrl}${path}` && init?.method === 'POST',
+  )!;
+  expect(call).toBeDefined();
   expect(call[0]).toBe(`${baseUrl}${path}`);
   expect(call[1]).toMatchObject({
     method: 'POST',
@@ -59,7 +82,14 @@ function expectPost(path: string, body: unknown, authorization = 'Bearer token1'
   });
   const sentBody = call[1]?.body;
   if (typeof sentBody !== 'string') throw new Error('Expected a JSON string body');
-  expect(JSON.parse(sentBody)).toEqual(body);
+  if (path === '/api/pledge') {
+    expect(JSON.parse(sentBody)).toMatchObject(body);
+    expect(JSON.parse(sentBody)).toMatchObject({
+      pledge_amount_cents: expect.any(Number),
+      draft_id: expect.any(String),
+      plan: expect.any(Object),
+    });
+  } else expect(JSON.parse(sentBody)).toEqual(body);
 }
 
 beforeEach(() => {
@@ -75,12 +105,24 @@ afterEach(() => {
 describe('Simulator Executor', () => {
   it('maps every v2 cart line, per-unit reward amounts, quantities, channel and metadata', async () => {
     await fund();
-    fetchMock.mockResolvedValueOnce(response({ wallet_discount_cents: 1400, total_cents: 1400 }));
+    fetchMock
+      .mockResolvedValueOnce(response({ balance_remaining: 5000 }))
+      .mockResolvedValueOnce(
+        response([
+          { id: 'reward-id', cost_cents: 100, type: 'DIGITAL' },
+          { id: 'reward2-id', cost_cents: 200, type: 'DIGITAL' },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        response({ pledge_token: 'confirmed', format: 'POOLED', new_money_cents: 0 }),
+      )
+      .mockResolvedValueOnce(response({ format: 'POOLED', status: 'FULFILLED' }));
 
     const outcome = await executor.execute(
       decision('PLEDGE_CHECKOUT', {
         targetRef: { channelRef: 'channel' },
         params: {
+          pledgeAmountCents: 1000,
           comment: 'Go runners!',
           displayName: 'Visible Donor',
           itemKind: 'GOAL',
@@ -95,7 +137,20 @@ describe('Simulator Executor', () => {
       }),
     );
 
-    expectPost('/api/pledge', {
+    const post = fetchMock.mock.calls.find(([url]) => url === `${baseUrl}/api/pledge`);
+    expect(post).toBeDefined();
+    expect(JSON.parse(post![1]!.body as string)).toMatchObject({
+      pledge_amount_cents: 1000,
+      draft_id: expect.any(String),
+      plan: {
+        usage_cents: { reward: 700, poll: 200, goal: 500 },
+        wallet_applied_cents: 1000,
+        new_money_cents: 0,
+        top_up_rows: [
+          { selection_index: 1, amount_cents: 800 },
+          { selection_index: 2, amount_cents: 500 },
+        ],
+      },
       channel_id: 'channel-id',
       comment: 'Go runners!',
       display_name: 'Visible Donor',
@@ -125,7 +180,7 @@ describe('Simulator Executor', () => {
     { kind: 'GOAL', item: { kind: 'GOAL', target_id: 'goal-id', amount_cents: 100 } },
   ])('replays a v1 $kind pledge without items or metadata', async ({ kind, item }) => {
     await fund();
-    fetchMock.mockResolvedValueOnce(response({ wallet_discount_cents: 100, total_cents: 100 }));
+    preparePledge(undefined, kind === 'REWARD');
     const outcome = await executor.execute(
       decision('PLEDGE_CHECKOUT', {
         targetRef: {
@@ -144,7 +199,7 @@ describe('Simulator Executor', () => {
 
   it('does not fall back to v1 when an empty v2 items array is present', async () => {
     await fund();
-    fetchMock.mockResolvedValueOnce(response({ error: 'Empty cart' }, 400));
+    preparePledge(undefined, false, 400);
     await executor.execute(
       decision('PLEDGE_CHECKOUT', {
         targetRef: { channelRef: 'channel', goalRef: 'goal' },
@@ -219,22 +274,20 @@ describe('Simulator Executor', () => {
   });
 
   it.each([
-    { wallet_discount_cents: 100, total_cents: 500 },
-    { wallet_discount_cents: 0, total_cents: 500 },
-    { total_cents: 500 },
-    { wallet_discount_cents: 500 },
-  ])('rejects an unfulfilled pledge response %j without completing Stripe', async (body) => {
+    { format: 'POOLED', status: 'OPEN' },
+    { format: 'LEGACY', status: 'FULFILLED' },
+    { format: 'POOLED', status: 'CANCELLED' },
+    { status: 'FULFILLED' },
+  ])('checks actual fulfillment state %j without completing Stripe', async (body) => {
     await fund();
-    fetchMock.mockResolvedValueOnce(
-      response({ ...body, donate_url: 'https://checkout.stripe.com/test' }),
-    );
+    preparePledge(body);
     const outcome = await executor.execute(pledge());
     expectPost('/api/pledge', {
       channel_id: 'channel-id',
       items: [{ kind: 'GOAL', target_id: 'goal-id', amount_cents: 500 }],
     });
     expect(outcome).toMatchObject({ status: 200, accepted: false });
-    expect(outcome.note).toContain('not wallet-fully-covered (no Stripe in sim)');
+    expect(outcome.note).toContain('pledge not fulfilled (no Stripe in sim)');
   });
 
   const actions: DecisionEntry[] = [

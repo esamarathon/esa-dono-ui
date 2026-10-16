@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import FeedbackButton from '../../src/components/FeedbackButton';
-import { CartProvider } from '../../src/context/CartContext';
+import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPledgeContext';
 
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn().mockResolvedValue([]) }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn().mockResolvedValue([]) }));

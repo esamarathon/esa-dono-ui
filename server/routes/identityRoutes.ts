@@ -1,7 +1,12 @@
 import type { Router } from 'express';
 import prisma from '../lib/prisma.js';
 import { handle } from '../lib/httpError.js';
-import { createChannel, deactivateChannel, updateChannel } from '../services/channels.js';
+import {
+  createChannel,
+  deactivateChannel,
+  updateChannel,
+  readStaffChannelsTx,
+} from '../services/channels.js';
 import { createEvent, deactivateEvent, updateEvent } from '../services/events.js';
 
 /**
@@ -13,7 +18,7 @@ export function mountIdentityRoutes(router: Router): void {
   router.get(
     '/channels',
     handle('[channels]', async (_req, res) => {
-      res.json(await prisma.channel.findMany({ orderBy: { created_at: 'asc' } }));
+      res.json(await prisma.$transaction((tx) => readStaffChannelsTx(tx)));
     }),
   );
   router.post(
