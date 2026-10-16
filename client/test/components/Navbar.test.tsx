@@ -73,6 +73,12 @@ describe('Navbar', () => {
     expect(screen.queryByText('logged in as')).toBeNull();
   });
 
+  it('labels the primary donation link donate when no draft exists', async () => {
+    renderNavbar();
+    expect(await screen.findByRole('link', { name: 'donate' })).toHaveAttribute('href', '/donate');
+    expect(screen.queryByRole('link', { name: 'contribute' })).not.toBeInTheDocument();
+  });
+
   it('combines wallet/logout into a user dropdown for a plain USER donor, hiding moderate/admin', async () => {
     localStorage.setItem('donor_session_active', '1');
     vi.mocked(getDonor).mockResolvedValue(donor({ role: 'USER' }));

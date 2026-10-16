@@ -101,7 +101,7 @@ export default function Navbar() {
         }
         style={{ background: 'var(--d-yellow)' }}
       >
-        {resume ? `resume ${fmt(draft.amountCents)} donation` : 'contribute'}
+        {resume ? `resume ${fmt(draft.amountCents)} donation` : 'donate'}
       </NavLink>
       <div className="ml-auto flex items-center gap-4">
         {donor ? (

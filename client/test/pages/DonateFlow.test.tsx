@@ -172,7 +172,7 @@ describe('amount-first donate through the routed flow', () => {
       .mockResolvedValue([channel, { ...channel, id: 'c2', name: 'New Channel', slug: 'new' }]);
     renderAt('/');
     await waitFor(() => expect(getChannels).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('link', { name: 'contribute' }));
+    fireEvent.click(screen.getByRole('link', { name: 'donate' }));
     expect(await screen.findByRole('button', { name: 'New Channel' })).toBeInTheDocument();
   });
 
@@ -735,7 +735,7 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByText('Your $25.00 donation went through.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: 'home' }));
     expect(await screen.findByText('Home page')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('link', { name: 'contribute' }));
+    fireEvent.click(screen.getByRole('link', { name: 'donate' }));
     expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
     expect(screen.queryByText('Your $25.00 donation went through.')).not.toBeInTheDocument();
   });
