@@ -43,7 +43,8 @@ export default function AdminPolls() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
-  const [newOption, setNewOption] = useState('');
+  // Keyed by poll id: each poll's 'add option' input keeps its own text (#149).
+  const [newOptions, setNewOptions] = useState<Record<string, string>>({});
   const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
   const [optionDraft, setOptionDraft] = useState('');
   const [error, setError] = useState('');
@@ -102,9 +103,10 @@ export default function AdminPolls() {
   };
 
   const addOption = async (pollId: string) => {
-    if (!newOption.trim()) return;
-    await adminClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
-    setNewOption('');
+    const label = newOptions[pollId]?.trim();
+    if (!label) return;
+    await adminClient.post(`/polls/${pollId}/options`, { label });
+    setNewOptions((prev) => ({ ...prev, [pollId]: '' }));
     await reload();
   };
 
@@ -266,8 +268,10 @@ export default function AdminPolls() {
                 <input
                   className="flex-1 px-2 py-1 text-sm"
                   placeholder="New option..."
-                  value={newOption}
-                  onChange={(e) => setNewOption(e.target.value)}
+                  value={newOptions[poll.id] ?? ''}
+                  onChange={(e) =>
+                    setNewOptions((prev) => ({ ...prev, [poll.id]: e.target.value }))
+                  }
                   onKeyDown={(e) => e.key === 'Enter' && addOption(poll.id)}
                 />
                 <button

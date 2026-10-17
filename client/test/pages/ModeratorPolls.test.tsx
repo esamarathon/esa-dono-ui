@@ -70,6 +70,33 @@ describe('ModeratorPolls', () => {
     );
   });
 
+  it('keeps each poll its own new-option text (#149)', async () => {
+    const other = { ...poll, id: 'p2', title: 'Best category', options: [] };
+    moderatorClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/polls' ? [poll, other] : [] }),
+    );
+    moderatorClient.post.mockResolvedValue({ data: { id: 'o2' } });
+
+    render(
+      <ModeratorChannelFilterProvider>
+        <ModeratorPolls />
+      </ModeratorChannelFilterProvider>,
+    );
+
+    await screen.findByText('Best category');
+    const [first, second] = screen.getAllByPlaceholderText('New option...');
+    fireEvent.change(first!, { target: { value: 'Runner B' } });
+    expect(second).toHaveValue('');
+    fireEvent.change(second!, { target: { value: 'Any%' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'add' })[1]!);
+
+    await waitFor(() =>
+      expect(moderatorClient.post).toHaveBeenCalledWith('/polls/p2/options', { label: 'Any%' }),
+    );
+    await waitFor(() => expect(second).toHaveValue(''));
+    expect(first).toHaveValue('Runner B');
+  });
+
   it('removes an option from a poll', async () => {
     moderatorClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/polls' ? [poll] : [] }),

@@ -105,6 +105,7 @@ does not clear those gates or authorize deployment.
   data when a backend container already exists.
 - Backend test images include curl and jq for shell-seed integration tests; these
   tools are not added to the runtime image.
+- On the staff poll pages, each poll's "add option" input keeps its own text (#149).
 
 ### Security
 
