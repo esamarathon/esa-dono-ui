@@ -91,6 +91,26 @@ describe('AdminPolls', () => {
     );
   });
 
+  it('keeps each poll its own new-option text (#149)', async () => {
+    const other = { ...poll, id: 'p2', title: 'Best Category', options: [] };
+    mocks.adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/polls' ? [poll, other] : [] }),
+    );
+    mocks.adminClient.post.mockResolvedValue({ data: { id: 'o2' } });
+    render(<AdminPolls />);
+    await screen.findByText('Best Category');
+    const [first, second] = screen.getAllByPlaceholderText('New option...');
+    fireEvent.change(first!, { target: { value: 'Runner B' } });
+    expect(second).toHaveValue('');
+    fireEvent.change(second!, { target: { value: 'Any%' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'add' })[1]!);
+    await waitFor(() =>
+      expect(mocks.adminClient.post).toHaveBeenCalledWith('/polls/p2/options', { label: 'Any%' }),
+    );
+    await waitFor(() => expect(second).toHaveValue(''));
+    expect(first).toHaveValue('Runner B');
+  });
+
   it('starts editing a poll option inline', async () => {
     mocks.adminClient.get.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/polls' ? [poll] : [] }),
