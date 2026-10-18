@@ -478,6 +478,9 @@ paths:
     post:
       tags: [Rewards]
       summary: Claim a reward
+      description: >-
+        Spends Wallet credit on one Channel (ADR-0012). The reward must be available on
+        `channel_id`: owned by that Channel, or shared by the Channel's Event.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -485,11 +488,16 @@ paths:
           required: true
           schema: { type: string }
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
+              required: [channel_id]
               properties:
+                channel_id:
+                  type: string
+                  description: Active Channel the donor spends on. Required.
                 claim_data: {}
                 quantity:
                   type: integer
@@ -500,7 +508,9 @@ paths:
         '200':
           description: Claim created
         '400':
-          description: Insufficient balance / sold out / inactive
+          description: Insufficient balance / sold out / physical reward; `channel_id is required`; or the reward is not available on this Channel (nothing is debited or written)
+        '404':
+          description: Reward not found or inactive; Channel not found or inactive
         '401':
           description: Token required
         '429':
@@ -524,6 +534,9 @@ paths:
     post:
       tags: [Polls]
       summary: Propose a custom poll option (funded write-in)
+      description: >-
+        Spends Wallet credit on one Channel (ADR-0012). The poll must be available on
+        `channel_id`: owned by that Channel, or shared by the Channel's Event.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -536,8 +549,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [label, amount_cents]
+              required: [channel_id, label, amount_cents]
               properties:
+                channel_id:
+                  type: string
+                  description: Active Channel the donor spends on. Required.
                 label: { type: string, maxLength: 500 }
                 amount_cents: { type: integer, minimum: 100 }
       responses:
@@ -552,12 +568,17 @@ paths:
                   entry: { type: object }
                   pending_approval: { type: boolean }
         '400':
-          description: Validation error
+          description: Validation error; `channel_id is required`; or the poll is not available on this Channel (nothing is debited or written)
+        '404':
+          description: Poll not found or inactive; Channel not found or inactive
 
   /polls/{id}/vote:
     post:
       tags: [Polls]
       summary: Vote in a poll
+      description: >-
+        Spends Wallet credit on one Channel (ADR-0012). The poll must be available on
+        `channel_id`: owned by that Channel, or shared by the Channel's Event.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -570,13 +591,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [poll_option_id, amount_cents]
+              required: [channel_id, poll_option_id, amount_cents]
               properties:
+                channel_id:
+                  type: string
+                  description: Active Channel the donor spends on. Required.
                 poll_option_id: { type: string }
                 amount_cents: { type: integer, minimum: 100 }
       responses:
         '200':
           description: Vote recorded
+        '400':
+          description: Validation error / insufficient balance / poll ended; `channel_id is required`; or the poll is not available on this Channel (nothing is debited or written)
+        '404':
+          description: Poll or option not found; Channel not found or inactive
 
   # ─── Goals ───
   /goals:
@@ -596,6 +624,9 @@ paths:
     post:
       tags: [Goals]
       summary: Contribute to a fund goal
+      description: >-
+        Spends Wallet credit on one Channel (ADR-0012). The goal must be available on
+        `channel_id`: owned by that Channel, or shared by the Channel's Event.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -608,12 +639,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [amount_cents]
+              required: [channel_id, amount_cents]
               properties:
+                channel_id:
+                  type: string
+                  description: Active Channel the donor spends on. Required.
                 amount_cents: { type: integer, minimum: 100 }
       responses:
         '200':
           description: Contribution recorded
+        '400':
+          description: Validation error / insufficient balance; `channel_id is required`; or the goal is not available on this Channel (nothing is debited or written)
+        '404':
+          description: Goal not found, inactive, or complete; Channel not found or inactive
 
   # ─── Auctions ───
   # Bids are non-binding commitments — no wallet deduction. At close, the

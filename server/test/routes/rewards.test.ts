@@ -1,10 +1,10 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import rewardsRouter from '../../routes/rewards.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -30,7 +30,14 @@ async function makeDonor(balanceCents: number) {
 }
 
 describe('Rewards routes', () => {
+  // Wallet spends target one Channel (ADR-0012); the fixtures are shared incentives of its Event.
+  let channelId = '';
+  beforeAll(async () => {
+    channelId = (await createTestChannel(prisma)).id;
+  });
+
   afterAll(async () => {
+    await prisma.channel.delete({ where: { id: channelId } });
     await prisma.$disconnect();
   });
 
@@ -73,7 +80,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ claim_data: { name: 'Alice' } });
+      .send({ channel_id: channelId, claim_data: { name: 'Alice' } });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -98,7 +105,7 @@ describe('Rewards routes', () => {
       const res = await request(createApp())
         .post(`/api/rewards/${reward.id}/claim`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ claim_data: { name: 'Alice' } });
+        .send({ channel_id: channelId, claim_data: { name: 'Alice' } });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe(
@@ -132,7 +139,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ channel_id: channelId });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Insufficient balance');
@@ -156,7 +163,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 });
+      .send({ channel_id: channelId, quantity: 3 });
 
     expect(res.status).toBe(200);
 
@@ -189,7 +196,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 });
+      .send({ channel_id: channelId, quantity: 3 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Reward sold out');

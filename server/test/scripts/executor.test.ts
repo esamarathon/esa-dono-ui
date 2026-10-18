@@ -260,6 +260,40 @@ describe('Simulator Executor', () => {
     expectPost('/api/rewards/reward-id/claim', { claim_data: {}, quantity: 1 }, 'Bearer token2');
   });
 
+  it.each([
+    {
+      entry: decision('CLAIM_REWARD', {
+        targetRef: { rewardRef: 'reward', channelRef: 'channel' },
+      }),
+      path: '/api/rewards/reward-id/claim',
+      body: { claim_data: {}, quantity: 1 },
+    },
+    {
+      entry: decision('VOTE_POLL', {
+        targetRef: { pollRef: 'poll', optionRef: 'option', channelRef: 'channel' },
+        params: { amountCents: 300 },
+      }),
+      path: '/api/polls/poll-id/vote',
+      body: { poll_option_id: 'option-id', amount_cents: 300 },
+    },
+    {
+      entry: decision('CONTRIBUTE_GOAL', {
+        targetRef: { goalRef: 'goal', channelRef: 'channel' },
+        params: { amountCents: 400 },
+      }),
+      path: '/api/goals/goal-id/contribute',
+      body: { amount_cents: 400 },
+    },
+  ])(
+    'sends the decision Channel with a direct $entry.action spend',
+    async ({ entry, path, body }) => {
+      await fund();
+      fetchMock.mockResolvedValueOnce(response());
+      await executor.execute(entry);
+      expectPost(path, { channel_id: 'channel-id', ...body });
+    },
+  );
+
   it.each([undefined, 4])('forwards direct reward quantity %s (default 1)', async (quantity) => {
     await fund();
     fetchMock.mockResolvedValueOnce(response());

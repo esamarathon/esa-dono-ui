@@ -64,6 +64,22 @@ describe('simulator decision generation', () => {
     }
   });
 
+  it("targets each direct Wallet spend at the incentive's Channel, else the donor's (ADR-0012)", () => {
+    const log = generate(options);
+    const direct = log.filter((e) =>
+      ['CLAIM_REWARD', 'VOTE_POLL', 'CONTRIBUTE_GOAL'].includes(e.action),
+    );
+    const shared = direct.filter((e) => e.targetRef?.goalRef === 'g2');
+    expect(shared.length).toBeGreaterThan(0);
+    for (const entry of direct) {
+      const ref =
+        entry.targetRef!.rewardRef ?? entry.targetRef!.pollRef ?? entry.targetRef!.goalRef!;
+      const own = catalog.channelOf[ref];
+      if (own) expect(entry.targetRef!.channelRef).toBe(own);
+      expect(catalog.channels).toContain(entry.targetRef!.channelRef);
+    }
+  });
+
   it('generates channel-compatible mixed carts with 1–4 items and per-unit reward amounts', () => {
     const carts = generate(options).filter((e) => e.action === 'PLEDGE_CHECKOUT');
     expect(new Set(carts.map((e) => e.items?.length))).toEqual(new Set([1, 2, 3, 4]));

@@ -564,6 +564,8 @@ git apply --reverse --check "$PATCH"
 
 Git apply was verified in a standalone directory without `.git`; GNU patch is not needed.
 If `--check` fails, stop and manually reconcile unrelated parent edits; do not force it.
+If the parent already has an earlier version of this patch, first reverse that version
+(`git apply --reverse` with the patch from the earlier commit), then apply this one.
 `python3 scripts/check-parent-pledge-callers.py --parent-root "$ESA_ROOT"` from the dono
 checkout checks application and syntax on private copies, then compiles and executes only
 its extracted `purchase` function with mocked HTTP/API responses and independent literal

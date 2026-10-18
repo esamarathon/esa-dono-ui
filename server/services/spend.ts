@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { MIN_SPEND_CENTS, type ClaimData, type PoolCategory } from '@dono/shared';
+import { MIN_SPEND_CENTS, isAvailableOn, type ClaimData, type PoolCategory } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 import { readDonationAccountingTx } from './poolAccounting.js';
 import { textWordTokens } from './blockedWords.js';
@@ -156,6 +156,33 @@ async function fundSpend(
   ) {
     throw httpError(400, 'Pool budget exceeded or reserved');
   }
+}
+
+const WALLET_SPEND_TARGET = { reward: 'Reward', poll: 'Poll', goal: 'Goal' } as const;
+
+/**
+ * A direct Wallet spend targets one active Channel and may fund only an
+ * incentive available on it, like a pledge (ADR-0012). Call it in the spend's
+ * transaction before any write. A missing incentive is left to the spend's 404.
+ */
+export async function assertWalletSpendScopeTx(
+  tx: Tx,
+  channelId: unknown,
+  kind: keyof typeof WALLET_SPEND_TARGET,
+  incentiveId: string,
+) {
+  if (!channelId || typeof channelId !== 'string') throw httpError(400, 'channel_id is required');
+  const channel = await tx.channel.findUnique({ where: { id: channelId } });
+  if (!channel || !channel.is_active) throw httpError(404, 'Channel not found or inactive');
+  const where = { where: { id: incentiveId } };
+  const incentive =
+    kind === 'reward'
+      ? await tx.reward.findUnique(where)
+      : kind === 'poll'
+        ? await tx.poll.findUnique(where)
+        : await tx.fundGoal.findUnique(where);
+  if (incentive && !isAvailableOn(incentive, channel))
+    throw httpError(400, `${WALLET_SPEND_TARGET[kind]} is not available on this Channel`);
 }
 
 function validateCents(cents: number, pool?: SpendFunding) {

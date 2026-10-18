@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { donorAuth } from '../middleware/donorAuth.js';
 import { spendLimit } from '../middleware/rateLimit.js';
-import { claimRewardTx } from '../services/spend.js';
+import { assertWalletSpendScopeTx, claimRewardTx } from '../services/spend.js';
 
 const router = Router();
 
@@ -20,6 +20,7 @@ router.post('/:id/claim', spendLimit, donorAuth, async (req: Request, res: Respo
     const quantity =
       Number.isInteger(req.body.quantity) && req.body.quantity > 0 ? req.body.quantity : 1;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await assertWalletSpendScopeTx(tx, req.body.channel_id, 'reward', req.params.id!);
       await claimRewardTx(tx, req.donor!.id, req.params.id!, req.body.claim_data, quantity);
     });
     res.json({ success: true });

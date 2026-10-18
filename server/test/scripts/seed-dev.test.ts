@@ -155,11 +155,15 @@ it('the exact demo claim/vote/contribution/summary shell completes with a cash-f
     ].map((data) => prisma.reward.create({ data: { ...data, event_id: main.event_id } })),
   );
   const polls = await Promise.all(
-    ['Finale', 'Bonus', 'Shared'].map((title) =>
+    [
+      { title: 'Finale', channel_id: main.id },
+      { title: 'Bonus', channel_id: bonus.id },
+      { title: 'Shared' },
+    ].map((poll) =>
       prisma.poll.create({
         data: {
+          ...poll,
           event_id: DEFAULT_EVENT_ID,
-          title,
           allow_custom_entries: true,
           options: { create: ['A', 'B', 'C', 'D'].map((label) => ({ label })) },
         },
@@ -190,8 +194,9 @@ it('the exact demo claim/vote/contribution/summary shell completes with a cash-f
     const bypass = await request(app)
       .post(`/api/rewards/${rewards[2]!.id}/claim`)
       .set('Authorization', `Bearer ${donors[3]!.magic_token}`)
-      .send({ claim_data: { name: 'Dave Smith' } });
+      .send({ channel_id: main.id, claim_data: { name: 'Dave Smith' } });
     expect(bypass.status).toBe(400);
+    expect(bypass.body.error).toMatch(/Physical rewards require a cash-funded pledge/);
     expect(await prisma.rewardClaim.count({ where: { reward_id: rewards[2]!.id } })).toBe(0);
     expect(await prisma.donor.findUniqueOrThrow({ where: { id: donors[3]!.id } })).toMatchObject({
       balance_remaining: 20000,

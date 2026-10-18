@@ -197,6 +197,8 @@ export function generate(opts: GenerateOptions): DecisionEntry[] {
       const preferred = pool.filter((item) => matchesChannel(ref(item), channelRef));
       return pick(s.incentivePick, preferred.length && s.preference() < 0.8 ? preferred : pool);
     };
+    // A direct Wallet spend targets one Channel (ADR-0012): the incentive's own, else the donor's.
+    const spendChannel = (ref: string) => catalog.channelOf[ref] ?? channelRef;
     const chooseChannel = (pool: string[]) =>
       pool.includes(channelRef) && s.preference() < 0.8 ? channelRef : pick(s.incentivePick, pool);
     let params: Record<string, unknown> = {};
@@ -213,20 +215,28 @@ export function generate(opts: GenerateOptions): DecisionEntry[] {
           ...commentParams(s.comment),
         };
         break;
-      case 'CLAIM_REWARD':
-        targetRef = { rewardRef: choose(catalog.rewards, (ref) => ref) };
+      case 'CLAIM_REWARD': {
+        const rewardRef = choose(catalog.rewards, (ref) => ref);
+        targetRef = { rewardRef, channelRef: spendChannel(rewardRef) };
         params = { quantity: rewardQuantity(s.quantity) };
         break;
+      }
       case 'VOTE_POLL': {
         const poll = choose(validPolls, (p) => p.pollRef);
-        targetRef = { pollRef: poll.pollRef, optionRef: pick(s.incentivePick, poll.options) };
+        targetRef = {
+          pollRef: poll.pollRef,
+          optionRef: pick(s.incentivePick, poll.options),
+          channelRef: spendChannel(poll.pollRef),
+        };
         params = { amountCents: spendAmount(s.voteAmount, 20) };
         break;
       }
-      case 'CONTRIBUTE_GOAL':
-        targetRef = { goalRef: choose(catalog.goals, (ref) => ref) };
+      case 'CONTRIBUTE_GOAL': {
+        const goalRef = choose(catalog.goals, (ref) => ref);
+        targetRef = { goalRef, channelRef: spendChannel(goalRef) };
         params = { amountCents: spendAmount(s.voteAmount, 20) };
         break;
+      }
       case 'BID_AUCTION':
         targetRef = { auctionRef: pick(s.incentivePick, catalog.auctions) };
         params = { amountCents: int(s.amount, 10, 500) * 100 };

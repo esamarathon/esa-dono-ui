@@ -277,12 +277,13 @@ echo "   6 donations created (Alice/Dave -> Main Marathon, Bob/Carol -> Bonus St
 
 # --- Reward claims ---
 # Donor spend routes authenticate via `Authorization: Bearer <magic-token>`
-# (the legacy ?token= query param is gone).
+# (the legacy ?token= query param is gone). Each names one Channel and may fund
+# only an incentive available on it (ADR-0012): its own Channel's, or a shared one.
 echo "==> Claiming rewards..."
 curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
-  -d '{"claim_data":{}}' > /dev/null
+  -d "{\"channel_id\":\"$C_MAIN\",\"claim_data\":{}}" > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_DISC/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" \
-  -d '{"claim_data":{}}' > /dev/null
+  -d "{\"channel_id\":\"$C_MAIN\",\"claim_data\":{}}" > /dev/null
 # Physical rewards cannot use Dave's existing Wallet. Confirm a cash-only
 # pledge without donor authentication, then use the ADMIN simulated settled-
 # intake boundary. This demo does NOT exercise Stripe or shipping collection.
@@ -308,33 +309,33 @@ SHIRT_PAYMENT=$(jq -n --argjson pledge "$SHIRT_PLEDGE" \
 curl -sf -X POST "$BASE/api/admin/simulate-donation" \
   -H "Content-Type: application/json" -H "$AUTH" -d "$SHIRT_PAYMENT" > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_GAME/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE" \
-  -d '{"claim_data":{"your_game_pick":"Outer Wilds"}}' > /dev/null
+  -d "{\"channel_id\":\"$C_MAIN\",\"claim_data\":{\"your_game_pick\":\"Outer Wilds\"}}" > /dev/null
 curl -sf -X POST "$BASE/api/rewards/$R_THANKS/claim" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" \
-  -d '{"claim_data":{}}' > /dev/null
+  -d "{\"channel_id\":\"$C_BONUS\",\"claim_data\":{}}" > /dev/null
 echo "   5 claims created."
 
 # --- Poll votes ---
 echo "==> Voting on polls..."
-curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"poll_option_id\":\"$OPT_CELESTE\",\"amount_cents\":2000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d "{\"poll_option_id\":\"$OPT_HOLLOW\",\"amount_cents\":3000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB"   -d "{\"poll_option_id\":\"$OPT_HADES\",\"amount_cents\":1500}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d "{\"poll_option_id\":\"$OPT_CELESTE\",\"amount_cents\":1000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d "{\"poll_option_id\":\"$OPT_DISCO\",\"amount_cents\":2000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d "{\"poll_option_id\":\"$OPT_BLIND\",\"amount_cents\":5000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"poll_option_id\":\"$OPT_DEV\",\"amount_cents\":2000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d "{\"poll_option_id\":\"$OPT_RACE\",\"amount_cents\":2500}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P3/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d "{\"poll_option_id\":\"$OPT_NODEATH\",\"amount_cents\":1000}" > /dev/null
-curl -sf -X POST "$BASE/api/polls/$P3/custom-entry" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" -d '{"label":"Bob'"'"'s underdog comeback moment","amount_cents":1500}' > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"channel_id\":\"$C_MAIN\",\"poll_option_id\":\"$OPT_CELESTE\",\"amount_cents\":2000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d "{\"channel_id\":\"$C_MAIN\",\"poll_option_id\":\"$OPT_HOLLOW\",\"amount_cents\":3000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB"   -d "{\"channel_id\":\"$C_MAIN\",\"poll_option_id\":\"$OPT_HADES\",\"amount_cents\":1500}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d "{\"channel_id\":\"$C_MAIN\",\"poll_option_id\":\"$OPT_CELESTE\",\"amount_cents\":1000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P1/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d "{\"channel_id\":\"$C_MAIN\",\"poll_option_id\":\"$OPT_DISCO\",\"amount_cents\":2000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d "{\"channel_id\":\"$C_BONUS\",\"poll_option_id\":\"$OPT_BLIND\",\"amount_cents\":5000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"channel_id\":\"$C_BONUS\",\"poll_option_id\":\"$OPT_DEV\",\"amount_cents\":2000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P2/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d "{\"channel_id\":\"$C_BONUS\",\"poll_option_id\":\"$OPT_RACE\",\"amount_cents\":2500}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P3/vote" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d "{\"channel_id\":\"$C_BONUS\",\"poll_option_id\":\"$OPT_NODEATH\",\"amount_cents\":1000}" > /dev/null
+curl -sf -X POST "$BASE/api/polls/$P3/custom-entry" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB" -d '{"channel_id":"'"$C_BONUS"'","label":"Bob'"'"'s underdog comeback moment","amount_cents":1500}' > /dev/null
 echo "   9 votes cast (incl. 1 custom write-in on the shared poll)."
 
 # --- Goal contributions ---
 echo "==> Contributing to goals..."
-curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d '{"amount_cents":4000}' > /dev/null
-curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d '{"amount_cents":2000}' > /dev/null
-curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d '{"amount_cents":1500}' > /dev/null
-curl -sf -X POST "$BASE/api/goals/$G2/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB"   -d '{"amount_cents":2000}' > /dev/null
-curl -sf -X POST "$BASE/api/goals/$G2/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d '{"amount_cents":1000}' > /dev/null
-curl -sf -X POST "$BASE/api/goals/$G3/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d '{"amount_cents":2000}' > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $DAVE"  -d "{\"channel_id\":\"$C_BONUS\",\"amount_cents\":4000}" > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"channel_id\":\"$C_BONUS\",\"amount_cents\":2000}" > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G1/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $EVE"   -d "{\"channel_id\":\"$C_BONUS\",\"amount_cents\":1500}" > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G2/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $BOB"   -d "{\"channel_id\":\"$C_BONUS\",\"amount_cents\":2000}" > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G2/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $CAROL" -d "{\"channel_id\":\"$C_BONUS\",\"amount_cents\":1000}" > /dev/null
+curl -sf -X POST "$BASE/api/goals/$G3/contribute" -H "Content-Type: application/json" -H "Authorization: Bearer $ALICE" -d "{\"channel_id\":\"$C_MAIN\",\"amount_cents\":2000}" > /dev/null
 echo "   6 contributions made."
 
 # --- Summary ---
