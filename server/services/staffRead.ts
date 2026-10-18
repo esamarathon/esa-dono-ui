@@ -146,6 +146,23 @@ export async function readStaffDonationTx(tx: Tx, id: string) {
     pools: state.pools,
   };
 }
+/**
+ * Prisma batches findUnique calls made in the same tick into one `IN` query. Past
+ * SQLite's 999 bind variables the engine splits that query, and Prisma 5.22 then
+ * panics ("no entry found for key") on readDonationAccountingTx's ordered relations.
+ */
+const STAFF_DONATION_BATCH = 500;
+/** readStaffDonationTx for many donations, in input order. */
+export async function readStaffDonationsTx(tx: Tx, ids: string[]) {
+  const result = [];
+  for (let start = 0; start < ids.length; start += STAFF_DONATION_BATCH)
+    result.push(
+      ...(await Promise.all(
+        ids.slice(start, start + STAFF_DONATION_BATCH).map((id) => readStaffDonationTx(tx, id)),
+      )),
+    );
+  return result;
+}
 export async function donationActionReasonsTx(tx: Tx, id: string) {
   const reason = async (status: 'REFUNDED' | 'CHARGEBACK') => {
     try {
