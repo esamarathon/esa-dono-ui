@@ -37,12 +37,12 @@ Consumers, read at kollekt `b955b6d` (same lines on `master`) and esa-layouts-v2
    - Native `incentive.*` messages add `event_id` (never null). `channel_id` stays null for a shared incentive.
    - The ESA lookup routes return the owner as `campaign_id`: the Channel id for a Channel incentive, the **Event id** (team campaign) for a shared incentive. `campaigns/{id}` already resolves an Event id as a team campaign (ADR-0010 §2).
    - Tiltify donation messages do not change. They already send `campaign_id` and `team_event_id`.
-4. **Lists follow Tiltify team campaigns** (amends ADR-0010 §3). `campaign/{eventId}/rewards`, `targets` and `polls` list the Event's shared incentives. `campaign/{channelId}/…` lists only that Channel's own incentives. `campaign/{eventId}/polls/{poll_id}` serves a shared poll.
-5. **Rollout order.** Each step ships separately. The list change (step 4) is the only step that breaks current consumers.
+4. **The Event lists its shared incentives, like a Tiltify team campaign** (amends ADR-0010 §3). `campaign/{eventId}/rewards`, `targets` and `polls` list the Event's shared incentives, and `campaign/{eventId}/polls/{poll_id}` serves a shared poll. Channel lists keep listing them too, so consumers that read only Channel lists keep working. Removing them from Channel lists is a separate, later decision (see Consequences).
+5. **Rollout order.** Each step ships separately.
    1. Producer: `event_id`, Event scope, owner identifiers (Decisions 1–3). Lists unchanged.
-   2. Kollekt: create and sync the team Campaign named by `campaigns/{id}.team_id`, and file a cold incentive under the owner from the lookup, not under the donation's Campaign.
-   3. Overlay: read targets from the team campaign as well as this stream's campaign, as it already does for polls.
-   4. Producer: switch the lists (Decision 4), after steps 2 and 3 are deployed.
+   2. Overlay: remove duplicate polls by id, as it already does for targets, and read targets from the team campaign as well as this stream's campaign.
+   3. Producer: Event lists include the Event's shared incentives (Decision 4). Current Kollekt never syncs an Event Campaign, so it is unaffected; the step 2 overlay removes the duplicates.
+   4. Kollekt: file each incentive under its owner from the lookup, the Event's Campaign for a shared incentive (kollekt#44). Its sync job also syncs that Event Campaign and marks incentives missing from the Event's list inactive, so step 3 must be deployed first.
 
 ## Migration
 
@@ -56,13 +56,15 @@ Consumers, read at kollekt `b955b6d` (same lines on `master`) and esa-layouts-v2
 - Downstream systems always get an owner identifier, and Kollekt can file shared incentives under the Event's Campaign, as its maintainer proposed.
 - A shared incentive of one Event no longer appears on, or accepts money from, another Event. This fixes a real scope bug, not only a wire problem.
 - Admin and moderator forms need an Event for shared incentives. "Shared" now means "shared within this Event".
-- Between steps 1 and 4, lists still show shared incentives under each Channel while lookups name the Event as owner. A consumer must use the lookup owner, not the list it read from.
-- After step 4, a consumer that does not read the team campaign no longer sees shared incentives. Release notes must name the minimum Kollekt and overlay versions.
+- A consumer must use the lookup owner, not the list it read a shared incentive from: Channel lists keep listing shared incentives.
+- Kollekt keeps the first owner it stored for an incentive that a Channel list introduced, and its missing-from-list check covers only rows that the synced Campaign owns. Removing shared incentives from Channel lists would therefore flip those rows inactive; it needs a Kollekt owner repair first.
+- Kollekt needs `TiltifyBridge__Source=EsaDono` to use the owner lookups.
 - The schema change is hard to reverse once incentives exist in two or more Events.
 
 ## Alternatives considered
 
 - **Keep shared incentives global and add a synthetic owner id.** No migration, but cross-Event scope stays open, and the owner id has no meaning in Tiltify or Kollekt. Rejected.
-- **List shared incentives under both the Event and each Channel.** The overlay shows shared polls twice, because it concatenates the team and campaign lists without removing duplicates. Rejected.
-- **Keep listing under each Channel permanently and add only owner ids.** Kollekt would file shared incentives under the Event's Campaign but find them only in Channel lists, so its owner sync would mark them inactive. Rejected.
+- **List shared incentives only under the Event (pure Tiltify team style).** Current Kollekt never syncs the Event's Campaign, and Kollekt rows that Channel lists introduced would flip inactive. Deferred until consumers no longer depend on Channel lists.
+- **List them only under each Channel and add only owner ids.** Kollekt would file shared incentives under the Event's Campaign but never find them in its list, so its sync would mark them inactive. Rejected.
+- **Ship Kollekt before the Event lists.** Kollekt would sync the Event Campaign's empty lists and mark shared incentives inactive, and Channel syncs would reactivate them, in database order. Rejected.
 - **Give shared incentives to the primary Channel.** The owner then changes when the primary Channel changes, and other Channels still need a special case. Rejected (as in ADR-0010).

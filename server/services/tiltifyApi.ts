@@ -15,7 +15,7 @@ import { money, tiltifyCurrency } from './webhooks/tiltifyPayload.js';
  * under every Channel of that Event; the Event lists no incentives of its own:
  * kollekt only knows Channels (from `campaign_id` on a donation), and layouts
  * concatenates Event + Channel lists, so listing under both would show it twice
- * (#117). ADR-0012 step 4 moves shared incentives to the Event's lists.
+ * (#117). ADR-0012 rollout step 3 also lists them under the Event.
  *
  * Optional ESA `/lookup/` routes alone return `{ campaign_id, incentive }` for any
  * incentive of the context Event, including history. `campaign_id` is the owner:

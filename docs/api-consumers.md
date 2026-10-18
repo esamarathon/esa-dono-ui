@@ -48,8 +48,9 @@ incentive ids without duplicate inserts and retain the verified owner when resol
 cross-Channel metadata. Donation source Channel routing, money and ids never change.
 
 Existing Channel lists remain own plus the shared incentives of the Channel's Event;
-Event incentive lists remain `[]`. ADR-0012 step 4 later moves shared incentives to the
-Event's lists, Tiltify team-campaign style, after Kollekt and the overlay read them there.
+Event incentive lists remain `[]`. ADR-0012 later also lists shared incentives under their
+Event, Tiltify team-campaign style, after the overlay removes duplicate polls; Kollekt#44
+must be deployed after that step.
 Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
 Event or another Channel's poll). Nothing changes overlay list scope. The focused
 [Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a

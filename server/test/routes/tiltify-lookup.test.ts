@@ -25,7 +25,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
   const rewards: string[] = [];
   const targets: string[] = [];
   const polls: Array<{ id: string; firstOption: string; secondOption: string }> = [];
-  // ADR-0012 step 1 keeps ADR-0010 lists: a shared incentive is listed under each Channel of its Event.
+  // ADR-0012 rollout step 1 keeps ADR-0010 lists: a shared incentive is listed under each Channel of its Event.
   const listedUnder = (index: number) => [channelA, channelA, channelB][index]!;
 
   async function fixture({
