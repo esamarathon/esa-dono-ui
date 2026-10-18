@@ -62,6 +62,10 @@ does not clear those gates or authorize deployment.
   credit history and source-labelled allocations.
 - Separate money, allocation, Wallet, Pool-credit, Unused and refund metrics/stats;
   full-state opt-in native donation updates and scoped ESA incentive lookups.
+- `RATE_LIMIT_EXEMPT_IPS`: IPs or CIDRs that skip the global API limit
+  (`RATE_LIMIT_API`), for kollekt and the overlay polling the backend directly on the
+  private Docker network. Empty by default. See `docs/deployment.md` § Client IP and
+  `TRUST_PROXY`.
 
 ### Changed
 

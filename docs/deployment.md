@@ -237,6 +237,39 @@ IP from `X-Forwarded-For`, counting `TRUST_PROXY` proxies back from itself.
   default; the nginx example above sets it; check your load balancer.
 - Check after every proxy change: [§ 4. Verify](#4-verify).
 
+##### Internal consumers: `RATE_LIMIT_EXEMPT_IPS`
+
+kollekt polls the Tiltify-compatible API about 36 times/min per Channel, and the
+overlay polls it too. With many Channels this exceeds `RATE_LIMIT_API`.
+`RATE_LIMIT_EXEMPT_IPS` lists IPs and CIDRs (comma-separated, IPv4 or IPv6;
+`::ffff:172.18.0.5` matches `172.18.0.5`) whose requests skip `RATE_LIMIT_API`.
+The auth, spend, feedback and metrics limits still apply. An invalid entry stops
+the backend at startup. Empty (the default) exempts nobody.
+
+The match is against the resolved client IP, the same one the limits use:
+
+- A consumer that connects **directly** to `dono-backend:3001` has its container
+  address as the client IP (it sends no `X-Forwarded-For`).
+- A request through the frontend nginx gets its client IP from `X-Forwarded-For`,
+  `TRUST_PROXY` hops back. A client cannot choose that address unless
+  `TRUST_PROXY` is too high, so the proxy chain must be correct first.
+
+List only addresses the public cannot present: consumer containers on the private
+Docker network that reach the backend directly. **Never list the address of a
+proxy** (the frontend nginx, Caddy, or the Docker gateway that Caddy on the host
+appears as). If `TRUST_PROXY` is too low, every public request has that proxy
+address, and all public traffic is exempt. A whole network CIDR includes those
+addresses, so prefer the consumer containers' own IPs. Find them with:
+
+```bash
+docker inspect -f '{{range $n, $c := .NetworkSettings.Networks}}{{$n}} {{$c.IPAddress}}{{"\n"}}{{end}}' <container>
+```
+
+A container can get a new address when it is recreated. Pin it with
+`ipv4_address` in its Compose service, or put the consumers on a dedicated
+network with the backend and list that network's subnet
+(`docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' <network>`).
+
 ---
 
 ## Configuration reference
@@ -268,6 +301,7 @@ IP from `X-Forwarded-For`, counting `TRUST_PROXY` proxies back from itself.
 | `RATE_LIMIT_AUTH`                   | no             | `5`                                                        | auth endpoints req/min/IP                                          |
 | `RATE_LIMIT_METRICS`                | no             | `30`                                                       | `/api/metrics` req/min/IP                                          |
 | `RATE_LIMIT_API`                    | no             | `600`                                                      | all of `/api/*` req/min/IP (#140)                                  |
+| `RATE_LIMIT_EXEMPT_IPS`             | no             | —                                                          | IPs/CIDRs that skip `RATE_LIMIT_API` (internal pollers only)       |
 | `TRUST_PROXY`                       | no             | `1`                                                        | proxy hops in front of Express (#140)                              |
 
 OAuth redirect URIs to register with each provider:

@@ -39,6 +39,9 @@ services:
       # Rate limits (req/min): whole API per IP (backstop), spend per donor,
       # auth and /api/metrics per IP.
       - RATE_LIMIT_API=${RATE_LIMIT_API:-600}
+      # IPs/CIDRs that skip RATE_LIMIT_API only (internal pollers on the private
+      # network). Empty = none. See docs/deployment.md § Client IP and TRUST_PROXY.
+      - RATE_LIMIT_EXEMPT_IPS=${RATE_LIMIT_EXEMPT_IPS:-}
       - RATE_LIMIT_SPEND=${RATE_LIMIT_SPEND:-20}
       - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-5}
       - RATE_LIMIT_METRICS=${RATE_LIMIT_METRICS:-30}
