@@ -40,6 +40,29 @@ another Event (shared ones included), returns 404. Lookup reads current amounts,
 and approved poll options through the same builders as the existing lists/detail.
 No donor email, staff information, claim answers or other private data is returned.
 
+A shared goal looked up from a Channel of its Event (`GET campaign/<channel id>/lookup/targets/<goal id>`) names the Event as its owner. The test `docs-samples.test.ts` keeps this sample in step with the real response:
+
+```json sample=lookup:targets
+{
+  "campaign_id": "eeeeeeee-0000-4000-8000-000000000001",
+  "incentive": {
+    "id": "dddddddd-0000-4000-8000-000000000001",
+    "name": "Blindfolded run",
+    "active": true,
+    "amount": {
+      "currency": "USD",
+      "value": "600.00"
+    },
+    "amount_raised": {
+      "currency": "USD",
+      "value": "15.00"
+    },
+    "inserted_at": "2026-01-24T18:30:00.000Z",
+    "updated_at": "2026-01-24T18:30:00.000Z"
+  }
+}
+```
+
 This is an optional ESA capability for Kollekt to resolve cold or stale cross-Channel
 references after pooled allocations. A legacy source or 404 keeps the consumer's old
 behavior; no new configuration, auth or feature flag is required. Keep these envelopes

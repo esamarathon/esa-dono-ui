@@ -42,6 +42,319 @@ Each Destination also picks a **payload format**. Design: [ADR-0009](adr/0009-ti
 
 No environment variables are needed. Destinations, secrets and RabbitMQ URLs are set at runtime in the admin UI. One optional variable, `WEBHOOK_AMQP_CONFIRM_TIMEOUT_MS` (default `10000`), changes the publish-confirm timeout.
 
+## Samples
+
+Real payloads from a pooled $15 donation in the Event `ESA Winter 2026` (`eeeeeeee-…`) on its Channel `Stream 1` (`cccccccc-…`), with ids replaced for readability. `docs-samples.test.ts` rebuilds them and fails when a field is added, removed or changes type. Placeholder ids: Channel reward `aaaaaaaa-…`, shared poll `bbbbbbbb-…-001` with option `bbbbbbbb-…-002`, shared goal `dddddddd-…`, donation `ffffffff-…`.
+
+### Native
+
+`incentive.created` for a Channel reward:
+
+```json sample=native:incentive.created:REWARD
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "type": "incentive.created",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "incentive_kind": "REWARD",
+    "incentive_id": "aaaaaaaa-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "channel_id": "cccccccc-0000-4000-8000-000000000001",
+    "title": "Signed poster",
+    "is_active": true,
+    "cost_cents": 1000
+  }
+}
+```
+
+`incentive.created` for a shared goal. `event_id` names the owning Event; `channel_id` is null because the goal belongs to no Channel (ADR-0012). A poll carries `ends_at` instead of `target_cents`.
+
+```json sample=native:incentive.created:GOAL
+{
+  "id": "00000000-0000-4000-8000-000000000002",
+  "type": "incentive.created",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "incentive_kind": "GOAL",
+    "incentive_id": "dddddddd-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "channel_id": null,
+    "title": "Blindfolded run",
+    "is_active": true,
+    "target_cents": 50000
+  }
+}
+```
+
+`incentive.value_changed`:
+
+```json sample=native:incentive.value_changed
+{
+  "id": "00000000-0000-4000-8000-000000000003",
+  "type": "incentive.value_changed",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "incentive_kind": "GOAL",
+    "incentive_id": "dddddddd-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "channel_id": null,
+    "title": "Blindfolded run",
+    "changed_fields": ["target_cents"],
+    "old_target_cents": 50000,
+    "new_target_cents": 60000
+  }
+}
+```
+
+`incentive.disabled` (`incentive.enabled` has the same `data`):
+
+```json sample=native:incentive.disabled
+{
+  "id": "00000000-0000-4000-8000-000000000004",
+  "type": "incentive.disabled",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "incentive_kind": "REWARD",
+    "incentive_id": "aaaaaaaa-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "channel_id": "cccccccc-0000-4000-8000-000000000001",
+    "title": "Signed poster"
+  }
+}
+```
+
+`donation.created`. `amount_cents` is new money; each allocation row is one category's share, so the categories can add up to more than the money:
+
+```json sample=native:donation.created
+{
+  "id": "00000000-0000-4000-8000-000000000005",
+  "type": "donation.created",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "donation_id": "ffffffff-0000-4000-8000-000000000001",
+    "external_id": "cs_test_a1b2c3",
+    "amount_cents": 1500,
+    "status": "COMPLETED",
+    "pledge_amount_cents": 1500,
+    "wallet_applied_cents": 0,
+    "allocations": {
+      "reward": [
+        {
+          "id": "00000000-0000-4000-8000-000000000006",
+          "reward_id": "aaaaaaaa-0000-4000-8000-000000000001",
+          "amount_cents": 1000,
+          "status": "PENDING",
+          "source": "donor"
+        }
+      ],
+      "poll": [
+        {
+          "id": "00000000-0000-4000-8000-000000000007",
+          "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+          "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002",
+          "amount_cents": 600,
+          "source": "donor",
+          "status": "ACTIVE"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000008",
+          "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+          "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002",
+          "amount_cents": 900,
+          "source": "auto",
+          "status": "ACTIVE"
+        }
+      ],
+      "goal": [
+        {
+          "id": "00000000-0000-4000-8000-000000000009",
+          "goal_id": "dddddddd-0000-4000-8000-000000000001",
+          "amount_cents": 400,
+          "source": "donor"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "goal_id": "dddddddd-0000-4000-8000-000000000001",
+          "amount_cents": 1100,
+          "source": "auto"
+        }
+      ]
+    },
+    "channel_id": "cccccccc-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "donor_ref": "00000000-0000-4000-8000-000000000011",
+    "donor_name": "Speedy",
+    "donor_comment": "Good luck runners!",
+    "hidden_from_overlay": false
+  }
+}
+```
+
+`donation.updated` has the same `data` as `donation.created`, with the current state. Here the donation is hidden from the overlay:
+
+```json sample=native:donation.updated
+{
+  "id": "00000000-0000-4000-8000-000000000012",
+  "type": "donation.updated",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "donation_id": "ffffffff-0000-4000-8000-000000000001",
+    "external_id": "cs_test_a1b2c3",
+    "amount_cents": 1500,
+    "status": "COMPLETED",
+    "pledge_amount_cents": 1500,
+    "wallet_applied_cents": 0,
+    "allocations": {
+      "reward": [
+        {
+          "id": "00000000-0000-4000-8000-000000000006",
+          "reward_id": "aaaaaaaa-0000-4000-8000-000000000001",
+          "amount_cents": 1000,
+          "status": "PENDING",
+          "source": "donor"
+        }
+      ],
+      "poll": [
+        {
+          "id": "00000000-0000-4000-8000-000000000007",
+          "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+          "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002",
+          "amount_cents": 600,
+          "source": "donor",
+          "status": "ACTIVE"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000008",
+          "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+          "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002",
+          "amount_cents": 900,
+          "source": "auto",
+          "status": "ACTIVE"
+        }
+      ],
+      "goal": [
+        {
+          "id": "00000000-0000-4000-8000-000000000009",
+          "goal_id": "dddddddd-0000-4000-8000-000000000001",
+          "amount_cents": 400,
+          "source": "donor"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "goal_id": "dddddddd-0000-4000-8000-000000000001",
+          "amount_cents": 1100,
+          "source": "auto"
+        }
+      ]
+    },
+    "channel_id": "cccccccc-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "donor_ref": "00000000-0000-4000-8000-000000000011",
+    "donor_name": null,
+    "donor_comment": null,
+    "hidden_from_overlay": true
+  }
+}
+```
+
+`donation.moderated`:
+
+```json sample=native:donation.moderated
+{
+  "id": "00000000-0000-4000-8000-000000000013",
+  "type": "donation.moderated",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "donation_id": "ffffffff-0000-4000-8000-000000000001",
+    "external_id": "cs_test_a1b2c3",
+    "donor_ref": "00000000-0000-4000-8000-000000000011",
+    "moderated": true,
+    "moderated_at": "2026-01-24T18:30:00.000Z"
+  }
+}
+```
+
+`donation.hidden` (`donation.unhidden` sends `donor_name` and `donor_comment` again):
+
+```json sample=native:donation.hidden
+{
+  "id": "00000000-0000-4000-8000-000000000014",
+  "type": "donation.hidden",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "data": {
+    "donation_id": "ffffffff-0000-4000-8000-000000000001",
+    "external_id": "cs_test_a1b2c3",
+    "channel_id": "cccccccc-0000-4000-8000-000000000001",
+    "event_id": "eeeeeeee-0000-4000-8000-000000000001",
+    "donor_ref": "00000000-0000-4000-8000-000000000011",
+    "donor_name": null,
+    "donor_comment": null
+  }
+}
+```
+
+### Tiltify-compatible
+
+`<channel-slug>.donation`. `target_contributions[].amount` is the goal's allocation, here donor and auto rows combined:
+
+```json sample=tiltify:donation
+{
+  "id": "ffffffff-0000-4000-8000-000000000001",
+  "amount": {
+    "currency": "USD",
+    "value": "15.00",
+    "value_cents": 1500
+  },
+  "donor_name": "Speedy",
+  "donor_comment": "Good luck runners!",
+  "created_at": "2026-01-24T18:30:00.000Z",
+  "completed_at": "2026-01-24T18:30:00.000Z",
+  "campaign_id": "cccccccc-0000-4000-8000-000000000001",
+  "team_event_id": "eeeeeeee-0000-4000-8000-000000000001",
+  "reward_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "reward_claims": [
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "reward_id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "quantity": 1,
+      "custom_question": null
+    }
+  ],
+  "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+  "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002",
+  "poll_votes": [
+    {
+      "poll_id": "bbbbbbbb-0000-4000-8000-000000000001",
+      "poll_option_id": "bbbbbbbb-0000-4000-8000-000000000002"
+    }
+  ],
+  "target_id": "dddddddd-0000-4000-8000-000000000001",
+  "target_contributions": [
+    {
+      "target_id": "dddddddd-0000-4000-8000-000000000001",
+      "amount": {
+        "currency": "USD",
+        "value": "15.00"
+      }
+    }
+  ]
+}
+```
+
+`<slug>.fact.updated`, sent once for the Channel and once for the Event:
+
+```json sample=tiltify:fact.updated
+{
+  "id": "cccccccc-0000-4000-8000-000000000001",
+  "slug": "esa-winter-stream1",
+  "name": "Stream 1",
+  "total_amount_raised": {
+    "currency": "USD",
+    "value": "15.00"
+  }
+}
+```
+
 ## Consumer setup
 
 kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible messages** (a `TILTIFY` Destination, § Formats) and the **Tiltify-compatible REST API** at `<APP_BASE_URL>/api/tiltify/` ([ADR-0010](adr/0010-tiltify-compatible-rest-api.md)).

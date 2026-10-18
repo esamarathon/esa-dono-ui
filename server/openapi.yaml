@@ -468,6 +468,11 @@ paths:
       responses:
         '200':
           description: Active rewards ordered by cost_cents ascending
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Reward' }
 
   /rewards/{id}/claim:
     post:
@@ -509,6 +514,11 @@ paths:
       responses:
         '200':
           description: Active polls with ACTIVE options ordered by votes_cents descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Poll' }
 
   /polls/{id}/custom-entry:
     post:
@@ -576,6 +586,11 @@ paths:
       responses:
         '200':
           description: Active goals ordered by created_at descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FundGoal' }
 
   /goals/{id}/contribute:
     post:
@@ -2120,7 +2135,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All rewards ordered by created_at descending
+          description: All rewards ordered by created_at descending. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Admin]
       summary: Create a reward
@@ -2550,7 +2565,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All polls with nested options
+          description: All polls with nested options. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Admin]
       summary: Create a poll
@@ -3225,7 +3240,7 @@ paths:
       security: [{ AdminKey: [] }]
       responses:
         '200':
-          description: All goals ordered by created_at descending
+          description: All goals ordered by created_at descending. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Admin]
       summary: Create a fund goal
@@ -3751,7 +3766,7 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Polls with options and custom entries
+          description: Polls with options and custom entries. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Moderator]
       summary: Create a poll
@@ -3980,7 +3995,7 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Rewards ordered by created_at descending
+          description: Rewards ordered by created_at descending. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Moderator]
       summary: Create a reward
@@ -4129,7 +4144,7 @@ paths:
       security: [{ DonorSession: [] }, { DonorBearer: [] }, { ModeratorKey: [] }, { AdminKey: [] }]
       responses:
         '200':
-          description: Goals ordered by created_at descending
+          description: Goals ordered by created_at descending. Rows have the Reward/Poll/FundGoal fields, including `event_id` and `channel_id`, plus allocation summaries.
     post:
       tags: [Moderator]
       summary: Create a fund goal
@@ -5278,6 +5293,135 @@ components:
       uniqueItems: true
       description: Ordered own/shared goal ids. Inactive/completed entries are preserved; another Channel's goal returns 400.
       items: { type: string }
+    Reward:
+      type: object
+      description: A reward row. Staff lists add allocation summary fields.
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        type: { type: string, enum: [DIGITAL, PHYSICAL, SHOUTOUT, CUSTOM] }
+        cost_cents: { type: integer }
+        quantity_total: { type: integer, nullable: true, description: Null means unlimited stock }
+        quantity_claimed: { type: integer }
+        is_active: { type: boolean }
+        custom_type_label: { type: string, nullable: true }
+        image_url: { type: string, nullable: true }
+        channel_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The owning Channel, or null for a shared incentive of `event_id`.
+        event_id:
+          type: string
+          format: uuid
+          description: The owning Event (ADR-0012). Never null.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      example:
+        id: aaaaaaaa-0000-4000-8000-000000000001
+        title: Signed poster
+        description: null
+        type: DIGITAL
+        cost_cents: 1000
+        quantity_total: null
+        quantity_claimed: 1
+        is_active: true
+        custom_type_label: null
+        image_url: null
+        channel_id: cccccccc-0000-4000-8000-000000000001
+        event_id: eeeeeeee-0000-4000-8000-000000000001
+        created_at: '2026-01-24T18:30:00.000Z'
+        updated_at: '2026-01-24T18:30:00.000Z'
+    PollOption:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poll_id: { type: string, format: uuid }
+        label: { type: string }
+        votes_cents: { type: integer }
+        status: { type: string, enum: [ACTIVE, PENDING_APPROVAL, REJECTED] }
+        custom_entry_id: { type: string, nullable: true }
+    Poll:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        is_active: { type: boolean }
+        ends_at: { type: string, format: date-time, nullable: true }
+        total_votes_cents: { type: integer }
+        allow_custom_entries: { type: boolean }
+        max_entry_chars: { type: integer, nullable: true }
+        auto_approve: { type: boolean }
+        channel_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The owning Channel, or null for a shared incentive of `event_id`.
+        event_id:
+          type: string
+          format: uuid
+          description: The owning Event (ADR-0012). Never null.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/PollOption' }
+      example:
+        id: bbbbbbbb-0000-4000-8000-000000000001
+        title: Next bonus game
+        description: null
+        is_active: true
+        ends_at: null
+        total_votes_cents: 1500
+        allow_custom_entries: false
+        max_entry_chars: null
+        auto_approve: true
+        channel_id: null
+        event_id: eeeeeeee-0000-4000-8000-000000000001
+        created_at: '2026-01-24T18:30:00.000Z'
+        updated_at: '2026-01-24T18:30:00.000Z'
+        options:
+          - id: bbbbbbbb-0000-4000-8000-000000000002
+            poll_id: bbbbbbbb-0000-4000-8000-000000000001
+            label: Celeste
+            votes_cents: 1500
+            status: ACTIVE
+            custom_entry_id: null
+    FundGoal:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        target_cents: { type: integer }
+        current_cents: { type: integer, description: 'Allocated progress, not money' }
+        is_active: { type: boolean }
+        is_complete: { type: boolean, description: Derived from progress }
+        channel_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The owning Channel, or null for a shared incentive of `event_id`.
+        event_id:
+          type: string
+          format: uuid
+          description: The owning Event (ADR-0012). Never null.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      example:
+        id: dddddddd-0000-4000-8000-000000000001
+        title: Blindfolded run
+        description: null
+        target_cents: 60000
+        current_cents: 1500
+        is_active: true
+        is_complete: false
+        channel_id: null
+        event_id: eeeeeeee-0000-4000-8000-000000000001
+        created_at: '2026-01-24T18:30:00.000Z'
+        updated_at: '2026-01-24T18:30:00.000Z'
     TiltifyAmount:
       type: object
       properties:
@@ -5359,6 +5503,16 @@ components:
       type: object
       required: [campaign_id, incentive]
       additionalProperties: false
+      example:
+        campaign_id: eeeeeeee-0000-4000-8000-000000000001
+        incentive:
+          id: dddddddd-0000-4000-8000-000000000001
+          name: Blindfolded run
+          active: true
+          amount: { currency: USD, value: '600.00' }
+          amount_raised: { currency: USD, value: '15.00' }
+          inserted_at: '2026-01-24T18:30:00.000Z'
+          updated_at: '2026-01-24T18:30:00.000Z'
       properties:
         campaign_id:
           type: string
