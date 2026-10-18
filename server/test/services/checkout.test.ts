@@ -11,7 +11,7 @@ import {
 } from '../../services/checkout.js';
 import { pledgeResponse } from '../../services/pledge.js';
 import { intakeDonation } from '../../services/donation.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 import { sendMagicLink } from '../../services/email.js';
 import { drainDestination } from '../../services/webhooks/dispatcher.js';
 
@@ -595,7 +595,7 @@ describe('checkout lifecycle on real SQLite', () => {
         goalCents: 0,
       });
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Old incentive', target_cents: 10000 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Old incentive', target_cents: 10000 },
       });
       goals.push(goal.id);
       const old = await prisma.pendingPledge.create({
@@ -687,7 +687,11 @@ describe('checkout lifecycle on real SQLite', () => {
       goalCents: 0,
     });
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Originally fulfilled incentive', target_cents: 10000 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Originally fulfilled incentive',
+        target_cents: 10000,
+      },
     });
     goals.push(goal.id);
     const old = await prisma.pendingPledge.create({
@@ -778,7 +782,7 @@ describe('checkout lifecycle on real SQLite', () => {
     'handles a literal D1000/W950/cash50 late payment safely (%s)',
     async (funding) => {
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Original incentive', target_cents: 10000 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Original incentive', target_cents: 10000 },
       });
       goals.push(goal.id);
       const { pledge, donor, input } = await pending({

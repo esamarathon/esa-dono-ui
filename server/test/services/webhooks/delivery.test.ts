@@ -177,16 +177,29 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveEnabledPayload({
       incentiveKind: 'POLL',
       incentiveId: 'p-1',
+      eventId: 'event-1',
       channelId: 'ch-1',
       title: 'Poll',
     });
     expect(payload.data.channel_id).toBe('ch-1');
   });
 
+  it('names the owning Event of a shared incentive, never only null (ADR-0012)', () => {
+    const payload = buildIncentiveEnabledPayload({
+      incentiveKind: 'GOAL',
+      incentiveId: 'g-1',
+      eventId: 'event-1',
+      channelId: null,
+      title: 'Shared goal',
+    });
+    expect(payload.data).toMatchObject({ event_id: 'event-1', channel_id: null });
+  });
+
   it('incentive.created (REWARD) has no forbidden keys', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test Reward',
       isActive: true,
@@ -199,6 +212,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'POLL',
       incentiveId: 'p-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test Poll',
       isActive: true,
@@ -211,6 +225,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveCreatedPayload({
       incentiveKind: 'GOAL',
       incentiveId: 'g-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test Goal',
       isActive: true,
@@ -223,6 +238,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveEnabledPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test',
     });
@@ -233,6 +249,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveDisabledPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test',
     });
@@ -243,6 +260,7 @@ describe('PII allowlist — incentive payloads', () => {
     const payload = buildIncentiveValueChangedPayload({
       incentiveKind: 'REWARD',
       incentiveId: 'r-1',
+      eventId: 'event-1',
       channelId: null,
       title: 'Test',
       changedFields: ['cost_cents'],

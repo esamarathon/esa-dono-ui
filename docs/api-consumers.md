@@ -30,12 +30,13 @@ The Tiltify-compatible API adds only these optional ESA-specific reads (relative
 - `GET campaign/:id/lookup/targets/:target_id`
 - `GET campaign/:id/lookup/polls/:poll_id`
 
-A successful response is `{campaign_id: string | null, incentive: <existing bare DTO>}`.
-`campaign_id` is the incentive's **true owning Channel UUID**, or `null` for shared
-incentives, not the requested context. `:id` must resolve to a known Channel or Event,
-including inactive historical identities. An owned incentive must belong to a Channel
-in that same Event; shared incentives are allowed. An unknown context/resource or an
-owner in another Event returns 404. Lookup reads current amounts, active state, stock
+A successful response is `{campaign_id: string, incentive: <existing bare DTO>}`.
+`campaign_id` is the incentive's **true owner**, not the requested context: the owning
+Channel UUID, or for a shared incentive its **Event UUID** (the team campaign;
+ADR-0012). It is never null. `:id` must resolve to a known Channel or Event, including
+inactive historical identities. The incentive must belong to that same Event, as a
+Channel incentive or a shared one. An unknown context/resource, or an incentive of
+another Event (shared ones included), returns 404. Lookup reads current amounts, active state, stock
 and approved poll options through the same builders as the existing lists/detail.
 No donor email, staff information, claim answers or other private data is returned.
 
@@ -46,7 +47,9 @@ separate from ordinary Tiltify models. Consumers must handle globally unique sha
 incentive ids without duplicate inserts and retain the verified owner when resolving
 cross-Channel metadata. Donation source Channel routing, money and ids never change.
 
-Existing Channel lists remain own plus shared; Event incentive lists remain `[]`.
+Existing Channel lists remain own plus the shared incentives of the Channel's Event;
+Event incentive lists remain `[]`. ADR-0012 step 4 later moves shared incentives to the
+Event's lists, Tiltify team-campaign style, after Kollekt and the overlay read them there.
 Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
 Event or another Channel's poll). Nothing changes overlay list scope. The focused
 [Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a

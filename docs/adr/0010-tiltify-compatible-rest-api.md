@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-30
 
-**Status:** Accepted
+**Status:** Accepted — §3 **amended by [ADR-0012](0012-shared-incentives-belong-to-an-event.md)**: shared incentives belong to one Event and are listed only under that Event's Channels; step 4 moves them to the Event's lists. The text below is retained as history.
 
 **Related:** PRD-0002 §R, esamarathon/esa-dono-ui#117 (design comment), [ADR-0008](0008-event-channel-identity.md) (identity), [ADR-0009](0009-tiltify-compatible-messages.md) (messages), esamarathon/kollekt#36, esamarathon/esa-layouts-v2#6
 

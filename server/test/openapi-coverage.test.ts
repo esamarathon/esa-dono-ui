@@ -280,13 +280,18 @@ describe('OpenAPI route coverage', () => {
               required: ['campaign_id', 'incentive'],
               additionalProperties: false,
               properties: {
-                campaign_id: { type: 'string', format: 'uuid', nullable: true },
+                campaign_id: { type: 'string', format: 'uuid' },
                 incentive: { $ref: `#/components/schemas/Tiltify${resource}` },
               },
             },
           },
         },
       });
+      // ADR-0012: the owner is the Channel or, for a shared incentive, its Event.
+      const lookup = (
+        spec as { components: { schemas: Record<string, { properties: { campaign_id: object } }> } }
+      ).components.schemas[`EsaDono${resource}Lookup`]!;
+      expect(lookup.properties.campaign_id).not.toHaveProperty('nullable');
     }
   });
 

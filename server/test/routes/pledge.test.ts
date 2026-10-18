@@ -45,16 +45,31 @@ describe('pledge HTTP contract on SQLite', () => {
         data: { primary_channel_id: primary.id },
       });
       const listed = await prisma.fundGoal.create({
-        data: { title: 'Own list', channel_id: own.id, target_cents: 10000 },
+        data: {
+          event_id: own.event_id,
+          title: 'Own list',
+          channel_id: own.id,
+          target_cents: 10000,
+        },
       });
       const shared = await prisma.fundGoal.create({
-        data: { title: 'Primary list', target_cents: 5000 },
+        data: { event_id: event.id, title: 'Primary list', target_cents: 5000 },
       });
       const closest = await prisma.fundGoal.create({
-        data: { title: 'Closest own', channel_id: own.id, target_cents: 200 },
+        data: {
+          event_id: own.event_id,
+          title: 'Closest own',
+          channel_id: own.id,
+          target_cents: 200,
+        },
       });
       const foreign = await prisma.fundGoal.create({
-        data: { title: 'Foreign', channel_id: primary.id, target_cents: 100 },
+        data: {
+          event_id: primary.event_id,
+          title: 'Foreign',
+          channel_id: primary.id,
+          target_cents: 100,
+        },
       });
       goalIds.push(listed.id, shared.id, closest.id, foreign.id);
       await prisma.channelDefaultGoal.createMany({

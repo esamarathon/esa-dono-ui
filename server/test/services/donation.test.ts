@@ -10,7 +10,11 @@ import { createDonationPublisher } from '../../services/webhooks/donationPublish
 import type { TiltifyMessage } from '../../services/webhooks/tiltifyPayload.js';
 import { sendMagicLink } from '../../services/email.js';
 import { drainDestination } from '../../services/webhooks/dispatcher.js';
-import { createTestChannel, createLegacyPledge as createPledge } from '../helpers/fixtures.js';
+import {
+  createTestChannel,
+  createLegacyPledge as createPledge,
+  DEFAULT_EVENT_ID,
+} from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
@@ -78,10 +82,10 @@ afterEach(async () => {
     data: { primary_channel_id: null },
   });
   await prisma.channel.deleteMany({ where: { id: { in: channels } } });
-  await prisma.event.deleteMany({ where: { id: { in: events } } });
   await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
   await prisma.poll.deleteMany({ where: { id: { in: polls } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goals } } });
+  await prisma.event.deleteMany({ where: { id: { in: events } } });
   emails.length = channels.length = rewards.length = pledges.length = 0;
   polls.length = goals.length = destinations.length = events.length = blockedWords.length = 0;
 });
@@ -232,6 +236,7 @@ describe('Donation intake on SQLite', () => {
       });
       const inactive = await prisma.fundGoal.create({
         data: {
+          event_id: channel.event_id,
           title: 'Preserved inactive',
           target_cents: 100,
           is_active: false,
@@ -241,6 +246,7 @@ describe('Donation intake on SQLite', () => {
       goals.push(inactive.id);
       const own = await prisma.fundGoal.create({
         data: {
+          event_id: channel.event_id,
           title: 'Own',
           target_cents: 200,
           channel_id: channel.id,
@@ -249,11 +255,21 @@ describe('Donation intake on SQLite', () => {
       });
       goals.push(own.id);
       const shared = await prisma.fundGoal.create({
-        data: { title: 'Closer shared', target_cents: 100, is_active: stage !== 'none' },
+        data: {
+          event_id: event.id,
+          title: 'Closer shared',
+          target_cents: 100,
+          is_active: stage !== 'none',
+        },
       });
       goals.push(shared.id);
       const foreign = await prisma.fundGoal.create({
-        data: { title: 'Primary own (ineligible)', target_cents: 1, channel_id: primary.id },
+        data: {
+          event_id: primary.event_id,
+          title: 'Primary own (ineligible)',
+          target_cents: 1,
+          channel_id: primary.id,
+        },
       });
       goals.push(foreign.id);
       await prisma.channelDefaultGoal.create({
@@ -329,10 +345,19 @@ describe('Donation intake on SQLite', () => {
       const channel = await createTestChannel(prisma);
       channels.push(channel.id);
       const custom = await prisma.poll.create({
-        data: { title: 'Write-in', allow_custom_entries: true, max_entry_chars: 60 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Write-in',
+          allow_custom_entries: true,
+          max_entry_chars: 60,
+        },
       });
       const active = await prisma.poll.create({
-        data: { title: 'Other choice', options: { create: [{ label: 'A' }] } },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Other choice',
+          options: { create: [{ label: 'A' }] },
+        },
         include: { options: true },
       });
       polls.push(custom.id, active.id);
@@ -441,29 +466,34 @@ describe('Donation intake on SQLite', () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
     const custom = await prisma.poll.create({
-      data: { title: 'Pending', allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pending',
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     polls.push(custom.id);
     const active = await prisma.poll.create({
-      data: { title: 'Open', options: { create: [{ label: 'A' }] } },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Open', options: { create: [{ label: 'A' }] } },
       include: { options: true },
     });
     polls.push(active.id);
     const ended = await prisma.poll.create({
-      data: { title: 'Ending', options: { create: [{ label: 'B' }] } },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Ending', options: { create: [{ label: 'B' }] } },
       include: { options: true },
     });
     polls.push(ended.id);
     const a = await prisma.fundGoal.create({
-      data: { title: 'A', channel_id: channel.id, target_cents: 10000 },
+      data: { event_id: channel.event_id, title: 'A', channel_id: channel.id, target_cents: 10000 },
     });
     goals.push(a.id);
     const b = await prisma.fundGoal.create({
-      data: { title: 'B', channel_id: channel.id, target_cents: 10000 },
+      data: { event_id: channel.event_id, title: 'B', channel_id: channel.id, target_cents: 10000 },
     });
     goals.push(b.id);
     const c = await prisma.fundGoal.create({
-      data: { title: 'C', channel_id: channel.id, target_cents: 10000 },
+      data: { event_id: channel.event_id, title: 'C', channel_id: channel.id, target_cents: 10000 },
     });
     goals.push(c.id);
     const selections = [
@@ -555,15 +585,22 @@ describe('Donation intake on SQLite', () => {
       data: { email, balance_remaining: 400, total_donated: 400, magic_token: crypto.randomUUID() },
     });
     const reward = await prisma.reward.create({
-      data: { title: 'Locked physical', type: 'PHYSICAL', cost_cents: 600 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Locked physical',
+        type: 'PHYSICAL',
+        cost_cents: 600,
+      },
     });
     rewards.push(reward.id);
     const poll = await prisma.poll.create({
-      data: { title: 'Poll', options: { create: [{ label: 'A' }] } },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Poll', options: { create: [{ label: 'A' }] } },
       include: { options: true },
     });
     polls.push(poll.id);
-    const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 5000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 5000 },
+    });
     goals.push(goal.id);
     const plan = planPledge({
       pledge_amount_cents: 1000,
@@ -667,11 +704,15 @@ describe('Donation intake on SQLite', () => {
         },
       });
       const reward = await prisma.reward.create({
-        data: { title: 'Rollback', cost_cents: 500, type: 'DIGITAL' },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Rollback', cost_cents: 500, type: 'DIGITAL' },
       });
       rewards.push(reward.id);
       const poll = await prisma.poll.create({
-        data: { title: 'Rollback poll', options: { create: [{ label: 'A' }] } },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Rollback poll',
+          options: { create: [{ label: 'A' }] },
+        },
         include: { options: true },
       });
       polls.push(poll.id);
@@ -763,7 +804,13 @@ describe('Donation intake on SQLite', () => {
         },
       });
       const reward = await prisma.reward.create({
-        data: { title: 'Confirmed physical', type: 'PHYSICAL', cost_cents: 600, quantity_total: 1 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Confirmed physical',
+          type: 'PHYSICAL',
+          cost_cents: 600,
+          quantity_total: 1,
+        },
       });
       rewards.push(reward.id);
       const selections = [
@@ -824,7 +871,7 @@ describe('Donation intake on SQLite', () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Opaque data', target_cents: 5000 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Opaque data', target_cents: 5000 },
     });
     goals.push(goal.id);
     const items = [
@@ -874,7 +921,12 @@ describe('Donation intake on SQLite', () => {
       },
     });
     const reward = await prisma.reward.create({
-      data: { title: 'Wallet digital', type: 'DIGITAL', cost_cents: 1000 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Wallet digital',
+        type: 'DIGITAL',
+        cost_cents: 1000,
+      },
     });
     rewards.push(reward.id);
     const selections = [
@@ -923,7 +975,12 @@ describe('Donation intake on SQLite', () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
     const reward = await prisma.reward.create({
-      data: { title: 'Digital reward', type: 'DIGITAL', cost_cents: 500 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Digital reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+      },
     });
     rewards.push(reward.id);
     const { pledge_token } = await createPledge({
@@ -1006,15 +1063,27 @@ describe('Donation intake on SQLite', () => {
       const channel = await createTestChannel(prisma);
       channels.push(channel.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Two units', type: 'DIGITAL', cost_cents: 500, quantity_total: 5 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Two units',
+          type: 'DIGITAL',
+          cost_cents: 500,
+          quantity_total: 5,
+        },
       });
       rewards.push(reward.id);
       const poll = await prisma.poll.create({
-        data: { title: 'Vote', options: { create: [{ label: 'Option' }] } },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Vote',
+          options: { create: [{ label: 'Option' }] },
+        },
         include: { options: true },
       });
       polls.push(poll.id);
-      const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 10000 } });
+      const goal = await prisma.fundGoal.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 10000 },
+      });
       goals.push(goal.id);
       const { pledge_token } = await createPledge({
         email,
@@ -1157,7 +1226,12 @@ describe('Donation intake on SQLite', () => {
       const channel = await createTestChannel(prisma);
       channels.push(channel.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Committed claim', type: 'DIGITAL', cost_cents: 500 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Committed claim',
+          type: 'DIGITAL',
+          cost_cents: 500,
+        },
       });
       rewards.push(reward.id);
       const { pledge_token } = await createPledge({
@@ -1238,7 +1312,12 @@ describe('Donation intake on SQLite', () => {
       const channel = await createTestChannel(prisma);
       channels.push(channel.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Rollback claim', type: 'DIGITAL', cost_cents: 500 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Rollback claim',
+          type: 'DIGITAL',
+          cost_cents: 500,
+        },
       });
       rewards.push(reward.id);
       const { pledge_token } = await createPledge({
@@ -1321,7 +1400,12 @@ describe('Donation intake on SQLite', () => {
       const nativeBefore = await deliveries(native.id);
       const tiltifyBefore = await deliveries(tiltify.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Not fulfilled', type: 'DIGITAL', cost_cents: 500 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Not fulfilled',
+          type: 'DIGITAL',
+          cost_cents: 500,
+        },
       });
       rewards.push(reward.id);
       const { pledge_token } = await createPledge({

@@ -94,7 +94,13 @@ async function fixture({
     },
   });
   const reward = await prisma.reward.create({
-    data: { title: 'Physical', type: 'PHYSICAL', cost_cents: 9999, quantity_claimed: 1 },
+    data: {
+      event_id: event.id,
+      title: 'Physical',
+      type: 'PHYSICAL',
+      cost_cents: 9999,
+      quantity_claimed: 1,
+    },
   });
   rewards.push(reward.id);
   const claim = await prisma.rewardClaim.create({
@@ -108,6 +114,7 @@ async function fixture({
   });
   const poll = await prisma.poll.create({
     data: {
+      event_id: event.id,
       title: 'Ended poll',
       is_active: false,
       ends_at: new Date(0),
@@ -128,6 +135,7 @@ async function fixture({
   });
   const goal = await prisma.fundGoal.create({
     data: {
+      event_id: event.id,
       title: 'Completed goal',
       target_cents: allocationCents,
       current_cents: allocationCents,
@@ -1344,6 +1352,7 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
     });
     const digital = await prisma.reward.create({
       data: {
+        event_id: f.event.id,
         title: 'One whole digital entitlement',
         type: 'DIGITAL',
         cost_cents: 700,

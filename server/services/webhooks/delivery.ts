@@ -92,7 +92,9 @@ export type WebhookPayloadIncentiveCreated = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
     is_active: boolean;
@@ -110,7 +112,9 @@ export type WebhookPayloadIncentiveEnabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
   };
@@ -123,7 +127,9 @@ export type WebhookPayloadIncentiveDisabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
   };
@@ -137,6 +143,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'REWARD';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -146,6 +153,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'POLL';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -155,6 +163,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'GOAL';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -397,6 +406,7 @@ export function buildDonationModeratedPayload(opts: {
 export function buildIncentiveCreatedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
   isActive: boolean;
@@ -407,6 +417,7 @@ export function buildIncentiveCreatedPayload(opts: {
   const base = {
     incentive_kind: opts.incentiveKind,
     incentive_id: opts.incentiveId,
+    event_id: opts.eventId,
     channel_id: opts.channelId,
     title: opts.title,
     is_active: opts.isActive,
@@ -438,6 +449,7 @@ export function buildIncentiveCreatedPayload(opts: {
 export function buildIncentiveEnabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveEnabled {
@@ -448,6 +460,7 @@ export function buildIncentiveEnabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
     },
@@ -457,6 +470,7 @@ export function buildIncentiveEnabledPayload(opts: {
 export function buildIncentiveDisabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveDisabled {
@@ -467,6 +481,7 @@ export function buildIncentiveDisabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
     },
@@ -476,6 +491,7 @@ export function buildIncentiveDisabledPayload(opts: {
 export function buildIncentiveValueChangedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
   changedFields: string[];
@@ -494,6 +510,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'REWARD' as const,
         incentive_id: opts.incentiveId,
+        event_id: opts.eventId,
         channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
@@ -510,6 +527,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'POLL' as const,
         incentive_id: opts.incentiveId,
+        event_id: opts.eventId,
         channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
@@ -525,6 +543,7 @@ export function buildIncentiveValueChangedPayload(opts: {
     data: {
       incentive_kind: 'GOAL' as const,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
       changed_fields: opts.changedFields,

@@ -16,6 +16,7 @@ vi.mock('../../services/email.js', () => ({
 }));
 
 import adminRouter from '../../routes/admin.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
@@ -72,6 +73,7 @@ describe('Admin auction routes', () => {
         starting_price_cents: 1000,
         min_increment_cents: 100,
         ends_at: new Date(Date.now() + 3_600_000).toISOString(),
+        event_id: DEFAULT_EVENT_ID,
       });
     expect(createRes.status).toBe(200);
     const auctionId = createRes.body.id;
@@ -103,6 +105,7 @@ describe('Admin auction routes', () => {
   it('force-closes an auction with no bids as UNSOLD', async () => {
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'No Bids Auction',
         type: 'DIGITAL',
         starting_price_cents: 1000,
@@ -125,6 +128,7 @@ describe('Admin auction routes', () => {
     donorIds.push(donor.id);
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Cascade Auction',
         type: 'DIGITAL',
         starting_price_cents: 1000,
@@ -167,6 +171,7 @@ describe('Admin auction routes', () => {
   it('cancels an OPEN auction', async () => {
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Cancel Me',
         type: 'DIGITAL',
         starting_price_cents: 1000,

@@ -6,6 +6,7 @@ import {
   claimRewardTx,
   contributeGoalTx,
 } from '../../services/spend.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -40,17 +41,24 @@ describe('proposeCustomEntryTx', () => {
     const donation = await prisma.donation.create({
       data: {
         external_id: `pool-${Math.random()}`,
+        event_id: DEFAULT_EVENT_ID,
         donor_id: donor.id,
         amount_cents: 1000,
         pledge_amount_cents: 1000,
       },
     });
     const reward = await prisma.reward.create({
-      data: { title: 'Locked', type: 'PHYSICAL', cost_cents: 2000 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Locked', type: 'PHYSICAL', cost_cents: 2000 },
     });
-    const goal = await prisma.fundGoal.create({ data: { title: 'Overshoot', target_cents: 100 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Overshoot', target_cents: 100 },
+    });
     const poll = await prisma.poll.create({
-      data: { title: 'Pool', options: { create: [{ label: 'Choice' }] } },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pool',
+        options: { create: [{ label: 'Choice' }] },
+      },
       include: { options: true },
     });
     try {
@@ -110,6 +118,7 @@ describe('proposeCustomEntryTx', () => {
     const donation = await prisma.donation.create({
       data: {
         external_id: `reserved-${Math.random()}`,
+        event_id: DEFAULT_EVENT_ID,
         donor_id: donor.id,
         amount_cents: 1000,
         pledge_amount_cents: 1000,
@@ -117,7 +126,11 @@ describe('proposeCustomEntryTx', () => {
       },
     });
     const poll = await prisma.poll.create({
-      data: { title: 'Reserved', options: { create: [{ label: 'A' }] } },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Reserved',
+        options: { create: [{ label: 'A' }] },
+      },
       include: { options: true },
     });
     const origin = await prisma.pollVote.create({
@@ -169,7 +182,11 @@ describe('proposeCustomEntryTx', () => {
   it('rejects REJECTED options, including direct legacy Wallet votes, without taking money', async () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Rejected', options: { create: [{ label: 'No', status: 'REJECTED' }] } },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Rejected',
+        options: { create: [{ label: 'No', status: 'REJECTED' }] },
+      },
       include: { options: true },
     });
     try {
@@ -188,7 +205,13 @@ describe('proposeCustomEntryTx', () => {
   it('rejects direct physical reward claims even with enough Wallet credit, without changing funds or stock', async () => {
     const donor = await makeDonor(5000);
     const reward = await prisma.reward.create({
-      data: { title: 'Cash-funded only', type: 'PHYSICAL', cost_cents: 1000, quantity_total: 2 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Cash-funded only',
+        type: 'PHYSICAL',
+        cost_cents: 1000,
+        quantity_total: 2,
+      },
     });
     try {
       await expect(
@@ -214,7 +237,7 @@ describe('proposeCustomEntryTx', () => {
   it('preserves direct legacy reward prices below the new-pledge selection minimum', async () => {
     const donor = await makeDonor(50);
     const reward = await prisma.reward.create({
-      data: { title: 'Legacy price', type: 'DIGITAL', cost_cents: 50 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Legacy price', type: 'DIGITAL', cost_cents: 50 },
     });
     try {
       await prisma.$transaction((tx) => claimRewardTx(tx, donor.id, reward.id));
@@ -234,7 +257,12 @@ describe('proposeCustomEntryTx', () => {
   it('goes live immediately when auto_approve is true (default)', async () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Auto poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Auto poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
 
     const result = await prisma.$transaction((tx) =>
@@ -257,6 +285,7 @@ describe('proposeCustomEntryTx', () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Reviewed poll',
         is_active: true,
         allow_custom_entries: true,
@@ -291,7 +320,12 @@ describe('proposeCustomEntryTx', () => {
   it('rejects insufficient balance', async () => {
     const donor = await makeDonor(100);
     const poll = await prisma.poll.create({
-      data: { title: 'Poor poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Poor poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
 
     await expect(
@@ -308,7 +342,12 @@ describe('proposeCustomEntryTx', () => {
   it('rejects when poll does not allow custom entries', async () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Locked poll', is_active: true, allow_custom_entries: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Locked poll',
+        is_active: true,
+        allow_custom_entries: false,
+      },
     });
 
     await expect(
@@ -323,6 +362,7 @@ describe('proposeCustomEntryTx', () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Short poll',
         is_active: true,
         allow_custom_entries: true,
@@ -341,7 +381,12 @@ describe('proposeCustomEntryTx', () => {
   it('rejects blocked words', async () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Clean poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Clean poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
     const blocked = await prisma.blockedWord.create({ data: { word: 'badword' } });
 

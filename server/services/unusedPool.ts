@@ -106,7 +106,15 @@ export async function listUnusedTx(
 export async function unusedTargetsTx(tx: Tx, donationId: string, category: UnusedCategory) {
   const donation = await sourceTx(tx, donationId);
   const amount = donation.pools[category].unused_cents;
-  const scope = { OR: [{ channel_id: donation.channel_id }, { channel_id: null }] };
+  const channel = await tx.channel.findUniqueOrThrow({
+    where: { id: donation.channel_id! },
+    select: { event_id: true },
+  });
+  // ADR-0012: the donation's Channel, or a shared incentive of the same Event.
+  const scope = {
+    event_id: channel.event_id,
+    OR: [{ channel_id: donation.channel_id }, { channel_id: null }],
+  };
   const targets =
     category === 'poll'
       ? (

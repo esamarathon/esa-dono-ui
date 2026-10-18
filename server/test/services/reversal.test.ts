@@ -15,6 +15,7 @@ import {
 } from '../../services/reversal.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 import { proposeCustomEntryTx } from '../../services/spend.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const donorIds: string[] = [];
 const rewardIds: string[] = [];
@@ -80,6 +81,7 @@ describe('Reversal accounting on SQLite', () => {
     });
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Pool',
         total_votes_cents: 1000,
         options: { create: { label: 'A', votes_cents: 1000 } },
@@ -109,7 +111,13 @@ describe('Reversal accounting on SQLite', () => {
   });
   it('a per-goal reversal recomputes completion even with no live rows', async () => {
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Manual completion', target_cents: 1000, current_cents: 0, is_complete: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Manual completion',
+        target_cents: 1000,
+        current_cents: 0,
+        is_complete: true,
+      },
     });
     goalIds.push(goal.id);
     expect(
@@ -222,21 +230,38 @@ describe('Reversal accounting on SQLite', () => {
       data: { donor_id: owner.id, external_id: crypto.randomUUID(), amount_cents: 1000 },
     });
     const reward = await prisma.reward.create({
-      data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500, quantity_claimed: 1 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+        quantity_claimed: 1,
+      },
     });
     rewardIds.push(reward.id);
     const claim = await prisma.rewardClaim.create({
       data: { donor_id: owner.id, reward_id: reward.id },
     });
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Goal', target_cents: 500, current_cents: 700, is_complete: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Goal',
+        target_cents: 500,
+        current_cents: 700,
+        is_complete: true,
+      },
     });
     goalIds.push(goal.id);
     const contribution = await prisma.fundContribution.create({
       data: { donor_id: owner.id, goal_id: goal.id, amount_cents: 700 },
     });
     const poll = await prisma.poll.create({
-      data: { title: 'Write-ins', allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-ins',
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     pollIds.push(poll.id);
     const { entry, option } = await prisma.$transaction((tx) =>
@@ -333,6 +358,7 @@ describe('Reversal accounting on SQLite', () => {
       const second = await donor(200);
       const poll = await prisma.poll.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title: 'Poll',
           total_votes_cents: 750,
           options: { create: { label: 'A', votes_cents: 750 } },
@@ -342,7 +368,13 @@ describe('Reversal accounting on SQLite', () => {
       pollIds.push(poll.id);
       const option = poll.options[0]!;
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Goal', target_cents: 500, current_cents: 750, is_complete: true },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Goal',
+          target_cents: 500,
+          current_cents: 750,
+          is_complete: true,
+        },
       });
       goalIds.push(goal.id);
       await prisma.pollVote.createMany({
@@ -423,7 +455,12 @@ describe('Reversal accounting on SQLite', () => {
     async (firstStatus) => {
       const owner = await donor(1000);
       const poll = await prisma.poll.create({
-        data: { title: 'Write-ins', allow_custom_entries: true, auto_approve: false },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Write-ins',
+          allow_custom_entries: true,
+          auto_approve: false,
+        },
       });
       pollIds.push(poll.id);
       const { entry, option } = await prisma.$transaction((tx) =>
@@ -485,7 +522,12 @@ describe('Reversal accounting on SQLite', () => {
   it('vote reversal rejects an uncredited write-in and a later approval or rejection cannot reuse its funding', async () => {
     const owner = await donor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Write-ins', allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-ins',
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     pollIds.push(poll.id);
     const { entry, option } = await prisma.$transaction((tx) =>
@@ -521,7 +563,12 @@ describe('Reversal accounting on SQLite', () => {
   it('concurrent write-in rejection and vote reversal return the funding at most once', async () => {
     const owner = await donor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Write-ins', allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-ins',
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     pollIds.push(poll.id);
     const { entry, option } = await prisma.$transaction((tx) =>
@@ -561,7 +608,11 @@ describe('Reversal accounting on SQLite', () => {
     async (status) => {
       const owner = await donor(100);
       const poll = await prisma.poll.create({
-        data: { title: 'Poll', options: { create: { label: 'A', status } } },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Poll',
+          options: { create: { label: 'A', status } },
+        },
         include: { options: true },
       });
       pollIds.push(poll.id);
@@ -598,7 +649,12 @@ describe('Reversal accounting on SQLite', () => {
   it('rejecting a pending write-in returns its funding once without decrementing uncredited tallies', async () => {
     const owner = await donor(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Write-ins', allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-ins',
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     pollIds.push(poll.id);
     const { entry, option } = await prisma.$transaction((tx) =>
@@ -770,7 +826,13 @@ describe('Reversal accounting on SQLite', () => {
     async ({ current, remaining, complete }) => {
       const owner = await donor(100);
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Goal', target_cents: 1000, current_cents: current, is_complete: true },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Goal',
+          target_cents: 1000,
+          current_cents: current,
+          is_complete: true,
+        },
       });
       goalIds.push(goal.id);
       await prisma.fundContribution.createMany({
@@ -830,6 +892,7 @@ describe('Reversal accounting on SQLite', () => {
     const owner = await donor(100);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Poll',
         total_votes_cents: 750,
         options: { create: { label: 'A', votes_cents: 750 } },
@@ -909,7 +972,13 @@ describe('Reversal accounting on SQLite', () => {
         data: { external_id: crypto.randomUUID(), donor_id: owner.id, amount_cents: 1000 },
       });
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Completed goal', target_cents: 500, current_cents: 700, is_complete: true },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Completed goal',
+          target_cents: 500,
+          current_cents: 700,
+          is_complete: true,
+        },
       });
       goalIds.push(goal.id);
       const contribution = await prisma.fundContribution.create({
@@ -958,7 +1027,13 @@ describe('Reversal accounting on SQLite', () => {
   it('single contribution reversal reopens a goal below target and remains safe to repeat', async () => {
     const owner = await donor(100);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Complete goal', target_cents: 1000, current_cents: 1200, is_complete: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Complete goal',
+        target_cents: 1000,
+        current_cents: 1200,
+        is_complete: true,
+      },
     });
     goalIds.push(goal.id);
     const first = await prisma.fundContribution.create({
@@ -1029,6 +1104,7 @@ describe('Reversal accounting on SQLite', () => {
     const owner = await donor(100);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Poll',
         total_votes_cents: 400,
         options: { create: { label: 'A', votes_cents: 400 } },
@@ -1079,7 +1155,13 @@ describe('Reversal accounting on SQLite', () => {
   it('reverses a pending claim once using its recorded price and releases its stock', async () => {
     const owner = await donor(100);
     const reward = await prisma.reward.create({
-      data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500, quantity_claimed: 1 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+        quantity_claimed: 1,
+      },
     });
     rewardIds.push(reward.id);
     const claim = await prisma.rewardClaim.create({

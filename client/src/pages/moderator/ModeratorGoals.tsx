@@ -9,6 +9,14 @@ import ChannelPill from '../../components/ChannelPill';
 import { AllocationSources, GoalDefaults } from '../../components/StaffAmounts';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Goal } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import {
+  availableOnSelected,
+  defaultOwner,
+  ownerLabel,
+  ownerPayload,
+  useStaffEvents,
+} from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -22,6 +30,7 @@ interface GoalForm {
   is_active: boolean;
   is_complete?: boolean;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: GoalForm = {
@@ -30,6 +39,7 @@ const EMPTY: GoalForm = {
   target_dollars: '',
   is_active: true,
   channel_id: null,
+  event_id: null,
 };
 
 type GoalModal = 'create' | Goal | null;
@@ -41,21 +51,17 @@ export default function ModeratorGoals() {
   const [form, setForm] = useState<GoalForm>(EMPTY);
   const [error, setError] = useState('');
   const { channels, selectedChannelId } = useModeratorChannelFilter();
+  const events = useStaffEvents(moderatorClient);
 
   const reload = () => moderatorClient.get('/goals').then((r) => setGoals(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
-  const filteredGoals = goals.filter(
-    (g) => !selectedChannelId || g.channel_id === selectedChannelId || g.channel_id == null,
-  );
+  const filteredGoals = goals.filter((g) => availableOnSelected(g, channels, selectedChannelId));
 
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
   };
@@ -64,6 +70,7 @@ export default function ModeratorGoals() {
       ...g,
       target_dollars: (g.target_cents / 100).toFixed(2),
       channel_id: g.channel_id ?? null,
+      event_id: g.event_id,
     } as GoalForm);
     setModal(g);
     setError('');
@@ -74,7 +81,7 @@ export default function ModeratorGoals() {
     const data = {
       title: form.title,
       description: form.description,
-      channel_id: form.channel_id,
+      ...ownerPayload(form),
       is_active: form.is_active,
       target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
     };
@@ -117,7 +124,7 @@ export default function ModeratorGoals() {
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="font-data font-bold text-lg text-off-white">{g.title}</h2>
-                  <ChannelPill label={channelName(g.channel_id)} />
+                  <ChannelPill label={ownerLabel(g, channels, events)} />
                 </div>
                 <p className="font-data text-sm text-off-white/55">
                   {fmt(g.current_cents)} allocated / target {fmt(g.target_cents)}{' '}
@@ -185,21 +192,13 @@ export default function ModeratorGoals() {
           <p className="font-body text-sm text-off-white/55">
             Completion is derived from allocated progress. Deactivate to close early.
           </p>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

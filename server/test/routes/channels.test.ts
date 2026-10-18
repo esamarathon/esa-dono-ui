@@ -88,13 +88,29 @@ describe('Channels', () => {
       const other = await createTestChannel(prisma);
       createdChannelIds.push(other.id);
       const inactive = await prisma.fundGoal.create({
-        data: { title: 'Inactive own', target_cents: 100, channel_id: own.id, is_active: false },
+        data: {
+          event_id: own.event_id,
+          title: 'Inactive own',
+          target_cents: 100,
+          channel_id: own.id,
+          is_active: false,
+        },
       });
       const shared = await prisma.fundGoal.create({
-        data: { title: 'Completed shared', target_cents: 100, is_complete: true },
+        data: {
+          event_id: own.event_id,
+          title: 'Completed shared',
+          target_cents: 100,
+          is_complete: true,
+        },
       });
       const foreign = await prisma.fundGoal.create({
-        data: { title: 'Foreign', target_cents: 100, channel_id: other.id },
+        data: {
+          event_id: other.event_id,
+          title: 'Foreign',
+          target_cents: 100,
+          channel_id: other.id,
+        },
       });
       const path = `/api/${role}/channels/${own.id}`;
       const auth = { Authorization: 'Bearer key_admin_test-admin-key' };

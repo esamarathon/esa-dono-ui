@@ -4,7 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
-import { createLegacyPledge as createPledge } from '../helpers/fixtures.js';
+import { createLegacyPledge as createPledge, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
@@ -194,7 +194,13 @@ describe('Admin CRUD routes', () => {
         },
       });
       const reward = await prisma.reward.create({
-        data: { title: 'Shipped', type: 'PHYSICAL', cost_cents: 9000, quantity_claimed: 1 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Shipped',
+          type: 'PHYSICAL',
+          cost_cents: 9000,
+          quantity_claimed: 1,
+        },
       });
       rewardIds.push(reward.id);
       const claim = await prisma.rewardClaim.create({
@@ -442,7 +448,12 @@ describe('Admin CRUD routes', () => {
     it('creates, lists, and updates a reward', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/rewards')
-        .send({ title: 'CRUD Reward', type: 'DIGITAL', cost_cents: 500 })
+        .send({
+          title: 'CRUD Reward',
+          type: 'DIGITAL',
+          cost_cents: 500,
+          event_id: DEFAULT_EVENT_ID,
+        })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       expect(createRes.body.is_active).toBe(true);
@@ -466,7 +477,11 @@ describe('Admin CRUD routes', () => {
     it('creates a poll with options and lists it', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/polls')
-        .send({ title: 'CRUD Poll', options: [{ label: 'A' }, { label: 'B' }] })
+        .send({
+          title: 'CRUD Poll',
+          options: [{ label: 'A' }, { label: 'B' }],
+          event_id: DEFAULT_EVENT_ID,
+        })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       expect(createRes.body.options).toHaveLength(2);
@@ -478,7 +493,9 @@ describe('Admin CRUD routes', () => {
     });
 
     it('adds, renames, and removes a poll option', async () => {
-      const poll = await prisma.poll.create({ data: { title: 'Option Poll' } });
+      const poll = await prisma.poll.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Option Poll' },
+      });
       pollIds.push(poll.id);
 
       const addRes = await request(createApp())
@@ -505,7 +522,7 @@ describe('Admin CRUD routes', () => {
     it('creates and lists a goal', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/goals')
-        .send({ title: 'CRUD Goal', target_cents: 10000 })
+        .send({ title: 'CRUD Goal', target_cents: 10000, event_id: DEFAULT_EVENT_ID })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       goalIds.push(createRes.body.id);
@@ -523,7 +540,12 @@ describe('Admin CRUD routes', () => {
       });
       donorIds.push(donor.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Claim Reward', type: 'DIGITAL', cost_cents: 100 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Claim Reward',
+          type: 'DIGITAL',
+          cost_cents: 100,
+        },
       });
       rewardIds.push(reward.id);
       const claim = await prisma.rewardClaim.create({

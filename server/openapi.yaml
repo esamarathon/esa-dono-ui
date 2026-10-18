@@ -39,8 +39,9 @@ info:
 
     Every pledge routes to exactly one Channel (`GET /api/channels` lists the active
     ones); a donation without a pledge may remain unassigned until admin routing.
-    Rewards, polls and fund goals may belong to one Channel (`channel_id` set) or
-    be shared (`channel_id` null). `POST /api/pledge` requires `channel_id`; removed
+    Every reward, poll, fund goal and auction belongs to one Event (`event_id`,
+    ADR-0012). It also belongs to one Channel (`channel_id` set), or it is shared
+    by every Channel of its Event (`channel_id` null), and by no other Event. `POST /api/pledge` requires `channel_id`; removed
     foreign selections return a corrected review (409), with no pledge or hold.
     Later category Pool-credit spending can fund another Channel's incentives within
     the same Event, or shared incentives, without changing donation routing. Ordinary
@@ -664,8 +665,8 @@ paths:
       description: |
         Every donation is routed to exactly one channel (for correct overlay
         routing). Rewards, polls, and fund goals may be tied to a specific
-        channel (`channel_id` set) or shared across all channels (`channel_id`
-        null). Used by the /donate channel picker.
+        channel (`channel_id` set) or shared by every channel of their Event
+        (`channel_id` null, `event_id` set). Used by the /donate channel picker.
       responses:
         '200':
           description: Active channels ordered by created_at ascending
@@ -2139,6 +2140,12 @@ paths:
                 is_active: { type: boolean, default: true }
                 custom_type_label: { type: string }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Reward created
@@ -2167,6 +2174,9 @@ paths:
                 is_active: { type: boolean }
                 custom_type_label: { type: string }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Reward updated
@@ -2564,6 +2574,12 @@ paths:
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Poll created
@@ -2592,6 +2608,9 @@ paths:
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Poll updated
@@ -3220,6 +3239,12 @@ paths:
                 description: { type: string }
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -3245,6 +3270,9 @@ paths:
                 description: { type: string }
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
                 is_active: { type: boolean }
       responses:
         '200':
@@ -3320,6 +3348,12 @@ paths:
                 ends_at: { type: string, format: date-time }
                 is_active: { type: boolean, default: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Auction created
@@ -3350,6 +3384,9 @@ paths:
                 ends_at: { type: string, format: date-time }
                 is_active: { type: boolean }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Auction updated
@@ -3738,6 +3775,12 @@ paths:
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean, default: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Poll created
@@ -3766,6 +3809,9 @@ paths:
                 max_entry_chars: { type: integer, nullable: true }
                 auto_approve: { type: boolean }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Poll updated
@@ -3953,6 +3999,12 @@ paths:
                 custom_type_label: { type: string }
                 image_url: { type: string, nullable: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Reward created
@@ -3982,6 +4034,9 @@ paths:
                 custom_type_label: { type: string }
                 image_url: { type: string, nullable: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Reward updated
@@ -4088,6 +4143,12 @@ paths:
                 description: { type: string }
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
                 is_active: { type: boolean, default: true }
       responses:
         '200':
@@ -4113,6 +4174,9 @@ paths:
                 description: { type: string }
                 target_cents: { type: integer }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
                 is_active: { type: boolean }
       responses:
         '200':
@@ -4167,6 +4231,12 @@ paths:
                 ends_at: { type: string, format: date-time }
                 is_active: { type: boolean, default: true }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: |
+                    Owning Event (ADR-0012). With channel_id it must be that Channel's Event.
+                    Without channel_id (a shared incentive) it defaults to the only Event;
+                    when two or more Events exist it is required.
       responses:
         '200':
           description: Auction created
@@ -4197,6 +4267,9 @@ paths:
                 ends_at: { type: string, format: date-time }
                 is_active: { type: boolean }
                 channel_id: { type: string, nullable: true }
+                event_id:
+                  type: string
+                  description: Must be the current Event; an incentive never moves to another Event (ADR-0012).
       responses:
         '200':
           description: Auction updated
@@ -5275,8 +5348,9 @@ components:
         campaign_id:
           type: string
           format: uuid
-          nullable: true
-          description: True owning Channel UUID; null for a shared reward (never the request context)
+          description: |
+            True owner, never the request context: the Channel UUID, or for a shared
+            reward its Event UUID (the team campaign, ADR-0012). Never null.
         incentive: { $ref: '#/components/schemas/TiltifyReward' }
     EsaDonoTargetLookup:
       type: object
@@ -5286,8 +5360,9 @@ components:
         campaign_id:
           type: string
           format: uuid
-          nullable: true
-          description: True owning Channel UUID; null for a shared target (never the request context)
+          description: |
+            True owner, never the request context: the Channel UUID, or for a shared
+            target its Event UUID (the team campaign, ADR-0012). Never null.
         incentive: { $ref: '#/components/schemas/TiltifyTarget' }
     EsaDonoPollLookup:
       type: object
@@ -5297,8 +5372,9 @@ components:
         campaign_id:
           type: string
           format: uuid
-          nullable: true
-          description: True owning Channel UUID; null for a shared poll (never the request context)
+          description: |
+            True owner, never the request context: the Channel UUID, or for a shared
+            poll its Event UUID (the team campaign, ADR-0012). Never null.
         incentive: { $ref: '#/components/schemas/TiltifyPoll' }
     UnusedDonation:
       type: object

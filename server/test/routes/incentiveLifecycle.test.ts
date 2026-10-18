@@ -8,6 +8,7 @@ import prisma from '../../lib/prisma.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
 import { catchAsyncErrors, errorHandler } from '../../lib/httpError.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const app = express();
 app.use(express.json());
@@ -73,6 +74,7 @@ const inputs = {
     image_url: '/api/uploads/missing.webp',
     is_active: false,
     channel_id: null,
+    event_id: DEFAULT_EVENT_ID,
     quantity_claimed: 99,
   },
   polls: {
@@ -84,6 +86,7 @@ const inputs = {
     max_entry_chars: 40,
     auto_approve: false,
     channel_id: null,
+    event_id: DEFAULT_EVENT_ID,
     options: [{ label: 'A', votes_cents: 99 }],
   },
   goals: {
@@ -92,6 +95,7 @@ const inputs = {
     target_cents: 1000,
     is_active: false,
     channel_id: null,
+    event_id: DEFAULT_EVENT_ID,
     current_cents: 99,
   },
 };
@@ -202,13 +206,13 @@ for (const role of ['admin', 'moderator']) {
         await request(app)
           .post(`/api/${role}/goals`)
           .set('Authorization', auth(role))
-          .send({ title: 'Goal', target_cents: 100, is_complete })
+          .send({ title: 'Goal', target_cents: 100, is_complete, event_id: DEFAULT_EVENT_ID })
           .expect(400);
       }
       const created = await request(app)
         .post(`/api/${role}/goals`)
         .set('Authorization', auth(role))
-        .send({ title: ' Trimmed ', target_cents: 100 })
+        .send({ title: ' Trimmed ', target_cents: 100, event_id: DEFAULT_EVENT_ID })
         .expect(200);
       goalIds.push(created.body.id);
       expect(created.body.title).toBe('Trimmed');
@@ -234,18 +238,18 @@ for (const role of ['admin', 'moderator']) {
       await request(app)
         .post(`/api/${role}/polls`)
         .set('Authorization', auth(role))
-        .send({ title: 'Valid poll', options: [{ label: '  ' }] })
+        .send({ title: 'Valid poll', options: [{ label: '  ' }], event_id: DEFAULT_EVENT_ID })
         .expect(400);
       await request(app)
         .post(`/api/${role}/rewards`)
         .set('Authorization', auth(role))
-        .send({ title: '  ', cost_cents: 100, type: 'DIGITAL' })
+        .send({ title: '  ', cost_cents: 100, type: 'DIGITAL', event_id: DEFAULT_EVENT_ID })
         .expect(400);
     });
 
     it('returns the exact history conflict for hard deletes without granting reversal powers', async () => {
       const reward = await prisma.reward.create({
-        data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
       });
       rewardIds.push(reward.id);
       await prisma.rewardClaim.create({
@@ -257,7 +261,7 @@ for (const role of ['admin', 'moderator']) {
         },
       });
       const poll = await prisma.poll.create({
-        data: { title: 'Poll', options: { create: { label: 'A' } } },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Poll', options: { create: { label: 'A' } } },
         include: { options: true },
       });
       pollIds.push(poll.id);
@@ -272,7 +276,9 @@ for (const role of ['admin', 'moderator']) {
       });
       const paths = [`rewards/${reward.id}`, `polls/${poll.id}`];
       if (role === 'moderator') {
-        const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 1000 } });
+        const goal = await prisma.fundGoal.create({
+          data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 1000 },
+        });
         goalIds.push(goal.id);
         await prisma.fundContribution.create({
           data: { goal_id: goal.id, donor_id: ownerId, amount_cents: 500, reversed_at: new Date() },
@@ -304,11 +310,12 @@ for (const role of ['admin', 'moderator']) {
 
 it('keeps goal and poll-option reverse-and-deactivate wire responses admin-only', async () => {
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal', target_cents: 1000, current_cents: 400 },
+    data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 1000, current_cents: 400 },
   });
   goalIds.push(goal.id);
   const poll = await prisma.poll.create({
     data: {
+      event_id: DEFAULT_EVENT_ID,
       title: 'Poll',
       total_votes_cents: 400,
       options: { create: { label: 'A', votes_cents: 400 } },

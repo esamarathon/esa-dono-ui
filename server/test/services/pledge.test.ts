@@ -5,7 +5,7 @@ import yaml from 'js-yaml';
 import prisma from '../../lib/prisma.js';
 import { planPledge, type PledgePlan } from '@dono/shared';
 import { createPledge, type PledgeItemInput } from '../../services/pledge.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
@@ -109,7 +109,9 @@ describe('pooled pledge creation on SQLite', () => {
   it('rejects live category overage with 400, before comparing plans', async () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
-    const goal = await prisma.fundGoal.create({ data: { title: 'Overdraw', target_cents: 5000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Overdraw', target_cents: 5000 },
+    });
     goals.push(goal.id);
     const draft_id = crypto.randomUUID();
     drafts.push(draft_id);
@@ -133,7 +135,13 @@ describe('pooled pledge creation on SQLite', () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
     const reward = await prisma.reward.create({
-      data: { title: 'Shirt', type: 'PHYSICAL', cost_cents: 300, quantity_total: 1 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Shirt',
+        type: 'PHYSICAL',
+        cost_cents: 300,
+        quantity_total: 1,
+      },
     });
     rewards.push(reward.id);
     const draft_id = crypto.randomUUID();
@@ -200,7 +208,9 @@ describe('pooled pledge creation on SQLite', () => {
   it('allows corrected surviving selections to be resubmitted without losing their insertion order', async () => {
     const channel = await createTestChannel(prisma);
     channels.push(channel.id);
-    const goal = await prisma.fundGoal.create({ data: { title: 'Survivor', target_cents: 5000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Survivor', target_cents: 5000 },
+    });
     goals.push(goal.id);
     const draft_id = crypto.randomUUID();
     drafts.push(draft_id);
@@ -270,7 +280,7 @@ describe('pooled pledge creation on SQLite', () => {
       const channel = await createTestChannel(prisma);
       channels.push(channel.id);
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Validation', target_cents: 5000 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Validation', target_cents: 5000 },
       });
       goals.push(goal.id);
       const draft_id = crypto.randomUUID();

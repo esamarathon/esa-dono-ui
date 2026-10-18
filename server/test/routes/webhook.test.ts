@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { planPledge } from '@dono/shared';
 import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 import webhookRouter from '../../routes/webhook.js';
 
 const stripe = vi.hoisted(() => ({ create: vi.fn(), retrieve: vi.fn(), expire: vi.fn() }));
@@ -288,6 +288,7 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
       const { donor } = await pending({ availableWallet: 975, pledgeCents: 1000, paidCents: 50 });
       const auction = await prisma.auction.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title: 'Auction item',
           type: 'DIGITAL',
           starting_price_cents: 1000,

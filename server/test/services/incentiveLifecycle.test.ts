@@ -19,7 +19,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 // Real SQLite and outbox; no delivery network calls.
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 import prisma from '../../lib/prisma.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 const channelIds: string[] = [];
 import {
   createReward,
@@ -98,7 +98,7 @@ describe('Incentive lifecycle on SQLite', () => {
   it('updates reward activation and price, but ignores unchanged values and title-only changes', async () => {
     const target = await destination();
     const reward = await prisma.reward.create({
-      data: { title: 'Old', type: 'DIGITAL', cost_cents: 500 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Old', type: 'DIGITAL', cost_cents: 500 },
     });
     rewardIds.push(reward.id);
     await updateReward(reward.id, { title: 'New', is_active: false, cost_cents: 700 });
@@ -107,7 +107,13 @@ describe('Incentive lifecycle on SQLite', () => {
     expect(await messages(target)).toEqual([
       expect.objectContaining({
         type: 'incentive.disabled',
-        data: { incentive_kind: 'REWARD', incentive_id: reward.id, channel_id: null, title: 'New' },
+        data: {
+          incentive_kind: 'REWARD',
+          incentive_id: reward.id,
+          channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
+          title: 'New',
+        },
       }),
       expect.objectContaining({
         type: 'incentive.value_changed',
@@ -115,6 +121,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'REWARD',
           incentive_id: reward.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'New',
           changed_fields: ['cost_cents'],
           old_cost_cents: 500,
@@ -127,6 +134,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'REWARD',
           incentive_id: reward.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Renamed',
         },
       }),
@@ -145,6 +153,7 @@ describe('Incentive lifecycle on SQLite', () => {
     imagePaths.push(imagePath);
     await writeFile(imagePath, 'old image');
     const reward = await createReward({
+      event_id: DEFAULT_EVENT_ID,
       title: 'Image reward',
       type: 'DIGITAL',
       cost_cents: 500,
@@ -189,6 +198,7 @@ describe('Incentive lifecycle on SQLite', () => {
   it('creates and updates a poll with options, activation and end-time messages in order', async () => {
     const target = await destination();
     const poll = await createPoll({
+      event_id: DEFAULT_EVENT_ID,
       title: 'Poll',
       is_active: false,
       options: { create: [{ label: 'A' }, { label: 'B' }] },
@@ -214,6 +224,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'POLL',
           incentive_id: poll.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Poll',
           is_active: false,
           ends_at: null,
@@ -225,6 +236,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'POLL',
           incentive_id: poll.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Open poll',
         },
       }),
@@ -234,6 +246,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'POLL',
           incentive_id: poll.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Open poll',
           changed_fields: ['ends_at'],
           old_ends_at: null,
@@ -255,7 +268,11 @@ describe('Incentive lifecycle on SQLite', () => {
 
   it('derives goal completion on target edits and rejects a manual completion override', async () => {
     const target = await destination();
-    const goal = await createGoal({ title: 'Goal', target_cents: 1000 });
+    const goal = await createGoal({
+      event_id: DEFAULT_EVENT_ID,
+      title: 'Goal',
+      target_cents: 1000,
+    });
     goalIds.push(goal.id);
     await expect(updateGoal(goal.id, { is_complete: true })).rejects.toMatchObject({ status: 400 });
     await updateGoal(goal.id, { target_cents: 2000, is_active: false });
@@ -268,6 +285,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'GOAL',
           incentive_id: goal.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Goal',
           is_active: true,
           target_cents: 1000,
@@ -280,6 +298,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'GOAL',
           incentive_id: goal.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: 'Goal',
           changed_fields: ['target_cents'],
           old_target_cents: 1000,
@@ -297,7 +316,11 @@ describe('Incentive lifecycle on SQLite', () => {
   });
 
   it('validates representable positive cents, titles, labels, nullable Channels and stock', async () => {
-    const goal = await createGoal({ title: '  Goal  ', target_cents: 1000 });
+    const goal = await createGoal({
+      event_id: DEFAULT_EVENT_ID,
+      title: '  Goal  ',
+      target_cents: 1000,
+    });
     goalIds.push(goal.id);
     expect(goal.title).toBe('Goal');
     for (const target of [0, -1, 0.5, 2147483648, Number.MAX_SAFE_INTEGER]) {
@@ -309,7 +332,12 @@ describe('Incentive lifecycle on SQLite', () => {
     await expect(updateGoal(goal.id, { channel_id: 'missing' })).rejects.toMatchObject({
       status: 400,
     });
-    const reward = await createReward({ title: '  Reward  ', type: 'DIGITAL', cost_cents: 1 });
+    const reward = await createReward({
+      event_id: DEFAULT_EVENT_ID,
+      title: '  Reward  ',
+      type: 'DIGITAL',
+      cost_cents: 1,
+    });
     rewardIds.push(reward.id);
     for (const cost of [0, -1, 0.5, 2147483648]) {
       await expect(updateReward(reward.id, { cost_cents: cost })).rejects.toMatchObject({
@@ -324,7 +352,11 @@ describe('Incentive lifecycle on SQLite', () => {
     expect(await updateReward(reward.id, { quantity_total: 0 })).toMatchObject({
       quantity_total: 0,
     });
-    const poll = await createPoll({ title: ' Poll ', options: { create: [{ label: ' A ' }] } });
+    const poll = await createPoll({
+      event_id: DEFAULT_EVENT_ID,
+      title: ' Poll ',
+      options: { create: [{ label: ' A ' }] },
+    });
     pollIds.push(poll.id);
     expect(poll).toMatchObject({
       title: 'Poll',
@@ -343,7 +375,12 @@ describe('Incentive lifecycle on SQLite', () => {
         data: { email: `${crypto.randomUUID()}@example.com` },
       });
       donorIds.push(donor.id);
-      const reward = await createReward({ title: 'Reward', type: 'DIGITAL', cost_cents: 500 });
+      const reward = await createReward({
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+      });
       rewardIds.push(reward.id);
       await prisma.rewardClaim.create({
         data: {
@@ -449,6 +486,7 @@ describe('Incentive lifecycle on SQLite', () => {
   it('derives completion only for actual target edits, retaining terminal-shrink exceptions during text edits', async () => {
     const goal = await prisma.fundGoal.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Completed before shrink',
         target_cents: 1000,
         current_cents: 500,
@@ -484,7 +522,9 @@ describe('Incentive lifecycle on SQLite', () => {
 
   it('adds and renames poll options without queueing messages', async () => {
     const target = await destination();
-    const poll = await prisma.poll.create({ data: { title: 'Options' } });
+    const poll = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Options' },
+    });
     pollIds.push(poll.id);
     const option = await createPollOption(poll.id, 'A');
     expect(await updatePollOption(option.id, 'B')).toMatchObject({
@@ -504,16 +544,25 @@ describe('Incentive lifecycle on SQLite', () => {
     async (kind) => {
       const target = await destination();
       const reward = await prisma.reward.create({
-        data: { title: 'Unused reward', type: 'DIGITAL', cost_cents: 500 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Unused reward',
+          type: 'DIGITAL',
+          cost_cents: 500,
+        },
       });
       rewardIds.push(reward.id);
       const poll = await prisma.poll.create({
-        data: { title: 'Unused poll', options: { create: { label: 'Unused option' } } },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Unused poll',
+          options: { create: { label: 'Unused option' } },
+        },
         include: { options: true },
       });
       pollIds.push(poll.id);
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Unused goal', target_cents: 1000 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Unused goal', target_cents: 1000 },
       });
       goalIds.push(goal.id);
       const option = poll.options[0]!;
@@ -550,16 +599,18 @@ describe('Incentive lifecycle on SQLite', () => {
     });
     donorIds.push(owner.id);
     const reward = await prisma.reward.create({
-      data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
     });
     rewardIds.push(reward.id);
     const poll = await prisma.poll.create({
-      data: { title: 'Poll', options: { create: { label: 'A' } } },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Poll', options: { create: { label: 'A' } } },
       include: { options: true },
     });
     pollIds.push(poll.id);
     const option = poll.options[0]!;
-    const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 1000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 1000 },
+    });
     goalIds.push(goal.id);
     const reversedAt = reversed ? new Date('2026-01-01') : null;
     const claim = await prisma.rewardClaim.create({
@@ -610,11 +661,18 @@ describe('Incentive lifecycle on SQLite', () => {
       });
       donorIds.push(owner.id);
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Goal', target_cents: 500, current_cents: 750, is_complete: true },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Goal',
+          target_cents: 500,
+          current_cents: 750,
+          is_complete: true,
+        },
       });
       goalIds.push(goal.id);
       const poll = await prisma.poll.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title: 'Poll',
           total_votes_cents: 750,
           options: { create: { label: 'A', votes_cents: 750 } },
@@ -691,7 +749,13 @@ describe('Incentive lifecycle on SQLite', () => {
         expect(await messages(target)).toEqual([
           expect.objectContaining({
             type: 'incentive.disabled',
-            data: { incentive_kind: 'GOAL', incentive_id: id, channel_id: null, title: 'Goal' },
+            data: {
+              incentive_kind: 'GOAL',
+              incentive_id: id,
+              channel_id: null,
+              event_id: DEFAULT_EVENT_ID,
+              title: 'Goal',
+            },
           }),
         ]);
       } else {
@@ -721,11 +785,12 @@ describe('Incentive lifecycle on SQLite', () => {
       });
       donorIds.push(owner.id);
       const goal = await prisma.fundGoal.create({
-        data: { title: 'Goal', target_cents: 500, current_cents: 500 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 500, current_cents: 500 },
       });
       goalIds.push(goal.id);
       const poll = await prisma.poll.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title: 'Poll',
           total_votes_cents: 500,
           options: { create: { label: 'A', votes_cents: 500 } },
@@ -775,12 +840,16 @@ describe('Incentive lifecycle on SQLite', () => {
     async (kind) => {
       const target = await destination();
       const reward = await prisma.reward.create({
-        data: { title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Reward', type: 'DIGITAL', cost_cents: 500 },
       });
       rewardIds.push(reward.id);
-      const poll = await prisma.poll.create({ data: { title: 'Poll' } });
+      const poll = await prisma.poll.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Poll' },
+      });
       pollIds.push(poll.id);
-      const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 1000 } });
+      const goal = await prisma.fundGoal.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Goal', target_cents: 1000 },
+      });
       goalIds.push(goal.id);
       const update = () =>
         kind === 'REWARD'
@@ -802,11 +871,18 @@ describe('Incentive lifecycle on SQLite', () => {
     });
     donorIds.push(owner.id);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Goal', target_cents: 500, current_cents: 500, is_complete: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Goal',
+        target_cents: 500,
+        current_cents: 500,
+        is_complete: true,
+      },
     });
     goalIds.push(goal.id);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Poll',
         total_votes_cents: 500,
         options: { create: { label: 'A', votes_cents: 500 } },
@@ -858,10 +934,14 @@ describe('Incentive lifecycle on SQLite', () => {
       WHEN NEW.destination_id = '${target}' BEGIN SELECT RAISE(ABORT, 'forced delivery failure'); END`);
       const create =
         kind === 'REWARD'
-          ? createReward({ title, type: 'DIGITAL', cost_cents: 500 })
+          ? createReward({ event_id: DEFAULT_EVENT_ID, title, type: 'DIGITAL', cost_cents: 500 })
           : kind === 'POLL'
-            ? createPoll({ title, options: { create: { label: title } } })
-            : createGoal({ title, target_cents: 1000 });
+            ? createPoll({
+                event_id: DEFAULT_EVENT_ID,
+                title,
+                options: { create: { label: title } },
+              })
+            : createGoal({ event_id: DEFAULT_EVENT_ID, title, target_cents: 1000 });
       await expect(create).rejects.toMatchObject({ code: 'P2003' });
       expect(await prisma.reward.count({ where: { title } })).toBe(0);
       expect(await prisma.poll.count({ where: { title } })).toBe(0);
@@ -874,6 +954,7 @@ describe('Incentive lifecycle on SQLite', () => {
   it('creates a reward and queues its committed values', async () => {
     const target = await destination();
     const reward = await createReward({
+      event_id: DEFAULT_EVENT_ID,
       title: `Reward ${crypto.randomUUID()}`,
       type: 'DIGITAL',
       cost_cents: 500,
@@ -891,6 +972,7 @@ describe('Incentive lifecycle on SQLite', () => {
           incentive_kind: 'REWARD',
           incentive_id: reward.id,
           channel_id: null,
+          event_id: DEFAULT_EVENT_ID,
           title: reward.title,
           is_active: false,
           cost_cents: 500,

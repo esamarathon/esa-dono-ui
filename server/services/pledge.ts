@@ -7,6 +7,7 @@ import {
   type PledgePlan,
   type PledgeItemKind,
   type PledgeSelection,
+  isAvailableOn,
 } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { withSpan } from '../lib/tracing.js';
@@ -197,7 +198,8 @@ export async function createPledge(input: CreatePledgeInput) {
       const selections: PledgeSelection[] = [];
       const correctedItems: PledgeItemInput[] = [];
       const quantities = new Map<string, number>();
-      const channelMatches = (id: string | null) => id === null || id === channel.id;
+      const channelMatches = (row: { channel_id: string | null; event_id: string }) =>
+        isAvailableOn(row, channel);
       for (const [index, item] of input.items.entries()) {
         if (!item || !['REWARD', 'POLL_VOTE', 'GOAL', 'POLL_CUSTOM'].includes(item.kind)) {
           throw httpError(400, 'Invalid item kind');
@@ -216,7 +218,7 @@ export async function createPledge(input: CreatePledgeInput) {
           if (!Number.isInteger(requested) || requested < 1)
             throw httpError(400, 'REWARD quantity must be a positive integer');
           const reward = await tx.reward.findUnique({ where: { id: item.target_id } });
-          if (!reward || !reward.is_active || !channelMatches(reward.channel_id)) continue;
+          if (!reward || !reward.is_active || !channelMatches(reward)) continue;
           const already = quantities.get(reward.id) ?? 0;
           const quantity =
             reward.quantity_total === null
@@ -237,15 +239,14 @@ export async function createPledge(input: CreatePledgeInput) {
           corrected = { ...item, quantity, amount_cents: selection.amount_cents };
         } else if (item.kind === 'GOAL') {
           const goal = await tx.fundGoal.findUnique({ where: { id: item.target_id } });
-          if (!goal || !goal.is_active || goal.is_complete || !channelMatches(goal.channel_id))
-            continue;
+          if (!goal || !goal.is_active || goal.is_complete || !channelMatches(goal)) continue;
         } else {
           if (!item.poll_id) throw httpError(400, `${item.kind} requires poll_id`);
           const poll = await tx.poll.findUnique({ where: { id: item.poll_id } });
           if (
             !poll ||
             !poll.is_active ||
-            !channelMatches(poll.channel_id) ||
+            !channelMatches(poll) ||
             (poll.ends_at && poll.ends_at <= new Date())
           )
             continue;

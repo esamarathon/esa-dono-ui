@@ -4,6 +4,8 @@ import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
 import { apiErrorMessage, type Reward, type Channel } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import { defaultOwner, ownerLabel, ownerPayload, useStaffEvents } from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -20,6 +22,7 @@ interface RewardForm {
   custom_type_label: string;
   image_url: string | null;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: RewardForm = {
@@ -32,6 +35,7 @@ const EMPTY: RewardForm = {
   custom_type_label: '',
   image_url: null,
   channel_id: null,
+  event_id: null,
 };
 
 type RewardModal = 'create' | Reward | null;
@@ -39,6 +43,7 @@ type RewardModal = 'create' | Reward | null;
 export default function AdminRewards() {
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const events = useStaffEvents(adminClient);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<RewardModal>(null);
   const [form, setForm] = useState<RewardForm>(EMPTY);
@@ -54,11 +59,8 @@ export default function AdminRewards() {
     );
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
     setUploadError('');
@@ -70,6 +72,7 @@ export default function AdminRewards() {
       quantity_total: r.quantity_total ?? '',
       image_url: r.image_url ?? null,
       channel_id: r.channel_id ?? null,
+      event_id: r.event_id,
     } as RewardForm);
     setModal(r);
     setError('');
@@ -96,6 +99,7 @@ export default function AdminRewards() {
     setError('');
     const data = {
       ...form,
+      ...ownerPayload(form),
       cost_cents: Math.round(parseFloat(String(form.cost_dollars)) * 100),
       quantity_total:
         form.quantity_total === '' || form.quantity_total === null
@@ -186,7 +190,7 @@ export default function AdminRewards() {
                   {fmt(r.allocated_cents ?? 0)} allocated)
                 </td>
                 <td className="px-4 py-2 font-data text-off-white/55">
-                  {channelName(r.channel_id)}
+                  {ownerLabel(r, channels, events)}
                 </td>
                 <td className="px-4 py-2">
                   <StatusBadge active={r.is_active} />
@@ -291,21 +295,13 @@ export default function AdminRewards() {
               </p>
             )}
           </div>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

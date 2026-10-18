@@ -141,6 +141,8 @@ export interface Reward extends IncentiveAllocation {
   custom_type_label?: string | null;
   image_url?: string | null;
   channel_id?: string | null;
+  /** Owning Event (ADR-0012); a shared incentive has no Channel. */
+  event_id: string;
 }
 
 export interface PollOption {
@@ -164,6 +166,8 @@ export interface Poll extends IncentiveAllocation {
   auto_approve?: boolean;
   custom_entries?: CustomEntry[];
   channel_id?: string | null;
+  /** Owning Event (ADR-0012); a shared incentive has no Channel. */
+  event_id: string;
 }
 
 export interface CustomEntry {
@@ -182,6 +186,8 @@ export interface Goal extends IncentiveAllocation {
   is_complete?: boolean;
   is_active?: boolean;
   channel_id?: string | null;
+  /** Owning Event (ADR-0012); a shared incentive has no Channel. */
+  event_id: string;
 }
 
 export interface Channel {
@@ -291,6 +297,7 @@ export interface Auction {
   status: AuctionStatus;
   is_active?: boolean;
   channel_id?: string | null;
+  event_id: string;
   is_current_highest_bidder?: boolean;
   bids?: { id: string; amount_cents: number; status: string; created_at: string }[];
 }

@@ -107,6 +107,10 @@ model Event {
   channels           Channel[]  @relation("EventChannels")
   primary_channel    Channel?   @relation("EventPrimaryChannel", fields: [primary_channel_id], references: [id], onDelete: SetNull)
   donations          Donation[]
+  rewards            Reward[]
+  polls              Poll[]
+  goals              FundGoal[]
+  auctions           Auction[]
 }
 
 /// One stream within an Event (Tiltify: a campaign). See CONTEXT.md.
@@ -141,11 +145,13 @@ model Reward {
   is_active        Boolean       @default(true)
   custom_type_label String?
   image_url        String?       // served at /api/uploads/<uuid>.webp
-  channel_id        String?       // null = shared across all channels
+  channel_id        String?       // null = shared incentive of its Event (ADR-0012)
+  event_id          String
   created_at       DateTime      @default(now())
   updated_at       DateTime      @updatedAt
   claims           RewardClaim[]
   channel          Channel?      @relation(fields: [channel_id], references: [id])
+  event            Event         @relation(fields: [event_id], references: [id])
 }
 
 model RewardClaim {
@@ -187,13 +193,15 @@ model Poll {
   allow_custom_entries Boolean      @default(false)
   max_entry_chars      Int?
   auto_approve         Boolean      @default(true)
-  channel_id           String?      // null = shared across all channels
+  channel_id           String?      // null = shared incentive of its Event (ADR-0012)
+  event_id             String
   created_at           DateTime     @default(now())
   updated_at           DateTime     @updatedAt
   options              PollOption[]
   votes                PollVote[]
   custom_entries       PollCustomEntry[]
   channel              Channel?     @relation(fields: [channel_id], references: [id])
+  event                Event        @relation(fields: [event_id], references: [id])
 }
 
 model PollOption {
@@ -255,12 +263,14 @@ model FundGoal {
   current_cents Int                @default(0)
   is_active     Boolean            @default(true)
   is_complete   Boolean            @default(false)
-  channel_id    String?            // null = shared across all channels
+  channel_id    String?            // null = shared incentive of its Event (ADR-0012)
+  event_id      String
   created_at    DateTime           @default(now())
   updated_at    DateTime           @updatedAt
   contributions FundContribution[]
   default_for   ChannelDefaultGoal[]
   channel       Channel?           @relation(fields: [channel_id], references: [id])
+  event         Event              @relation(fields: [event_id], references: [id])
 }
 
 model FundContribution {
@@ -519,7 +529,8 @@ model Auction {
   ends_at             DateTime
   status              String          @default("OPEN") // OPEN | CLOSED | AWAITING_PAYMENT | SETTLED | UNSOLD | CANCELLED
   current_offer_id    String?         @unique
-  channel_id          String?         // null = shared across all channels
+  channel_id          String?         // null = shared incentive of its Event (ADR-0012)
+  event_id            String
   is_active           Boolean         @default(true)
   created_at          DateTime        @default(now())
   updated_at          DateTime        @updatedAt
@@ -528,6 +539,7 @@ model Auction {
   current_offer       AuctionOffer?   @relation("CurrentOffer", fields: [current_offer_id], references: [id])
   win                 AuctionWin?
   channel             Channel?        @relation(fields: [channel_id], references: [id])
+  event               Event           @relation(fields: [event_id], references: [id])
   current_bidder      Donor?          @relation("CurrentBidder", fields: [current_bidder_id], references: [id])
 }
 
