@@ -48,7 +48,7 @@ kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible mes
 
 - **REST API.** It serves bare Tiltify-v5 objects and needs no key. The global per-IP API limit applies (`RATE_LIMIT_API`, default 600/min). kollekt polls about 36 times/min per Channel.
 - **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same money total as the `fact.updated` message. Incentive totals are allocated amounts, not money totals; their sum may exceed money. Never reconcile incentive sums against donation money.
-- **Shared incentives** (no Channel) are listed under every Channel, and an Event lists none of its own.
+- **Shared incentives** (no Channel) belong to one Event (ADR-0012). They are listed under every Channel of that Event, and the Event lists none of its own.
 - **Always empty:** milestones and matches are `[]`.
 
 A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Event**. Find their uuids and slugs at `/admin/events`. `GET /api/events` also shows them, but only for active Events and Channels.
