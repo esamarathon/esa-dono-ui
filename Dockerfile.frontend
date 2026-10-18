@@ -47,9 +47,10 @@ LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="ESA"
 
-# Patch OS packages to fix CVEs in the base image (e.g. libcrypto3/OpenSSL)
+# Patch OS packages to fix CVEs in the base image (e.g. libcrypto3/OpenSSL).
+# The version floor also refreshes a cached upgrade layer (CVE-2026-77214).
 USER root
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache && apk add --no-cache 'libexpat>=2.9.0-r0'
 USER nginx
 
 COPY nginx.conf /etc/nginx/templates/default.conf.template
