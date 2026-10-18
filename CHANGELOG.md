@@ -51,7 +51,7 @@ does not clear those gates or authorize deployment.
   Simulator decision logs recorded before this change send no `channel_id`; regenerate them.
 - **Tiltify-compatible Event lists now contain the Event's shared incentives**, like
   Tiltify team-level incentives (ADR-0012 rollout step 3); Channel lists keep them.
-  Deploy esa-layouts-v2#10 first, or overlays that read both lists show shared polls
+  Deploy esa-layouts-v2#9 first, or overlays that read both lists show shared polls
   twice. Deploy Kollekt#44 only after this release.
 
 ### Added

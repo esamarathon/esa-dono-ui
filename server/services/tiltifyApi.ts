@@ -14,7 +14,7 @@ import { money, tiltifyCurrency } from './webhooks/tiltifyPayload.js';
  * incentive (`channel_id = null`) belongs to its Event (ADR-0012). Like a Tiltify
  * team-level incentive, the Event (team campaign) lists it. Every Channel of that
  * Event lists it too, for consumers that read only Channel lists; layouts reads
- * both and keeps each id once (esa-layouts-v2#10).
+ * both and keeps each id once (esa-layouts-v2#9).
  *
  * Optional ESA `/lookup/` routes alone return `{ campaign_id, incentive }` for any
  * incentive of the context Event, including history. `campaign_id` is the owner:

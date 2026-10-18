@@ -73,7 +73,7 @@ cross-Channel metadata. Donation source Channel routing, money and ids never cha
 Channel lists remain own plus the shared incentives of the Channel's Event. An Event
 (team campaign) lists its shared incentives, like Tiltify team-level incentives
 (ADR-0012), and `campaign/{eventId}/polls/:poll_id` serves its shared polls. A shared
-incentive therefore appears in both lists: esa-layouts-v2#10 keeps each poll once, and
+incentive therefore appears in both lists: esa-layouts-v2#9 keeps each poll once, and
 Kollekt#44 must be deployed after this step. Ordinary Channel `polls/:poll_id` remains
 scoped to that Channel's own/shared polls (404 for another Channel's poll). Nothing changes overlay list scope. The focused
 [Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a
