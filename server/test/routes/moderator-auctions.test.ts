@@ -16,6 +16,7 @@ vi.mock('../../services/email.js', () => ({
 }));
 
 import moderatorRouter from '../../routes/moderator.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -88,6 +89,7 @@ describe('Moderator auction routes', () => {
         starting_price_cents: 1000,
         min_increment_cents: 100,
         ends_at: new Date(Date.now() + 3_600_000).toISOString(),
+        event_id: DEFAULT_EVENT_ID,
       });
     expect(createRes.status).toBe(200);
     auctionIds.push(createRes.body.id);
@@ -114,6 +116,7 @@ describe('Moderator auction routes', () => {
 
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Mod Cascade Auction',
         type: 'DIGITAL',
         starting_price_cents: 1000,
@@ -158,6 +161,7 @@ describe('Moderator auction routes', () => {
     donorIds.push(donor.id);
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Mod Cancel Me',
         type: 'DIGITAL',
         starting_price_cents: 1000,
@@ -183,6 +187,7 @@ describe('Moderator auction routes', () => {
 
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Mod Reopen Me',
         type: 'DIGITAL',
         starting_price_cents: 1000,
@@ -218,6 +223,7 @@ describe('Moderator auction routes', () => {
     donorIds.push(donor.id);
     const auction = await prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Mod Not Cancelled',
         type: 'DIGITAL',
         starting_price_cents: 1000,

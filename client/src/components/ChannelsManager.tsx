@@ -117,8 +117,8 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
 
       <p className="font-body text-sm text-off-white/55 mb-6">
         Every donation is routed to exactly one channel. Rewards, polls, and fund goals can be tied
-        to a specific channel or left shared (available to any channel). Deactivating a channel
-        hides it from the /donate picker without deleting its history.
+        to a specific channel or shared by every channel of one event. Deactivating a channel hides
+        it from the /donate picker without deleting its history.
       </p>
 
       <div className="space-y-3">

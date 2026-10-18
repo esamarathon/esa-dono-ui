@@ -38,12 +38,22 @@ async function fixture({ cents, goalTarget }: Readonly<{ cents: number; goalTarg
     },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Choice', channel_id: channel.id, options: { create: { label: 'A' } } },
+    data: {
+      event_id: channel.event_id,
+      title: 'Choice',
+      channel_id: channel.id,
+      options: { create: { label: 'A' } },
+    },
     include: { options: true },
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal', target_cents: goalTarget, channel_id: channel.id },
+    data: {
+      event_id: channel.event_id,
+      title: 'Goal',
+      target_cents: goalTarget,
+      channel_id: channel.id,
+    },
   });
   goals.push(goal.id);
   return { event, channel, donor, donation, poll, goal };

@@ -12,6 +12,7 @@ import {
   acknowledgeChargebackClaimTx,
 } from '../../services/reversal.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 const donors: string[] = [];
@@ -96,7 +97,13 @@ async function fixture({
     },
   });
   const reward = await prisma.reward.create({
-    data: { title: 'Locked price', type: 'PHYSICAL', cost_cents: 9000, quantity_claimed: 1 },
+    data: {
+      event_id: DEFAULT_EVENT_ID,
+      title: 'Locked price',
+      type: 'PHYSICAL',
+      cost_cents: 9000,
+      quantity_claimed: 1,
+    },
   });
   rewards.push(reward.id);
   const claim = await prisma.rewardClaim.create({
@@ -109,6 +116,7 @@ async function fixture({
   });
   const poll = await prisma.poll.create({
     data: {
+      event_id: DEFAULT_EVENT_ID,
       title: 'Poll',
       total_votes_cents: pollCents,
       options: { create: { label: 'A', votes_cents: pollCents } },
@@ -127,6 +135,7 @@ async function fixture({
   });
   const goal = await prisma.fundGoal.create({
     data: {
+      event_id: DEFAULT_EVENT_ID,
       title: 'Goal',
       target_cents: goalTarget,
       current_cents: goalProgress,

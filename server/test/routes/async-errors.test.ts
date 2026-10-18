@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const exec = promisify(execFile);
 const prisma = new PrismaClient();
@@ -71,13 +72,19 @@ beforeAll(async () => {
   uploadsDir = await mkdtemp(join(tmpdir(), 'dono-async-errors-'));
   const donor = await prisma.donor.create({ data: { email: `async-${randomUUID()}@example.com` } });
   donorId = donor.id;
-  const goal = await prisma.fundGoal.create({ data: { title: 'Funded goal', target_cents: 500 } });
+  const goal = await prisma.fundGoal.create({
+    data: { event_id: DEFAULT_EVENT_ID, title: 'Funded goal', target_cents: 500 },
+  });
   goalId = goal.id;
   await prisma.fundContribution.create({
     data: { donor_id: donorId, goal_id: goalId, amount_cents: 500 },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Voted poll', options: { create: { label: 'Voted option' } } },
+    data: {
+      event_id: DEFAULT_EVENT_ID,
+      title: 'Voted poll',
+      options: { create: { label: 'Voted option' } },
+    },
     include: { options: true },
   });
   pollId = poll.id;
@@ -122,7 +129,9 @@ describe('async route errors keep the backend running (#175)', () => {
   );
 
   it('still deletes a goal with no contributions', async () => {
-    const goal = await prisma.fundGoal.create({ data: { title: 'Empty goal', target_cents: 500 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Empty goal', target_cents: 500 },
+    });
     try {
       const { stdout } = await runDelete(`/api/moderator/goals/${goal.id}`);
       expect(JSON.parse(stdout.split('RESULT ')[1]!)).toEqual({

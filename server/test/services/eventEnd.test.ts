@@ -37,7 +37,7 @@ async function fixture({ pledge, pollCredit }: Readonly<{ pledge: number; pollCr
     },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Open', options: { create: { label: 'A' } } },
+    data: { event_id: event.id, title: 'Open', options: { create: { label: 'A' } } },
     include: { options: true },
   });
   polls.push(poll.id);
@@ -97,7 +97,12 @@ afterAll(() => prisma.$disconnect());
 it('previews confirmed physical types, CANCELLING claims, distinct donation count and OPEN pledges; REQUESTED blocks End', async () => {
   const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
-    data: { title: 'Confirmed physical, now digital', cost_cents: 99999, type: 'DIGITAL' },
+    data: {
+      event_id: f.event.id,
+      title: 'Confirmed physical, now digital',
+      cost_cents: 99999,
+      type: 'DIGITAL',
+    },
   });
   rewards.push(reward.id);
   const claim = await prisma.rewardClaim.create({
@@ -167,7 +172,7 @@ it('previews confirmed physical types, CANCELLING claims, distinct donation coun
 it('deactivation alone preserves credit, including reward credit; End and Undo expire/restore it without transfers', async () => {
   const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
-    data: { title: 'Reward', cost_cents: 999, type: 'DIGITAL' },
+    data: { event_id: f.event.id, title: 'Reward', cost_cents: 999, type: 'DIGITAL' },
   });
   rewards.push(reward.id);
   const claim = await prisma.rewardClaim.create({
@@ -216,7 +221,7 @@ it('deactivation alone preserves credit, including reward credit; End and Undo e
 it('does not classify a later credit-funded claim by the original physical pledge item', async () => {
   const f = await fixture({ pledge: 100, pollCredit: 60 });
   const reward = await prisma.reward.create({
-    data: { title: 'Now digital', cost_cents: 100, type: 'DIGITAL' },
+    data: { event_id: f.event.id, title: 'Now digital', cost_cents: 100, type: 'DIGITAL' },
   });
   rewards.push(reward.id);
   const old = await prisma.rewardClaim.create({

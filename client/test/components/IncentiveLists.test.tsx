@@ -27,6 +27,8 @@ import PollList from '../../src/components/incentives/PollList';
 import GoalList from '../../src/components/incentives/GoalList';
 import RewardList from '../../src/components/incentives/RewardList';
 
+const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
+
 const poll = {
   id: 'p1',
   title: 'Best Runner',
@@ -37,6 +39,7 @@ const poll = {
   is_active: true,
   allow_custom_entries: false,
   channel_id: null,
+  event_id: 'e1',
 };
 
 const goal = {
@@ -48,6 +51,7 @@ const goal = {
   is_active: true,
   is_complete: false,
   channel_id: null,
+  event_id: 'e1',
 };
 
 const reward = {
@@ -59,6 +63,7 @@ const reward = {
   quantity_claimed: 0,
   is_active: true,
   channel_id: null,
+  event_id: 'e1',
 };
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -69,7 +74,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
       updatedAt: Date.now(),
       amountCents: 1000,
       selections: [],
-      channelId: null,
+      channelId: 'c1',
       eventSlug: null,
       path: '/donate',
       comment: '',
@@ -89,7 +94,7 @@ describe('PollList', () => {
     mocks.getPolls.mockResolvedValue([poll]);
     mocks.getRewards.mockResolvedValue([]);
     mocks.getGoals.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 
@@ -300,7 +305,7 @@ describe('GoalList', () => {
     mocks.getGoals.mockResolvedValue([goal]);
     mocks.getRewards.mockResolvedValue([]);
     mocks.getPolls.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 
@@ -409,7 +414,7 @@ describe('RewardList', () => {
     mocks.getRewards.mockResolvedValue([reward]);
     mocks.getPolls.mockResolvedValue([]);
     mocks.getGoals.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 

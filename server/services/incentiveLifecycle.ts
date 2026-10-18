@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
+import { resolveEventId } from './channels.js';
 import { refundGoalContributions, refundPollOptionVotes } from './reversal.js';
 import { withWebhooks, type EmitWebhook } from './webhooks/outbox.js';
 import {
@@ -31,20 +32,58 @@ function integer(value: unknown, field: string, minimum: number) {
       `${field} must be representable integer cents/units of at least ${minimum}`,
     );
 }
-async function validateIdentity(
-  tx: Tx,
-  data: { title?: string; channel_id?: string | null },
-  required = false,
-) {
+type Identity = { title?: string; channel_id?: string | null; event_id?: string };
+
+/** The Event of `channel_id`, or null for a shared incentive; 400 for an unknown Channel. */
+async function channelEvent(tx: Tx, channelId: string | null | undefined) {
+  if (channelId === undefined || channelId === null) return null;
+  const channel =
+    typeof channelId === 'string'
+      ? await tx.channel.findUnique({ where: { id: channelId }, select: { event_id: true } })
+      : null;
+  if (!channel) throw httpError(400, 'channel_id must identify a Channel or be null');
+  return channel.event_id;
+}
+
+const EVENT_MISMATCH = 'event_id must be the Event of channel_id';
+const EVENT_FIXED = 'An incentive cannot move to another Event. Copy it instead.';
+
+/**
+ * ADR-0012: every incentive belongs to exactly one Event. A Channel incentive
+ * takes its Channel's Event; a shared incentive takes `event_id`, or the only
+ * Event when exactly one exists.
+ */
+async function validateIdentity(tx: Tx, data: Identity, required = false) {
   await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   if (required || data.title !== undefined) data.title = text(data.title, 'title');
-  if (data.channel_id !== undefined && data.channel_id !== null) {
-    if (
-      typeof data.channel_id !== 'string' ||
-      !(await tx.channel.count({ where: { id: data.channel_id } }))
-    )
-      throw httpError(400, 'channel_id must identify a Channel or be null');
-  }
+  return channelEvent(tx, data.channel_id);
+}
+
+/** Create: validate identity and return the owning Event. */
+async function createIdentity(tx: Tx, data: Identity): Promise<string> {
+  await validateIdentity(tx, data, true);
+  return incentiveEventId(tx, data);
+}
+
+/** An update keeps the Event; a new Channel must belong to it. */
+export async function keepEvent(tx: Tx, data: Identity, prior: { event_id: string }) {
+  if (data.event_id !== undefined && data.event_id !== prior.event_id)
+    throw httpError(400, EVENT_FIXED);
+  const fromChannel = await channelEvent(tx, data.channel_id);
+  if (fromChannel !== null && fromChannel !== prior.event_id) throw httpError(400, EVENT_FIXED);
+  delete data.event_id;
+}
+
+/** Auctions are written outside this module; they follow the same create rule. */
+export async function incentiveEventId(
+  tx: Tx,
+  input: { channel_id?: string | null; event_id?: string },
+) {
+  const fromChannel = await channelEvent(tx, input.channel_id);
+  if (fromChannel === null) return resolveEventId(tx, input.event_id);
+  if (input.event_id !== undefined && input.event_id !== fromChannel)
+    throw httpError(400, EVENT_MISMATCH);
+  return fromChannel;
 }
 async function protectMove(tx: Tx, kind: IncentiveKind, id: string) {
   protectHistory(
@@ -137,10 +176,25 @@ export async function reverseAndDeactivate(
   });
 }
 
-type IncentiveRow = { id: string; title: string; channel_id: string | null; is_active: boolean };
+/** Create inputs may omit `event_id`; the lifecycle resolves it. */
+type CreateInput<T extends { event_id: string }> = Omit<T, 'event_id'> & { event_id?: string };
+
+type IncentiveRow = {
+  id: string;
+  title: string;
+  channel_id: string | null;
+  event_id: string;
+  is_active: boolean;
+};
 
 function identity(kind: IncentiveKind, row: IncentiveRow) {
-  return { incentiveKind: kind, incentiveId: row.id, channelId: row.channel_id, title: row.title };
+  return {
+    incentiveKind: kind,
+    incentiveId: row.id,
+    eventId: row.event_id,
+    channelId: row.channel_id,
+    title: row.title,
+  };
 }
 
 async function publishActivation(
@@ -167,14 +221,15 @@ type PollData = Pick<
   | 'max_entry_chars'
   | 'auto_approve'
   | 'channel_id'
+  | 'event_id'
 >;
 
 export async function createPoll(
-  data: PollData & Pick<Prisma.PollUncheckedCreateInput, 'options'>,
+  input: CreateInput<PollData> & Pick<Prisma.PollUncheckedCreateInput, 'options'>,
 ) {
   return withWebhooks(async (tx, emit) => {
-    data = { ...data };
-    await validateIdentity(tx, data, true);
+    const data = { ...input };
+    const event_id = await createIdentity(tx, data);
     if (data.options?.create) {
       const options = Array.isArray(data.options.create)
         ? data.options.create
@@ -184,7 +239,10 @@ export async function createPoll(
         create: options.map((option) => ({ ...option, label: text(option.label, 'label') })),
       };
     }
-    const created = await tx.poll.create({ data, include: { options: true } });
+    const created = await tx.poll.create({
+      data: { ...data, event_id },
+      include: { options: true },
+    });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
         ...identity('POLL', created),
@@ -202,6 +260,7 @@ export async function updatePoll(id: string, data: Partial<PollData>) {
     await validateIdentity(tx, data);
     const prior = await tx.poll.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Poll not found');
+    await keepEvent(tx, data, prior);
     if (data.channel_id !== undefined && data.channel_id !== prior.channel_id)
       await protectMove(tx, 'POLL', id);
     const updated = await tx.poll.update({ where: { id }, data, include: { options: true } });
@@ -237,16 +296,18 @@ export async function updatePollOption(id: string, label: string) {
 
 type GoalData = Pick<
   Prisma.FundGoalUncheckedCreateInput,
-  'title' | 'description' | 'target_cents' | 'is_active' | 'channel_id'
+  'title' | 'description' | 'target_cents' | 'is_active' | 'channel_id' | 'event_id'
 >;
 
-export async function createGoal(data: GoalData & { is_complete?: unknown }) {
+export async function createGoal(input: CreateInput<GoalData> & { is_complete?: unknown }) {
   return withWebhooks(async (tx, emit) => {
-    data = { ...data };
+    const data = { ...input };
     noManualCompletion(data);
-    await validateIdentity(tx, data, true);
+    const event_id = await createIdentity(tx, data);
     integer(data.target_cents, 'target_cents', 1);
-    const created = await tx.fundGoal.create({ data: { ...data, is_complete: undefined } });
+    const created = await tx.fundGoal.create({
+      data: { ...data, event_id, is_complete: undefined },
+    });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
         ...identity('GOAL', created),
@@ -266,6 +327,7 @@ export async function updateGoal(id: string, data: Partial<GoalData> & { is_comp
     if (data.target_cents !== undefined) integer(data.target_cents, 'target_cents', 1);
     const prior = await tx.fundGoal.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Goal not found');
+    await keepEvent(tx, data, prior);
     if (data.channel_id !== undefined && data.channel_id !== prior.channel_id) {
       await protectMove(tx, 'GOAL', id);
       if (
@@ -312,6 +374,7 @@ type RewardData = Pick<
   | 'custom_type_label'
   | 'image_url'
   | 'channel_id'
+  | 'event_id'
 >;
 
 export async function updateReward(id: string, data: Partial<RewardData>) {
@@ -321,6 +384,7 @@ export async function updateReward(id: string, data: Partial<RewardData>) {
     validateReward(data);
     const prior = await tx.reward.findUnique({ where: { id } });
     if (!prior) throw httpError(404, 'Reward not found');
+    await keepEvent(tx, data, prior);
     if (
       (data.channel_id !== undefined && data.channel_id !== prior.channel_id) ||
       (data.type !== undefined && data.type !== prior.type)
@@ -348,18 +412,15 @@ export async function updateReward(id: string, data: Partial<RewardData>) {
   return reward;
 }
 
-export async function createReward(data: RewardData) {
+export async function createReward(input: CreateInput<RewardData>) {
   return withWebhooks(async (tx, emit) => {
-    data = { ...data };
-    await validateIdentity(tx, data, true);
+    const data = { ...input };
+    const event_id = await createIdentity(tx, data);
     validateReward(data, true);
-    const created = await tx.reward.create({ data });
+    const created = await tx.reward.create({ data: { ...data, event_id } });
     await emit('incentive.created', () =>
       buildIncentiveCreatedPayload({
-        incentiveKind: 'REWARD',
-        incentiveId: created.id,
-        channelId: created.channel_id,
-        title: created.title,
+        ...identity('REWARD', created),
         isActive: created.is_active,
         costCents: created.cost_cents,
       }),

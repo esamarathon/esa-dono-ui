@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import auctionsRouter from '../../routes/auctions.js';
 import { invalidateFlagCache } from '../../services/featureFlags.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -36,6 +37,7 @@ async function makeDonor(opts: { verified?: boolean; hasDonation?: boolean } = {
 async function makeAuction(overrides: Record<string, unknown> = {}) {
   return prisma.auction.create({
     data: {
+      event_id: DEFAULT_EVENT_ID,
       title: 'Signed Guitar',
       type: 'DIGITAL',
       starting_price_cents: 1000,

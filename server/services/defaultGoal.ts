@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { isAvailableOn } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { httpError } from '../lib/httpError.js';
 
@@ -22,16 +23,13 @@ export async function defaultGoal(
       include: { goal: true },
     });
     const entry = entries.find(
-      ({ goal }) =>
-        goal.is_active &&
-        !goal.is_complete &&
-        (goal.channel_id === null || goal.channel_id === channelId),
+      ({ goal }) => goal.is_active && !goal.is_complete && isAvailableOn(goal, channel),
     );
     if (entry) return entry.goal_id;
   }
   for (const scope of [channelId, null]) {
     const goals = await tx.fundGoal.findMany({
-      where: { channel_id: scope, is_active: true, is_complete: false },
+      where: { channel_id: scope, event_id: channel.event_id, is_active: true, is_complete: false },
       orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
     });
     goals.sort((a, b) => a.target_cents - a.current_cents - (b.target_cents - b.current_cents));

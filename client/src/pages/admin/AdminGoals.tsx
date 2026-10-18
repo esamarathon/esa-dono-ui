@@ -8,6 +8,8 @@ import StatusBadge from '../../components/StatusBadge';
 import { AllocationSources, GoalDefaults } from '../../components/StaffAmounts';
 import { reversalText } from '../../utils/money';
 import { apiErrorMessage, type Goal, type Channel } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import { defaultOwner, ownerLabel, ownerPayload, useStaffEvents } from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -22,6 +24,7 @@ interface GoalForm {
   is_complete?: boolean;
   current_cents?: number;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: GoalForm = {
@@ -30,6 +33,7 @@ const EMPTY: GoalForm = {
   target_dollars: '10.00',
   is_active: true,
   channel_id: null,
+  event_id: null,
 };
 
 type GoalModal = 'create' | Goal | null;
@@ -37,6 +41,7 @@ type GoalModal = 'create' | Goal | null;
 export default function AdminGoals() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const events = useStaffEvents(adminClient);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<GoalModal>(null);
   const [form, setForm] = useState<GoalForm>(EMPTY);
@@ -49,11 +54,8 @@ export default function AdminGoals() {
     );
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
   };
@@ -62,6 +64,7 @@ export default function AdminGoals() {
       ...g,
       target_dollars: (g.target_cents / 100).toFixed(2),
       channel_id: g.channel_id ?? null,
+      event_id: g.event_id,
     } as GoalForm);
     setModal(g);
     setError('');
@@ -73,7 +76,7 @@ export default function AdminGoals() {
       const data = {
         title: form.title,
         description: form.description,
-        channel_id: form.channel_id,
+        ...ownerPayload(form),
         is_active: form.is_active,
         target_cents: Math.round(parseFloat(String(form.target_dollars)) * 100),
       };
@@ -146,7 +149,7 @@ export default function AdminGoals() {
                   <p className="font-body text-sm text-off-white/55">{g.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/40">
-                  channel: {channelName(g.channel_id)}
+                  channel: {ownerLabel(g, channels, events)}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <StatusBadge active={g.is_active} />
@@ -216,21 +219,13 @@ export default function AdminGoals() {
               />
             </div>
           ))}
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

@@ -55,22 +55,19 @@ async function fundSpend(
   donationId: string | null,
   category: PoolCategory,
   cents: number,
-  incentiveChannel: string | null,
+  incentive: { channel_id: string | null; event_id: string },
   pool?: SpendFunding,
 ) {
   if (pool?.mode === 'credit') {
     const batch = await tx.poolCreditBatch.findUnique({ where: { id: pool.batch_id } });
     const event = await tx.event.findUnique({ where: { id: pool.event_id } });
-    const channel = incentiveChannel
-      ? await tx.channel.findUnique({ where: { id: incentiveChannel } })
-      : null;
     if (
       !batch ||
       batch.donor_id !== donorId ||
       batch.event_id !== pool.event_id ||
       !event ||
       event.ended_at ||
-      (incentiveChannel && channel?.event_id !== pool.event_id)
+      incentive.event_id !== pool.event_id
     )
       throw httpError(409, 'Invalid credit Event or target');
     if (
@@ -142,7 +139,11 @@ async function fundSpend(
   ) {
     throw httpError(400, 'Invalid Pool source donation');
   }
-  if (incentiveChannel && incentiveChannel !== donation.channel_id)
+  // ADR-0012: the donation's Channel, or a shared incentive of its Event.
+  if (
+    incentive.event_id !== donation.event_id ||
+    (incentive.channel_id !== null && incentive.channel_id !== donation.channel_id)
+  )
     throw httpError(400, 'Incentive belongs to another Channel');
   const accounting = await readDonationAccountingTx(tx, donationId);
   const budget = accounting.pools[category];
@@ -227,7 +228,7 @@ export async function claimRewardTx(
     )
       throw httpError(400, 'Physical rewards exceed confirmed new money');
   }
-  await fundSpend(tx, donorId, donationId, 'reward', totalCost, reward.channel_id, pool);
+  await fundSpend(tx, donorId, donationId, 'reward', totalCost, reward, pool);
   // One row per unit; price is the confirmed allocation, never the live price.
   const claimIds: string[] = [];
   for (let index = 0; index < quantity; index++) {
@@ -267,7 +268,7 @@ export async function votePollTx(
   const option = await tx.pollOption.findUnique({ where: { id: pollOptionId } });
   if (!option || option.poll_id !== poll.id) throw httpError(404, 'Option not found');
   if (option.status === 'REJECTED') throw httpError(400, 'Option was rejected');
-  await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
+  await fundSpend(tx, donorId, donationId, 'poll', cents, poll, pool);
   const voteIds: string[] = [];
   for (const row of allocationRows(cents, pool)) {
     const vote = await tx.pollVote.create({
@@ -331,7 +332,7 @@ export async function proposeCustomEntryTx(
   if (poll.ends_at && new Date() >= poll.ends_at) throw httpError(400, 'Poll has ended');
   const textError = await customEntryTextErrorTx(tx, trimmed, poll.max_entry_chars);
   if (textError) throw httpError(400, textError);
-  await fundSpend(tx, donorId, donationId, 'poll', cents, poll.channel_id, pool);
+  await fundSpend(tx, donorId, donationId, 'poll', cents, poll, pool);
   const autoApprove = poll.auto_approve;
   const optionStatus = autoApprove ? 'ACTIVE' : 'PENDING_APPROVAL';
   const entry = await tx.pollCustomEntry.create({
@@ -382,7 +383,7 @@ export async function contributeGoalTx(
   // mutation. An earlier source component may complete this same selection.
   if (!goal || !goal.is_active || (goal.is_complete && pool?.mode !== 'credit'))
     throw httpError(404, 'Goal not found, inactive, or complete');
-  await fundSpend(tx, donorId, donationId, 'goal', cents, goal.channel_id, pool);
+  await fundSpend(tx, donorId, donationId, 'goal', cents, goal, pool);
   const contributionIds: string[] = [];
   for (const row of allocationRows(cents, pool)) {
     const contribution = await tx.fundContribution.create({

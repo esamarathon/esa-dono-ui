@@ -3,9 +3,9 @@ import crypto from 'crypto';
 import prisma from '../../lib/prisma.js';
 
 /**
- * The migration's default Event. CI and the container test build their database
- * with `prisma db push`, which does not run migrations, so the row may be absent:
- * `ensureDefaultEvent` creates it when needed.
+ * The migration's default Event. `test/global-setup.ts` migrates every test
+ * database, so the row exists; `ensureDefaultEvent` recreates it if a test
+ * deleted it.
  */
 export const DEFAULT_EVENT_ID = '00000000-0000-4000-8000-000000000001';
 

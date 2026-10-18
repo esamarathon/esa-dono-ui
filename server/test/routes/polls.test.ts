@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import pollsRouter from '../../routes/polls.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -34,9 +35,11 @@ describe('Polls routes', () => {
   });
 
   it('GET / returns only active polls', async () => {
-    const active = await prisma.poll.create({ data: { title: 'Active Poll', is_active: true } });
+    const active = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Active Poll', is_active: true },
+    });
     const inactive = await prisma.poll.create({
-      data: { title: 'Inactive Poll', is_active: false },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Inactive Poll', is_active: false },
     });
 
     const res = await request(createApp()).get('/api/polls');
@@ -51,7 +54,9 @@ describe('Polls routes', () => {
 
   it('POST /:id/vote votes on an option', async () => {
     const { donor, token } = await makeDonor(5000);
-    const poll = await prisma.poll.create({ data: { title: 'Vote Poll', is_active: true } });
+    const poll = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Vote Poll', is_active: true },
+    });
     const option = await prisma.pollOption.create({
       data: { poll_id: poll.id, label: 'Runner A', status: 'ACTIVE' },
     });
@@ -72,7 +77,9 @@ describe('Polls routes', () => {
 
   it('POST /:id/vote returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
-    const poll = await prisma.poll.create({ data: { title: 'Poor Poll', is_active: true } });
+    const poll = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Poor Poll', is_active: true },
+    });
     const option = await prisma.pollOption.create({
       data: { poll_id: poll.id, label: 'Runner A', status: 'ACTIVE' },
     });
@@ -93,7 +100,12 @@ describe('Polls routes', () => {
   it('POST /:id/custom-entry proposes a funded write-in', async () => {
     const { donor, token } = await makeDonor(5000);
     const poll = await prisma.poll.create({
-      data: { title: 'Writein Poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Writein Poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
 
     const res = await request(createApp())
@@ -116,7 +128,12 @@ describe('Polls routes', () => {
   it('POST /:id/custom-entry rejects a blocked word', async () => {
     const { donor, token } = await makeDonor(5000);
     const poll = await prisma.poll.create({
-      data: { title: 'Blocked Poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Blocked Poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
     const blocked = await prisma.blockedWord.create({ data: { word: 'spamword' } });
 

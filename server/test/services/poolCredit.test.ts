@@ -34,12 +34,22 @@ async function extraCredits(
     data: { event_id: f.event.id, name: crypto.randomUUID(), slug: crypto.randomUUID() },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Foreign poll', channel_id: foreign.id, options: { create: { label: 'Yes' } } },
+    data: {
+      event_id: foreign.event_id,
+      title: 'Foreign poll',
+      channel_id: foreign.id,
+      options: { create: { label: 'Yes' } },
+    },
     include: { options: true },
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Foreign goal', channel_id: foreign.id, target_cents: goalTarget },
+    data: {
+      event_id: foreign.event_id,
+      title: 'Foreign goal',
+      channel_id: foreign.id,
+      target_cents: goalTarget,
+    },
   });
   goals.push(goal.id);
   for (const { donation } of f.sources) {
@@ -109,6 +119,7 @@ async function fixture({
   });
   const reward = await prisma.reward.create({
     data: {
+      event_id: event.id,
       title: 'One entitlement',
       type: 'DIGITAL',
       cost_cents: rewardPrice,
@@ -390,7 +401,10 @@ it.each([
     const foreign = await prisma.channel.create({
       data: { name: crypto.randomUUID(), slug: crypto.randomUUID(), event_id: foreignEvent.id },
     });
-    await prisma.reward.update({ where: { id: f.reward.id }, data: { channel_id: foreign.id } });
+    await prisma.reward.update({
+      where: { id: f.reward.id },
+      data: { event_id: foreignEvent.id, channel_id: foreign.id },
+    });
   }
   if (change === 'category')
     reviewed.selections.push({

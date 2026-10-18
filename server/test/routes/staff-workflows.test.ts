@@ -7,7 +7,7 @@ import prisma from '../../lib/prisma.js';
 import admin from '../../routes/admin.js';
 import moderator from '../../routes/moderator.js';
 import { catchAsyncErrors, errorHandler } from '../../lib/httpError.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 import { applyPoolCreditTx } from '../../services/poolCredit.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 const extraDonors: string[] = [];
@@ -73,7 +73,12 @@ async function fixture({
   });
   rewardId = (
     await prisma.reward.create({
-      data: { title: 'Recorded reward', type: 'DIGITAL', cost_cents: currentPrice },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Recorded reward',
+        type: 'DIGITAL',
+        cost_cents: currentPrice,
+      },
     })
   ).id;
   claimId = (
@@ -96,7 +101,11 @@ async function fixture({
     },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Live poll', options: { create: { label: 'Option' } } },
+    data: {
+      event_id: DEFAULT_EVENT_ID,
+      title: 'Live poll',
+      options: { create: { label: 'Option' } },
+    },
     include: { options: true },
   });
   pollId = poll.id;
@@ -238,7 +247,7 @@ it('shares the actual Default goal recipient and fallback safely with moderators
     pollAllocation: 700,
   });
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Shared fallback', target_cents: 1000 },
+    data: { event_id: DEFAULT_EVENT_ID, title: 'Shared fallback', target_cents: 1000 },
   });
   try {
     await request(app)
@@ -499,7 +508,12 @@ it('keeps one multisource claim, source-local allocations, original-grant previe
     },
   });
   const target = await prisma.reward.create({
-    data: { title: 'Whole entitlement', type: 'DIGITAL', cost_cents: 1000 },
+    data: {
+      event_id: DEFAULT_EVENT_ID,
+      title: 'Whole entitlement',
+      type: 'DIGITAL',
+      cost_cents: 1000,
+    },
   });
   extraRewards.push(target.id);
   const result = await withWebhooks((tx, _emit, publisher) =>
@@ -638,6 +652,7 @@ it('reads recorded ended/completed target changes and resolved-item shipping att
   });
   const goal = await prisma.fundGoal.create({
     data: {
+      event_id: DEFAULT_EVENT_ID,
       title: 'Ended complete goal',
       current_cents: 500,
       target_cents: 1000,

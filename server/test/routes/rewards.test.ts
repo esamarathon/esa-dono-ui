@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import rewardsRouter from '../../routes/rewards.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -35,10 +36,22 @@ describe('Rewards routes', () => {
 
   it('GET / returns only active rewards', async () => {
     const active = await prisma.reward.create({
-      data: { title: 'Active Reward', type: 'DIGITAL', cost_cents: 100, is_active: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Active Reward',
+        type: 'DIGITAL',
+        cost_cents: 100,
+        is_active: true,
+      },
     });
     const inactive = await prisma.reward.create({
-      data: { title: 'Inactive Reward', type: 'DIGITAL', cost_cents: 100, is_active: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Inactive Reward',
+        type: 'DIGITAL',
+        cost_cents: 100,
+        is_active: false,
+      },
     });
 
     const res = await request(createApp()).get('/api/rewards');
@@ -54,7 +67,7 @@ describe('Rewards routes', () => {
   it('POST /:id/claim claims a reward', async () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({
-      data: { title: 'Claim Reward', type: 'DIGITAL', cost_cents: 500 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Claim Reward', type: 'DIGITAL', cost_cents: 500 },
     });
 
     const res = await request(createApp())
@@ -73,7 +86,13 @@ describe('Rewards routes', () => {
   it('POST /:id/claim rejects physical rewards funded by Wallet credit without changing funds or stock', async () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({
-      data: { title: 'Physical reward', type: 'PHYSICAL', cost_cents: 1000, quantity_total: 2 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Physical reward',
+        type: 'PHYSICAL',
+        cost_cents: 1000,
+        quantity_total: 2,
+      },
     });
     try {
       const res = await request(createApp())
@@ -102,7 +121,12 @@ describe('Rewards routes', () => {
   it('POST /:id/claim returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
     const reward = await prisma.reward.create({
-      data: { title: 'Expensive Reward', type: 'DIGITAL', cost_cents: 500 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Expensive Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+      },
     });
 
     const res = await request(createApp())
@@ -121,6 +145,7 @@ describe('Rewards routes', () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Bulk Reward',
         type: 'DIGITAL',
         cost_cents: 500,
@@ -153,6 +178,7 @@ describe('Rewards routes', () => {
     const { donor, token } = await makeDonor(10000);
     const reward = await prisma.reward.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Scarce Reward',
         type: 'DIGITAL',
         cost_cents: 500,

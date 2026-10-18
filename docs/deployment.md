@@ -353,6 +353,27 @@ every id is a UUID:
 - **Staging:** `scripts/reset-demo.sh`. This drops the volume, migrates, runs
   `seed-dev.sh`, then `prisma/seed.ts`.
 
+**Shared incentive owner (ADR-0012).** `20261017000000_shared_incentive_event` gives
+every reward, poll, goal and auction an `event_id`: the Event of its Channel; for a
+shared incentive the only Event, else the one Event in which it has allocations
+(donations or Pool credit batches). If any shared incentive has no single Event, the
+migration fails, changes nothing and records a failed migration. Find those rows
+before deploying, on a backup copy:
+
+```sql
+-- Shared incentives; with two or more Events, each needs allocations in exactly one.
+SELECT 'Reward' AS kind, id, title FROM Reward WHERE channel_id IS NULL
+UNION ALL SELECT 'Poll', id, title FROM Poll WHERE channel_id IS NULL
+UNION ALL SELECT 'FundGoal', id, title FROM FundGoal WHERE channel_id IS NULL
+UNION ALL SELECT 'Auction', id, title FROM Auction WHERE channel_id IS NULL;
+```
+
+Give each unresolved one a Channel, or split it into one copy per Event. Then mark the
+failed attempt with `npx prisma migrate resolve --rolled-back
+20261017000000_shared_incentive_event` and deploy again. The migration also adds
+SQLite triggers that keep a Channel incentive in its Channel's Event; a later table
+rebuild of these tables must recreate them.
+
 ### Rollback
 
 Redeploy a previous image tag (CI also tags `backend:<sha>` /

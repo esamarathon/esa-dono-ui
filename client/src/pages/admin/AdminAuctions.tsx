@@ -11,6 +11,8 @@ import {
   type AuctionOffer,
   type Channel,
 } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import { defaultOwner, ownerLabel, ownerPayload, useStaffEvents } from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -59,6 +61,7 @@ interface AuctionForm {
   ends_at_local: string;
   is_active: boolean;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: AuctionForm = {
@@ -72,6 +75,7 @@ const EMPTY: AuctionForm = {
   ends_at_local: '',
   is_active: true,
   channel_id: null,
+  event_id: null,
 };
 
 type AuctionModalState = 'create' | Auction | null;
@@ -79,6 +83,7 @@ type AuctionModalState = 'create' | Auction | null;
 export default function AdminAuctions() {
   const [auctions, setAuctions] = useState<Auction[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const events = useStaffEvents(adminClient);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<AuctionModalState>(null);
   const [form, setForm] = useState<AuctionForm>(EMPTY);
@@ -115,11 +120,8 @@ export default function AdminAuctions() {
     );
   }, [isEnabled]);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
     setUploadError('');
@@ -134,6 +136,7 @@ export default function AdminAuctions() {
       increment_dollars: (a.min_increment_cents / 100).toFixed(2),
       ends_at_local: toLocalInput(a.ends_at),
       channel_id: a.channel_id ?? null,
+      event_id: a.event_id,
     } as AuctionForm);
     setModal(a);
     setError('');
@@ -168,7 +171,7 @@ export default function AdminAuctions() {
       min_increment_cents: Math.round(parseFloat(String(form.increment_dollars)) * 100),
       ends_at: form.ends_at_local ? new Date(form.ends_at_local).toISOString() : undefined,
       is_active: form.is_active,
-      channel_id: form.channel_id,
+      ...ownerPayload(form),
     };
     try {
       if (modal === 'create') {
@@ -245,7 +248,7 @@ export default function AdminAuctions() {
               <div>
                 <h2 className="font-data font-bold text-lg text-off-white">{a.title}</h2>
                 <p className="font-data text-xs text-off-white/40">
-                  event: {channelName(a.channel_id)} · type: {a.type}
+                  event: {ownerLabel(a, channels, events)} · type: {a.type}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <StatusBadge status={a.status} />
@@ -440,21 +443,13 @@ export default function AdminAuctions() {
               <img src={form.image_url} alt="preview" className="mt-2 h-24 rounded-sm" />
             )}
           </div>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any event)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

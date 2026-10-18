@@ -163,11 +163,18 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
   /** A donation paying a pledge with 2 reward units, a poll vote and a goal contribution. */
   async function donateWithIncentives() {
     const reward = await prisma.reward.create({
-      data: { title: 'Shoutout', type: 'DIGITAL', cost_cents: 300, quantity_total: 10 },
+      data: {
+        event_id: eventId,
+        title: 'Shoutout',
+        type: 'DIGITAL',
+        cost_cents: 300,
+        quantity_total: 10,
+      },
     });
     ids.rewards.push(reward.id);
     const poll = await prisma.poll.create({
       data: {
+        event_id: eventId,
         title: 'Pick',
         is_active: true,
         options: { create: [{ label: 'A' }, { label: 'B' }] },
@@ -175,7 +182,9 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
       include: { options: true },
     });
     ids.polls.push(poll.id);
-    const goal = await prisma.fundGoal.create({ data: { title: 'Goal', target_cents: 10000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: eventId, title: 'Goal', target_cents: 10000 },
+    });
     ids.goals.push(goal.id);
 
     const email = `tiltify-${rand()}@example.com`;
@@ -212,16 +221,20 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
 
   it('keeps pooled incentive amounts separate from money and combines donor/auto provenance on the existing wire', async () => {
     const reward = await prisma.reward.create({
-      data: { title: 'Pooled', type: 'DIGITAL', cost_cents: 1000 },
+      data: { event_id: eventId, title: 'Pooled', type: 'DIGITAL', cost_cents: 1000 },
     });
     ids.rewards.push(reward.id);
     const poll = await prisma.poll.create({
-      data: { title: 'Pooled poll', options: { create: [{ label: 'A' }] } },
+      data: {
+        event_id: eventId,
+        title: 'Pooled poll',
+        options: { create: [{ label: 'A' }] },
+      },
       include: { options: true },
     });
     ids.polls.push(poll.id);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Pooled goal', target_cents: 10000 },
+      data: { event_id: eventId, title: 'Pooled goal', target_cents: 10000 },
     });
     ids.goals.push(goal.id);
     const items = [
@@ -582,7 +595,12 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
     });
     const donation = await prisma.donation.findUniqueOrThrow({ where: { id: donationId } });
     const reward = await prisma.reward.create({
-      data: { title: 'Shoutout text', type: 'DIGITAL', cost_cents: 100 },
+      data: {
+        event_id: eventId,
+        title: 'Shoutout text',
+        type: 'DIGITAL',
+        cost_cents: 100,
+      },
     });
     ids.rewards.push(reward.id);
     const answer = JSON.stringify({ message: 'Hi chat' });
@@ -609,10 +627,18 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
   it('lists only what the donation paid for: a pledge item that failed is left out (§T4)', async () => {
     // A sold-out reward fails at fulfilment; the goal contribution still succeeds.
     const reward = await prisma.reward.create({
-      data: { title: 'Last one', type: 'DIGITAL', cost_cents: 100, quantity_total: 1 },
+      data: {
+        event_id: eventId,
+        title: 'Last one',
+        type: 'DIGITAL',
+        cost_cents: 100,
+        quantity_total: 1,
+      },
     });
     ids.rewards.push(reward.id);
-    const goal = await prisma.fundGoal.create({ data: { title: 'Goal 2', target_cents: 5000 } });
+    const goal = await prisma.fundGoal.create({
+      data: { event_id: eventId, title: 'Goal 2', target_cents: 5000 },
+    });
     ids.goals.push(goal.id);
     const email = `skip-${rand()}@example.com`;
     const pledge = await createPledge({
@@ -645,7 +671,13 @@ describe('Tiltify messages (PRD-0002 §T)', () => {
 
   it('a write-in poll vote is listed only once its option is approved (§T4)', async () => {
     const poll = await prisma.poll.create({
-      data: { title: 'Write-in', is_active: true, allow_custom_entries: true, auto_approve: false },
+      data: {
+        event_id: eventId,
+        title: 'Write-in',
+        is_active: true,
+        allow_custom_entries: true,
+        auto_approve: false,
+      },
     });
     ids.polls.push(poll.id);
     const email = `custom-${rand()}@example.com`;

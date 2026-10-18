@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import goalsRouter from '../../routes/goals.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -35,10 +36,20 @@ describe('Goals routes', () => {
 
   it('GET / returns only active goals', async () => {
     const active = await prisma.fundGoal.create({
-      data: { title: 'Active Goal', target_cents: 1000, is_active: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Active Goal',
+        target_cents: 1000,
+        is_active: true,
+      },
     });
     const inactive = await prisma.fundGoal.create({
-      data: { title: 'Inactive Goal', target_cents: 1000, is_active: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Inactive Goal',
+        target_cents: 1000,
+        is_active: false,
+      },
     });
 
     const res = await request(createApp()).get('/api/goals');
@@ -54,7 +65,7 @@ describe('Goals routes', () => {
   it('POST /:id/contribute contributes toward a goal', async () => {
     const { donor, token } = await makeDonor(5000);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Contribute Goal', target_cents: 1000 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Contribute Goal', target_cents: 1000 },
     });
 
     const res = await request(createApp())
@@ -73,7 +84,7 @@ describe('Goals routes', () => {
   it('POST /:id/contribute returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Expensive Goal', target_cents: 1000 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Expensive Goal', target_cents: 1000 },
     });
 
     const res = await request(createApp())

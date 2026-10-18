@@ -25,6 +25,8 @@ describe('optional ESA incentive lookup API (#189)', () => {
   const rewards: string[] = [];
   const targets: string[] = [];
   const polls: Array<{ id: string; firstOption: string; secondOption: string }> = [];
+  // ADR-0012 rollout step 1 keeps ADR-0010 lists: a shared incentive is listed under each Channel of its Event.
+  const listedUnder = (index: number) => [channelA, channelA, channelB][index]!;
 
   async function fixture({
     rewardPrice,
@@ -92,6 +94,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
               quantity_claimed: claimed,
               is_active: false,
               channel_id,
+              event_id: channel_id === otherChannel ? otherEventId : eventId,
               ...timestamps,
             },
           })
@@ -108,6 +111,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
               current_cents: goalCurrent,
               is_active: false,
               channel_id,
+              event_id: channel_id === otherChannel ? otherEventId : eventId,
               ...timestamps,
             },
           })
@@ -122,6 +126,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
           ends_at: new Date(updated_at),
           total_votes_cents: pollTotal,
           channel_id,
+          event_id: channel_id === otherChannel ? otherEventId : eventId,
           ...timestamps,
           options: {
             create: [
@@ -187,7 +192,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
       rejected: 300,
     });
     for (const context of [channelA, eventId]) {
-      for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
+      for (const [index, campaign_id] of [channelA, eventId, channelB].entries()) {
         const poll = polls[index]!;
         const res = await get(`/campaign/${context}/lookup/polls/${poll.id}`);
         expect(res.status).toBe(200);
@@ -215,9 +220,9 @@ describe('optional ESA incentive lookup API (#189)', () => {
           },
         });
         expect(res.text).not.toContain(privateMarker);
-        const list = await get(`/campaign/${campaign_id ?? channelA}/polls`);
+        const list = await get(`/campaign/${listedUnder(index)}/polls`);
         expect(list.body.find((p: { id: string }) => p.id === poll.id)).toEqual(res.body.incentive);
-        const detail = await get(`/campaign/${campaign_id ?? channelA}/polls/${poll.id}`);
+        const detail = await get(`/campaign/${listedUnder(index)}/polls/${poll.id}`);
         expect(detail.body).toEqual(res.body.incentive);
       }
     }
@@ -237,7 +242,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
       rejected: 300,
     });
     for (const context of [channelA, eventId]) {
-      for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
+      for (const [index, campaign_id] of [channelA, eventId, channelB].entries()) {
         const res = await get(`/campaign/${context}/lookup/targets/${targets[index]}`);
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
@@ -253,7 +258,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
           },
         });
         expect(res.text).not.toContain(privateMarker);
-        const list = await get(`/campaign/${campaign_id ?? channelA}/targets`);
+        const list = await get(`/campaign/${listedUnder(index)}/targets`);
         expect(list.body.find((t: { id: string }) => t.id === targets[index])).toEqual(
           res.body.incentive,
         );
@@ -261,7 +266,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
     }
   });
 
-  it('rejects unknown contexts, missing or wrong-kind resources, and owners in another Event', async () => {
+  it('rejects unknown contexts, missing or wrong-kind resources, and incentives of another Event', async () => {
     await fixture({
       rewardPrice: 725,
       stock: 10,
@@ -286,11 +291,10 @@ describe('optional ESA incentive lookup API (#189)', () => {
           expect(Object.keys(res.body)).toEqual(['error']);
         }
       }
+      // ADR-0012: a shared incentive belongs to its Event, so another Event cannot see it.
       for (const context of [otherChannel, otherEventId]) {
         expect((await get(`/campaign/${context}/lookup/${kind}/${ids[0]}`)).status).toBe(404);
-        const shared = await get(`/campaign/${context}/lookup/${kind}/${ids[1]}`);
-        expect(shared.status).toBe(200);
-        expect(shared.body.campaign_id).toBeNull();
+        expect((await get(`/campaign/${context}/lookup/${kind}/${ids[1]}`)).status).toBe(404);
       }
       for (const context of [randomUUID(), 'not-a-uuid']) {
         expect((await get(`/campaign/${context}/lookup/${kind}/${ids[1]}`)).status).toBe(404);
@@ -322,11 +326,13 @@ describe('optional ESA incentive lookup API (#189)', () => {
       for (const [context, expected] of [
         [channelA, [ids[0], ids[1]]],
         [channelB, [ids[1], ids[2]]],
+        // Another Event's Channel no longer lists this Event's shared incentive.
+        [otherChannel, [ids[3]]],
         [eventId, []],
       ] as const) {
         const res = await get(`/campaign/${context}/${kind}`);
         expect(res.status).toBe(200);
-        // Other route suites also create globally shared incentives.
+        // Other route suites also create shared incentives in the default Event.
         const ours = res.body.filter((r: { id: string }) => ids.includes(r.id));
         expect(ours.map((r: { id: string }) => r.id).sort()).toEqual([...expected].sort());
         if (context === eventId) expect(res.body).toEqual([]);
@@ -351,7 +357,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
       rejected: 300,
     });
     for (const context of [channelA, eventId]) {
-      for (const [index, campaign_id] of [channelA, null, channelB].entries()) {
+      for (const [index, campaign_id] of [channelA, eventId, channelB].entries()) {
         const res = await get(`/campaign/${context}/lookup/rewards/${rewards[index]}`);
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
@@ -369,7 +375,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
           },
         });
         expect(res.text).not.toContain(privateMarker);
-        const list = await get(`/campaign/${campaign_id ?? channelA}/rewards`);
+        const list = await get(`/campaign/${listedUnder(index)}/rewards`);
         expect(list.body.find((r: { id: string }) => r.id === rewards[index])).toEqual(
           res.body.incentive,
         );

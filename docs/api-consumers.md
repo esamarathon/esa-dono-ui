@@ -30,14 +30,38 @@ The Tiltify-compatible API adds only these optional ESA-specific reads (relative
 - `GET campaign/:id/lookup/targets/:target_id`
 - `GET campaign/:id/lookup/polls/:poll_id`
 
-A successful response is `{campaign_id: string | null, incentive: <existing bare DTO>}`.
-`campaign_id` is the incentive's **true owning Channel UUID**, or `null` for shared
-incentives, not the requested context. `:id` must resolve to a known Channel or Event,
-including inactive historical identities. An owned incentive must belong to a Channel
-in that same Event; shared incentives are allowed. An unknown context/resource or an
-owner in another Event returns 404. Lookup reads current amounts, active state, stock
+A successful response is `{campaign_id: string, incentive: <existing bare DTO>}`.
+`campaign_id` is the incentive's **true owner**, not the requested context: the owning
+Channel UUID, or for a shared incentive its **Event UUID** (the team campaign;
+ADR-0012). It is never null. `:id` must resolve to a known Channel or Event, including
+inactive historical identities. The incentive must belong to that same Event, as a
+Channel incentive or a shared one. An unknown context/resource, or an incentive of
+another Event (shared ones included), returns 404. Lookup reads current amounts, active state, stock
 and approved poll options through the same builders as the existing lists/detail.
 No donor email, staff information, claim answers or other private data is returned.
+
+A shared goal looked up from a Channel of its Event (`GET campaign/<channel id>/lookup/targets/<goal id>`) names the Event as its owner. The test `docs-samples.test.ts` keeps this sample in step with the real response:
+
+```json sample=lookup:targets
+{
+  "campaign_id": "eeeeeeee-0000-4000-8000-000000000001",
+  "incentive": {
+    "id": "dddddddd-0000-4000-8000-000000000001",
+    "name": "Blindfolded run",
+    "active": true,
+    "amount": {
+      "currency": "USD",
+      "value": "600.00"
+    },
+    "amount_raised": {
+      "currency": "USD",
+      "value": "15.00"
+    },
+    "inserted_at": "2026-01-24T18:30:00.000Z",
+    "updated_at": "2026-01-24T18:30:00.000Z"
+  }
+}
+```
 
 This is an optional ESA capability for Kollekt to resolve cold or stale cross-Channel
 references after pooled allocations. A legacy source or 404 keeps the consumer's old
@@ -46,7 +70,10 @@ separate from ordinary Tiltify models. Consumers must handle globally unique sha
 incentive ids without duplicate inserts and retain the verified owner when resolving
 cross-Channel metadata. Donation source Channel routing, money and ids never change.
 
-Existing Channel lists remain own plus shared; Event incentive lists remain `[]`.
+Existing Channel lists remain own plus the shared incentives of the Channel's Event;
+Event incentive lists remain `[]`. ADR-0012 later also lists shared incentives under their
+Event, Tiltify team-campaign style, after the overlay removes duplicate polls; Kollekt#44
+must be deployed after that step.
 Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
 Event or another Channel's poll). Nothing changes overlay list scope. The focused
 [Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a

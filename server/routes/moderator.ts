@@ -26,6 +26,8 @@ import {
   createGoal,
   updateGoal,
   removeIncentive,
+  incentiveEventId,
+  keepEvent,
 } from '../services/incentiveLifecycle.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
@@ -147,6 +149,7 @@ router.post('/polls', async (req, res) => {
     max_entry_chars,
     auto_approve,
     channel_id,
+    event_id,
   } = req.body;
   const poll = await createPoll({
     title,
@@ -157,6 +160,7 @@ router.post('/polls', async (req, res) => {
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
     channel_id: channel_id ?? null,
+    event_id,
     options: options?.length
       ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
       : undefined,
@@ -174,6 +178,7 @@ router.put('/polls/:id', async (req, res) => {
     max_entry_chars,
     auto_approve,
     channel_id,
+    event_id,
   } = req.body;
   const poll = await updatePoll(req.params.id, {
     title,
@@ -184,6 +189,7 @@ router.put('/polls/:id', async (req, res) => {
     max_entry_chars: max_entry_chars ?? null,
     auto_approve: auto_approve ?? true,
     channel_id,
+    event_id,
   });
   res.json(poll);
 });
@@ -292,6 +298,7 @@ router.post('/rewards', async (req, res) => {
     custom_type_label,
     image_url,
     channel_id,
+    event_id,
   } = req.body;
   const reward = await createReward({
     title,
@@ -303,6 +310,7 @@ router.post('/rewards', async (req, res) => {
     custom_type_label,
     image_url: image_url || null,
     channel_id: channel_id ?? null,
+    event_id,
   });
   res.json(reward);
 });
@@ -318,6 +326,7 @@ router.put('/rewards/:id', async (req, res) => {
     custom_type_label,
     image_url,
     channel_id,
+    event_id,
   } = req.body;
   const reward = await updateReward(req.params.id, {
     title,
@@ -329,6 +338,7 @@ router.put('/rewards/:id', async (req, res) => {
     custom_type_label,
     image_url: image_url || null,
     channel_id,
+    event_id,
   });
   res.json(reward);
 });
@@ -538,7 +548,8 @@ router.get('/goals', async (req, res) => {
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, channel_id, is_complete } = req.body;
+  const { title, description, target_cents, is_active, channel_id, event_id, is_complete } =
+    req.body;
   const goal = await createGoal({
     is_complete,
     title,
@@ -546,12 +557,14 @@ router.post('/goals', async (req, res) => {
     target_cents,
     is_active: is_active ?? true,
     channel_id: channel_id ?? null,
+    event_id,
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
-  const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
+  const { title, description, target_cents, is_active, is_complete, channel_id, event_id } =
+    req.body;
   const goal = await updateGoal(req.params.id, {
     title,
     description,
@@ -559,6 +572,7 @@ router.put('/goals/:id', async (req, res) => {
     is_active,
     is_complete,
     channel_id,
+    event_id,
   });
   res.json(goal);
 });
@@ -596,6 +610,7 @@ router.post('/auctions', async (req, res) => {
     ends_at,
     is_active,
     channel_id,
+    event_id,
   } = req.body;
   if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
     return res.status(400).json({
@@ -614,6 +629,7 @@ router.post('/auctions', async (req, res) => {
       ends_at: new Date(ends_at),
       is_active: is_active ?? true,
       channel_id: channel_id || null,
+      event_id: await incentiveEventId(prisma, { channel_id: channel_id || null, event_id }),
     },
   });
   res.json(auction);
@@ -631,12 +647,14 @@ router.put('/auctions/:id', async (req, res) => {
     ends_at,
     is_active,
     channel_id,
+    event_id,
   } = req.body;
   const existing = await prisma.auction.findUnique({
     where: { id: req.params.id },
-    select: { image_url: true, status: true },
+    select: { image_url: true, status: true, event_id: true },
   });
   if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  await keepEvent(prisma, { channel_id: channel_id || null, event_id }, existing);
   if (existing.image_url !== (image_url || null)) {
     await deleteUploadByUrl(existing.image_url);
   }

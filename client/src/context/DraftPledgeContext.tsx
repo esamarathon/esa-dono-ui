@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { planPledge, type PledgePlan, type PledgeSelection } from '@dono/shared';
+import { isAvailableOn, planPledge, type PledgePlan, type PledgeSelection } from '@dono/shared';
 import { getRewards } from '../api/rewards';
 import { getPolls } from '../api/polls';
 import { getGoals } from '../api/goals';
@@ -517,21 +517,25 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
   }, []);
   const repair = useCallback((d: DraftPledge, fresh: Awaited<ReturnType<typeof fetchCatalog>>) => {
     const changes: string[] = [];
-    const availableChannel = fresh.c.some((c) => c.id === d.channelId && c.is_active);
+    const channel = fresh.c.find((c) => c.id === d.channelId && c.is_active);
+    const availableChannel = !!channel;
     if (d.channelId && !availableChannel)
       changes.push(
         'Channel is no longer available. Choose a Channel; shared selections and your amount are kept.',
       );
-    const matches = (id: string | null | undefined) =>
-      !id || (availableChannel && id === d.channelId);
+    // ADR-0012: the Channel's own items, or shared items of its Event.
+    const matches = (row: { channel_id?: string | null; event_id: string }) =>
+      channel
+        ? isAvailableOn({ channel_id: row.channel_id ?? null, event_id: row.event_id }, channel)
+        : !row.channel_id;
     const selections: DraftSelection[] = [];
     for (const item of d.selections) {
       let next = { ...item };
       let reason = '';
-      if (item.channel_id && !matches(item.channel_id)) reason = 'Channel item removed';
+      if (item.channel_id && item.channel_id !== channel?.id) reason = 'Channel item removed';
       else if (item.kind === 'REWARD') {
         const r = fresh.r.find((r) => r.id === item.target_id);
-        if (!r || r.is_active === false || !matches(r.channel_id)) reason = 'No longer available';
+        if (!r || r.is_active === false || !matches(r)) reason = 'No longer available';
         else {
           const stock =
             r.quantity_total === null
@@ -558,7 +562,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
         }
       } else if (item.kind === 'GOAL') {
         const g = fresh.g.find((g) => g.id === item.target_id);
-        if (!g || g.is_active === false || g.is_complete || !matches(g.channel_id))
+        if (!g || g.is_active === false || g.is_complete || !matches(g))
           reason = 'Goal closed or deleted';
         else next = { ...next, label: g.title, channel_id: g.channel_id ?? null };
       } else {
@@ -566,7 +570,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
         if (
           !p ||
           p.is_active === false ||
-          !matches(p.channel_id) ||
+          !matches(p) ||
           (p.ends_at && new Date(p.ends_at).getTime() <= Date.now())
         )
           reason = 'Poll closed or deleted';
@@ -668,17 +672,50 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
   }, [draft?.id, draft?.pendingToken, externalRevision, loadEditable]);
 
   const selectedChannelId = draft?.channelId ?? channelId;
+  /** ADR-0012: an item is offered on a Channel when it is its own, or shared in its Event. */
+  const availableOn = useCallback(
+    (
+      row: { channel_id?: string | null; event_id: string } | undefined,
+      id: string | null | undefined,
+    ) => {
+      const channel = channels.find((c) => c.id === id);
+      return (
+        !!row &&
+        !!channel &&
+        isAvailableOn({ channel_id: row.channel_id ?? null, event_id: row.event_id }, channel)
+      );
+    },
+    [channels],
+  );
   const rewards = useMemo(
-    () => allRewards.filter((r) => !r.channel_id || r.channel_id === selectedChannelId),
-    [allRewards, selectedChannelId],
+    () => allRewards.filter((r) => availableOn(r, selectedChannelId)),
+    [allRewards, availableOn, selectedChannelId],
   );
   const polls = useMemo(
-    () => allPolls.filter((p) => !p.channel_id || p.channel_id === selectedChannelId),
-    [allPolls, selectedChannelId],
+    () => allPolls.filter((p) => availableOn(p, selectedChannelId)),
+    [allPolls, availableOn, selectedChannelId],
   );
   const goals = useMemo(
-    () => allGoals.filter((g) => !g.channel_id || g.channel_id === selectedChannelId),
-    [allGoals, selectedChannelId],
+    () => allGoals.filter((g) => availableOn(g, selectedChannelId)),
+    [allGoals, availableOn, selectedChannelId],
+  );
+  /** The catalog row a selection refers to, for its Channel and Event. */
+  const catalogRow = useCallback(
+    (item: DraftSelection) =>
+      item.kind === 'REWARD'
+        ? allRewards.find((r) => r.id === item.target_id)
+        : item.kind === 'GOAL'
+          ? allGoals.find((g) => g.id === item.target_id)
+          : allPolls.find((p) => p.id === item.poll_id),
+    [allRewards, allGoals, allPolls],
+  );
+  /** A selection stays on a Channel switch only when the new Channel offers it. */
+  const keepsOn = useCallback(
+    (item: DraftSelection, id: string) => {
+      const row = catalogRow(item);
+      return row ? availableOn(row, id) : !item.channel_id || item.channel_id === id;
+    },
+    [catalogRow, availableOn],
   );
   const selections = draft?.selections ?? [];
   const plan = useMemo(() => {
@@ -703,10 +740,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
     (id: string, path = '/donate', eventSlug: string | null = null) => {
       if (current.current?.pendingToken || flight.current) return;
       const next = { id, path, eventSlug };
-      if (
-        id !== channelRef.current &&
-        current.current?.selections.some((i) => i.channel_id && i.channel_id !== id)
-      ) {
+      if (id !== channelRef.current && current.current?.selections.some((i) => !keepsOn(i, id))) {
         setPendingChannel(next);
         return;
       }
@@ -716,7 +750,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
       if (current.current && (id !== current.current.channelId || path !== current.current.path))
         edit({ channelId: id, path, eventSlug });
     },
-    [edit],
+    [edit, keepsOn],
   );
   const confirmChannelSwitch = useCallback(() => {
     if (!pendingChannel || current.current?.pendingToken || flight.current) return;
@@ -725,14 +759,13 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
       channelId: id,
       path,
       eventSlug,
-      selections:
-        current.current?.selections.filter((i) => !i.channel_id || i.channel_id === id) ?? [],
+      selections: current.current?.selections.filter((i) => keepsOn(i, id)) ?? [],
     });
     channelRef.current = id;
     setChannelId(id);
     routeRef.current = { path, eventSlug };
     setPendingChannel(null);
-  }, [pendingChannel, edit]);
+  }, [pendingChannel, edit, keepsOn]);
   const confirmAmount = useCallback(
     (amount: number, step: DraftStep) => {
       if (
@@ -770,13 +803,9 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
       const d = current.current;
       if (!d || d.pendingToken || flight.current) return;
       const reward = allRewards.find((r) => r.id === item.target_id);
-      const scope =
-        item.kind === 'REWARD'
-          ? reward?.channel_id
-          : item.kind === 'GOAL'
-            ? allGoals.find((g) => g.id === item.target_id)?.channel_id
-            : allPolls.find((p) => p.id === item.poll_id)?.channel_id;
-      if (scope && scope !== d.channelId) return;
+      const row = catalogRow(item);
+      if (!availableOn(row, d.channelId)) return;
+      const scope = row?.channel_id;
       const old = d.selections.find(
         (i) => i.kind === item.kind && i.target_id === item.target_id && i.poll_id === item.poll_id,
       );
@@ -799,7 +828,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
         selections: old ? d.selections.map((i) => (i === old ? next : i)) : [...d.selections, next],
       });
     },
-    [allRewards, allGoals, allPolls, edit],
+    [allRewards, catalogRow, availableOn, edit],
   );
   const removeSelection = useCallback(
     (kind: DraftSelection['kind'], id: string) =>

@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import moderatorRouter from '../../routes/moderator.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -59,7 +60,7 @@ describe('Moderator CRUD routes', () => {
       const createRes = await request(createApp())
         .post('/api/moderator/polls')
         .set('Authorization', `Bearer ${token}`)
-        .send({ title: 'Mod Poll', options: [{ label: 'A' }] });
+        .send({ title: 'Mod Poll', options: [{ label: 'A' }], event_id: DEFAULT_EVENT_ID });
       expect(createRes.status).toBe(200);
       expect(createRes.body.options).toHaveLength(1);
       pollIds.push(createRes.body.id);
@@ -85,7 +86,9 @@ describe('Moderator CRUD routes', () => {
     it('adds, renames, and removes a poll option', async () => {
       const { token, donor } = await makeModerator();
       donorIds.push(donor.id);
-      const poll = await prisma.poll.create({ data: { title: 'Opt Poll' } });
+      const poll = await prisma.poll.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Opt Poll' },
+      });
       pollIds.push(poll.id);
 
       const addRes = await request(createApp())
@@ -111,7 +114,7 @@ describe('Moderator CRUD routes', () => {
       const { token, donor } = await makeModerator();
       donorIds.push(donor.id);
       const poll = await prisma.poll.create({
-        data: { title: 'Entries Poll', allow_custom_entries: true },
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Entries Poll', allow_custom_entries: true },
       });
       pollIds.push(poll.id);
 
@@ -131,7 +134,12 @@ describe('Moderator CRUD routes', () => {
       const createRes = await request(createApp())
         .post('/api/moderator/rewards')
         .set('Authorization', `Bearer ${token}`)
-        .send({ title: 'Mod Reward', type: 'DIGITAL', cost_cents: 200 });
+        .send({
+          title: 'Mod Reward',
+          type: 'DIGITAL',
+          cost_cents: 200,
+          event_id: DEFAULT_EVENT_ID,
+        });
       expect(createRes.status).toBe(200);
       rewardIds.push(createRes.body.id);
 
@@ -162,7 +170,7 @@ describe('Moderator CRUD routes', () => {
       const createRes = await request(createApp())
         .post('/api/moderator/goals')
         .set('Authorization', `Bearer ${token}`)
-        .send({ title: 'Mod Goal', target_cents: 5000 });
+        .send({ title: 'Mod Goal', target_cents: 5000, event_id: DEFAULT_EVENT_ID });
       expect(createRes.status).toBe(200);
       goalIds.push(createRes.body.id);
 
@@ -190,7 +198,12 @@ describe('Moderator CRUD routes', () => {
       const { token, donor } = await makeModerator();
       donorIds.push(donor.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Mod Claim Reward', type: 'DIGITAL', cost_cents: 100 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Mod Claim Reward',
+          type: 'DIGITAL',
+          cost_cents: 100,
+        },
       });
       rewardIds.push(reward.id);
       // donor_name lives on Donation (self-reported at checkout), not on
@@ -233,7 +246,12 @@ describe('Moderator CRUD routes', () => {
       const { token, donor } = await makeModerator();
       donorIds.push(donor.id);
       const reward = await prisma.reward.create({
-        data: { title: 'No-donation Claim Reward', type: 'DIGITAL', cost_cents: 100 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'No-donation Claim Reward',
+          type: 'DIGITAL',
+          cost_cents: 100,
+        },
       });
       rewardIds.push(reward.id);
       const claim = await prisma.rewardClaim.create({

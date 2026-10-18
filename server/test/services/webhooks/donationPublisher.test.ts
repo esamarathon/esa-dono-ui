@@ -8,6 +8,7 @@ import { proposeCustomEntryTx, votePollTx } from '../../../services/spend.js';
 import { createPledge } from '../../../services/pledge.js';
 import { intakeDonation } from '../../../services/donation.js';
 import { planPledge } from '@dono/shared';
+import { DEFAULT_EVENT_ID } from '../../helpers/fixtures.js';
 
 // Only replace the network delivery boundary, never the outbox or database.
 vi.mock('../../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
@@ -76,6 +77,7 @@ async function pooledWriteIn({ pledge, directed }: Readonly<{ pledge: number; di
   const context = await fixture();
   const poll = await prisma.poll.create({
     data: {
+      event_id: context.channel.event_id,
       title: 'Pooled write-in',
       channel_id: context.channel.id,
       allow_custom_entries: true,
@@ -166,7 +168,7 @@ describe('Donation publisher through the SQLite outbox', () => {
     });
     destinations.push(optedIn.id);
     const poll = await prisma.poll.create({
-      data: { title: 'Sources', options: { create: { label: 'A' } } },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Sources', options: { create: { label: 'A' } } },
       include: { options: true },
     });
     polls.push(poll.id);
@@ -698,6 +700,7 @@ describe('Donation publisher through the SQLite outbox', () => {
       });
       const poll = await prisma.poll.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title: 'Write-in',
           allow_custom_entries: true,
           auto_approve: false,
@@ -774,6 +777,7 @@ describe('Donation publisher through the SQLite outbox', () => {
     });
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Write-in',
         allow_custom_entries: true,
         auto_approve: false,

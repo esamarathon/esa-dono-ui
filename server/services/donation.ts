@@ -12,7 +12,7 @@ import {
   proposeCustomEntryTx,
   customEntryTextErrorTx,
 } from './spend.js';
-import { planPledge, type PledgePlan, type PledgeItemKind } from '@dono/shared';
+import { isAvailableOn, planPledge, type PledgePlan, type PledgeItemKind } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 import { defaultGoal } from './defaultGoal.js';
 
@@ -372,6 +372,14 @@ async function fulfillPooledPledge(
       continue;
     }
   }
+  const pledgeChannel = pledge.channel_id
+    ? await tx.channel.findUnique({
+        where: { id: pledge.channel_id },
+        select: { id: true, event_id: true },
+      })
+    : null;
+  const matches = (row: { channel_id: string | null; event_id: string }) =>
+    !!pledgeChannel && isAvailableOn(row, pledgeChannel);
   for (const category of ['poll', 'goal'] as const) {
     const all = groups.filter(({ item }) =>
       category === 'goal' ? item.kind === 'GOAL' : item.kind !== 'GOAL',
@@ -379,18 +387,14 @@ async function fulfillPooledPledge(
     const eligible: typeof all = [];
     for (const group of all) {
       const { item } = group;
-      const matches = (id: string | null) => id === null || id === pledge.channel_id;
       let valid = false;
       if (category === 'goal') {
         const goal = await tx.fundGoal.findUnique({ where: { id: item.target_id } });
-        valid = !!goal && goal.is_active && !goal.is_complete && matches(goal.channel_id);
+        valid = !!goal && goal.is_active && !goal.is_complete && matches(goal);
       } else {
         const poll = await tx.poll.findUnique({ where: { id: item.poll_id! } });
         valid =
-          !!poll &&
-          poll.is_active &&
-          matches(poll.channel_id) &&
-          (!poll.ends_at || poll.ends_at > new Date());
+          !!poll && poll.is_active && matches(poll) && (!poll.ends_at || poll.ends_at > new Date());
         if (item.kind === 'POLL_VOTE') {
           const option = await tx.pollOption.findUnique({ where: { id: item.target_id } });
           valid =

@@ -61,6 +61,7 @@ function renderAt(path = '/donate?channel=c1') {
 }
 
 const reward: Reward = {
+  event_id: 'e1',
   id: 'r1',
   title: 'Digital Reward',
   type: 'DIGITAL',
@@ -235,7 +236,7 @@ describe('amount-first donate through the routed flow', () => {
       }),
     );
     vi.mocked(getGoals).mockResolvedValue([
-      { id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
+      { event_id: 'e1', id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
     ]);
     renderAt();
     const goals = await screen.findByRole('region', { name: 'fund goals review' });
@@ -294,6 +295,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     vi.mocked(getPolls).mockResolvedValue([
       {
+        event_id: 'e1',
         id: 'p1',
         title: 'Runner poll',
         total_votes_cents: 0,
@@ -408,6 +410,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     vi.mocked(getPolls).mockResolvedValue([
       {
+        event_id: 'e1',
         id: 'p1',
         title: 'Poll',
         total_votes_cents: 1000,
@@ -415,7 +418,7 @@ describe('amount-first donate through the routed flow', () => {
       },
     ]);
     vi.mocked(getGoals).mockResolvedValue([
-      { id: 'g1', title: 'Glitch run', current_cents: 500, target_cents: 2000 },
+      { event_id: 'e1', id: 'g1', title: 'Glitch run', current_cents: 500, target_cents: 2000 },
     ]);
     renderAt('/donate');
     expect(parseFloat((await screen.findByTestId('progress-preview')).style.width)).toBeCloseTo(55);
@@ -451,6 +454,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     vi.mocked(getPolls).mockResolvedValue([
       {
+        event_id: 'e1',
         id: 'p1',
         title: 'Poll',
         total_votes_cents: 1000,
@@ -949,12 +953,14 @@ describe('amount-first donate through the routed flow', () => {
     ]);
     vi.mocked(getPolls).mockResolvedValue([
       {
+        event_id: 'e1',
         id: 'p1',
         title: 'Poll',
         options: [{ id: 'reject', label: 'Rejected option', status: 'REJECTED', votes_cents: 0 }],
         total_votes_cents: 0,
       },
       {
+        event_id: 'e1',
         id: 'closed',
         title: 'Ended poll',
         ends_at: '2000-01-01',
@@ -964,6 +970,7 @@ describe('amount-first donate through the routed flow', () => {
     ]);
     vi.mocked(getGoals).mockResolvedValue([
       {
+        event_id: 'e1',
         id: 'g1',
         title: 'Completed goal',
         current_cents: 500,
@@ -1091,9 +1098,46 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByRole('button', { name: 'edit amount $10.00' })).toBeInTheDocument();
   });
 
+  it('offers shared items only of the selected Channel Event and drops them on a switch to another Event (ADR-0012)', async () => {
+    save(
+      saved({
+        amountCents: 1000,
+        lastStep: 'browse',
+        selections: [
+          {
+            kind: 'REWARD',
+            target_id: 'r1',
+            channel_id: null,
+            label: 'Digital Reward',
+            amount_cents: 500,
+            insertion_order: 0,
+            unit_price_cents: 500,
+            reward_type: 'DIGITAL',
+          },
+        ],
+      }),
+    );
+    vi.mocked(getRewards).mockResolvedValue([
+      reward,
+      { ...reward, id: 'elsewhere', title: 'Other Event reward', event_id: 'e2' },
+    ]);
+    vi.mocked(getChannels).mockResolvedValue([
+      channel,
+      { ...channel, id: 'c3', name: 'Other Event', slug: 'other', event_id: 'e2' },
+    ]);
+    renderAt();
+    expect(await screen.findByText('Digital Reward')).toBeInTheDocument();
+    expect(screen.queryByText('Other Event reward')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Other Event' }));
+    fireEvent.click(await screen.findByRole('button', { name: /switch & clear/ }));
+    expect(await screen.findByText('Other Event reward')).toBeInTheDocument();
+    expect(screen.queryByText('Digital Reward')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'increase quantity' })).not.toBeInTheDocument();
+  });
+
   it('repairs at review when a previously displayed goal closes, and retains permalink prefill', async () => {
     vi.mocked(getGoals).mockResolvedValue([
-      { id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
+      { event_id: 'e1', id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
     ]);
     renderAt('/goals?goal=g1&amount=3&channel=c1');
     await choose();

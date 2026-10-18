@@ -48,7 +48,7 @@ async function fixture({ role, pledge }: Readonly<{ role: string; pledge: number
     },
   });
   const poll = await prisma.poll.create({
-    data: { title: 'Open', options: { create: { label: 'A' } } },
+    data: { event_id: event.id, title: 'Open', options: { create: { label: 'A' } } },
     include: { options: true },
   });
   polls.push(poll.id);

@@ -9,6 +9,7 @@ import { metricsAuth } from '../../middleware/metricsAuth.js';
 import { refreshBusinessMetrics } from '../../services/metrics.js';
 import prisma from '../../lib/prisma.js';
 import { readAccountingStatsTx } from '../../services/accountingStats.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const donors: string[] = [],
   events: string[] = [],
@@ -70,16 +71,22 @@ async function fixture({
     },
   });
   const reward = await prisma.reward.create({
-    data: { title: 'Recorded not catalog', type: 'DIGITAL', cost_cents: 9999, channel_id: b.id },
+    data: {
+      event_id: b.event_id,
+      title: 'Recorded not catalog',
+      type: 'DIGITAL',
+      cost_cents: 9999,
+      channel_id: b.id,
+    },
   });
   rewards.push(reward.id);
   const poll = await prisma.poll.create({
-    data: { title: 'Shared', options: { create: { label: 'Yes' } } },
+    data: { event_id: DEFAULT_EVENT_ID, title: 'Shared', options: { create: { label: 'Yes' } } },
     include: { options: true },
   });
   polls.push(poll.id);
   const goal = await prisma.fundGoal.create({
-    data: { title: 'Goal B', channel_id: b.id, target_cents: goalTarget },
+    data: { event_id: b.event_id, title: 'Goal B', channel_id: b.id, target_cents: goalTarget },
   });
   goals.push(goal.id);
   return { donor, event, a, b, donation, reward, poll, goal };

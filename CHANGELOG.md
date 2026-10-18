@@ -37,6 +37,12 @@ does not clear those gates or authorize deployment.
   [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44). Cold cross-Channel
   credit references need its owner-aware lookup support. Ordinary Channel incentive
   lists, overlay scope, donation routing and stable IDs remain unchanged.
+- **Shared incentives now belong to one Event** (ADR-0012). A migration assigns
+  every reward, poll, goal and auction an Event. With two or more Events, a shared
+  incentive needs allocations in exactly one of them, or the migration stops and
+  changes nothing; `docs/deployment.md` § Migrations lists the query and the fix.
+  Staff API creates of shared incentives need `event_id` when two or more Events
+  exist. A Channel that owns incentives can no longer move to another Event.
 
 ### Added
 
@@ -82,6 +88,12 @@ does not clear those gates or authorize deployment.
 
 ### Fixed
 
+- A shared incentive of one Event no longer appears on, or takes money from, another
+  Event's Channels: pledges, fulfillment, Pool spend and credit, Unused pool targets,
+  Default goals, Tiltify lists/lookups and the donate page apply the Event (ADR-0012).
+- Downstream consumers get an owner for shared incentives: native `incentive.*`
+  messages add `event_id`, and ESA lookups return the Event as `campaign_id` instead
+  of `null`.
 - Confirmed anonymous display names no longer fall back to private payment-provider
   names in stored donations or outbound messages.
 - Wallet refunds return credit instead of taking it away; Wallet-funded receipts no

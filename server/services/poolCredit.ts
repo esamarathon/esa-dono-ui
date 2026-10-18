@@ -94,7 +94,7 @@ export async function readPoolCreditEventTx(
   eventId: string,
 ): Promise<CreditEvent> {
   const summary = await summaryTx(tx, donorId, eventId);
-  const scope = { OR: [{ channel_id: null }, { channel: { event_id: eventId } }] };
+  const scope = { event_id: eventId };
   const channel = { select: { id: true, name: true, slug: true } };
   const [rewards, polls, goals, history] = await Promise.all([
     tx.reward.findMany({

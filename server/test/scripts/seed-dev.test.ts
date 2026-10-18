@@ -14,7 +14,7 @@ import rewardsRouter from '../../routes/rewards.js';
 import pollsRouter from '../../routes/polls.js';
 import goalsRouter from '../../routes/goals.js';
 import eventsRouter from '../../routes/events.js';
-import { createTestChannel } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 const exec = promisify(execFile);
@@ -152,12 +152,13 @@ it('the exact demo claim/vote/contribution/summary shell completes with a cash-f
         channel_id: main.id,
       },
       { title: 'Pick the Next Game', type: 'CUSTOM', cost_cents: 5000 },
-    ].map((data) => prisma.reward.create({ data })),
+    ].map((data) => prisma.reward.create({ data: { ...data, event_id: main.event_id } })),
   );
   const polls = await Promise.all(
     ['Finale', 'Bonus', 'Shared'].map((title) =>
       prisma.poll.create({
         data: {
+          event_id: DEFAULT_EVENT_ID,
           title,
           allow_custom_entries: true,
           options: { create: ['A', 'B', 'C', 'D'].map((label) => ({ label })) },
@@ -171,7 +172,7 @@ it('the exact demo claim/vote/contribution/summary shell completes with a cash-f
       { title: 'Bonus couch', target_cents: 100000, channel_id: bonus.id },
       { title: 'Pizza', target_cents: 250000 },
       { title: 'Milestone', target_cents: 500000 },
-    ].map((data) => prisma.fundGoal.create({ data })),
+    ].map((data) => prisma.fundGoal.create({ data: { ...data, event_id: main.event_id } })),
   );
   const app = express();
   app.use(express.json());

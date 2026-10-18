@@ -23,6 +23,7 @@ import {
   cancelAuctionTx,
   reopenAuctionTx,
 } from '../../services/auction.js';
+import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -70,6 +71,7 @@ describe('auction service', () => {
   async function makeAuction(overrides: Partial<Record<string, unknown>> = {}) {
     return prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Signed Guitar',
         type: 'PHYSICAL',
         starting_price_cents: 1000,
