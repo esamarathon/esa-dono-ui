@@ -816,9 +816,9 @@ paths:
       tags: [Tiltify]
       summary: Rewards of a Tiltify campaign
       description: |
-        Our Rewards. A Channel lists its own incentives plus the shared ones
-        (no channel); an Event lists none (a shared incentive would otherwise
-        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Our Rewards. A Channel lists its own incentives plus its Event's shared
+        ones (no channel). An Event (team campaign) lists its shared incentives,
+        like Tiltify team-level incentives (ADR-0012).
         Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
       parameters:
         - name: id
@@ -866,9 +866,9 @@ paths:
       tags: [Tiltify]
       summary: Targets of a Tiltify campaign
       description: |
-        Our FundGoals. A Channel lists its own incentives plus the shared ones
-        (no channel); an Event lists none (a shared incentive would otherwise
-        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Our FundGoals. A Channel lists its own incentives plus its Event's shared
+        ones (no channel). An Event (team campaign) lists its shared incentives,
+        like Tiltify team-level incentives (ADR-0012).
         Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
       parameters:
         - name: id
@@ -916,9 +916,9 @@ paths:
       tags: [Tiltify]
       summary: Polls of a Tiltify campaign
       description: |
-        Our Polls, with only approved (ACTIVE) options. A Channel lists its own incentives plus the shared ones
-        (no channel); an Event lists none (a shared incentive would otherwise
-        appear twice for esa-layouts-v2, which concatenates Event and Channel lists).
+        Our Polls, with only approved (ACTIVE) options. A Channel lists its own incentives plus its Event's shared
+        ones (no channel). An Event (team campaign) lists its shared incentives,
+        like Tiltify team-level incentives (ADR-0012).
         Deactivated incentives are listed with `active: false`. Bare array (no `data` wrapper).
       parameters:
         - name: id
@@ -1069,7 +1069,7 @@ paths:
         existing bare poll DTO with
         current amounts and approved options only. Public and read-only; no donor
         or staff data. Existing lists and ordinary poll detail remain own/shared
-        only (Event lists remain empty); donation routing and ids are unchanged.
+        only; an Event lists its shared incentives. Donation routing and ids are unchanged.
       parameters:
         - name: id
           in: path

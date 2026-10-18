@@ -11,11 +11,10 @@ import { money, tiltifyCurrency } from './webhooks/tiltifyPayload.js';
  * Tiltify-v5 objects and arrays (the bridge unwrapped Tiltify's `{ data }`).
  *
  * A Tiltify "campaign" is our Channel; the "team campaign" is our Event. A shared
- * incentive (`channel_id = null`) belongs to its Event (ADR-0012) and is listed
- * under every Channel of that Event; the Event lists no incentives of its own:
- * kollekt only knows Channels (from `campaign_id` on a donation), and layouts
- * concatenates Event + Channel lists, so listing under both would show it twice
- * (#117). ADR-0012 rollout step 3 also lists them under the Event.
+ * incentive (`channel_id = null`) belongs to its Event (ADR-0012). Like a Tiltify
+ * team-level incentive, the Event (team campaign) lists it. Every Channel of that
+ * Event lists it too, for consumers that read only Channel lists; layouts reads
+ * both and keeps each id once (esa-layouts-v2#10).
  *
  * Optional ESA `/lookup/` routes alone return `{ campaign_id, incentive }` for any
  * incentive of the context Event, including history. `campaign_id` is the owner:
@@ -28,8 +27,10 @@ import { money, tiltifyCurrency } from './webhooks/tiltifyPayload.js';
 /** A Tiltify campaign id resolved to our identity: a Channel, or an Event (team campaign). */
 type TiltifyCampaign = { kind: 'channel'; row: Channel } | { kind: 'event'; row: Event };
 
-/** Prisma `where` for the incentives listed under a Channel: its own plus its Event's shared ones. */
-type IncentiveScope = { event_id: string; OR: Array<{ channel_id: string | null }> };
+/** Prisma `where` for the incentives a campaign lists. */
+type IncentiveScope =
+  | { event_id: string; OR: Array<{ channel_id: string | null }> }
+  | { event_id: string; channel_id: null };
 
 const iso = (d: Date) => d.toISOString();
 
@@ -45,10 +46,10 @@ async function resolveCampaign(id: string): Promise<TiltifyCampaign> {
   throw httpError(404, 'Campaign not found');
 }
 
-/** The incentive scope of a campaign, or null for an Event (it lists none of its own). */
-async function incentiveScope(id: string): Promise<IncentiveScope | null> {
+/** A Channel lists its own and its Event's shared incentives; an Event lists its shared ones. */
+async function incentiveScope(id: string): Promise<IncentiveScope> {
   const campaign = await resolveCampaign(id);
-  if (campaign.kind === 'event') return null;
+  if (campaign.kind === 'event') return { event_id: campaign.row.id, channel_id: null };
   return {
     event_id: campaign.row.event_id,
     OR: [{ channel_id: campaign.row.id }, { channel_id: null }],
@@ -102,7 +103,6 @@ function tiltifyReward(r: Reward) {
 /** `campaign/{id}/rewards`. `amount` is the cost; `quantity_remaining` is null when unlimited. */
 export async function listRewards(id: string) {
   const where = await incentiveScope(id);
-  if (!where) return [];
   const rewards = await prisma.reward.findMany({ where, orderBy: { created_at: 'asc' } });
   return rewards.map(tiltifyReward);
 }
@@ -131,7 +131,6 @@ function tiltifyTarget(g: FundGoal) {
 /** `campaign/{id}/targets`: our FundGoals. `amount` is the target, `amount_raised` the progress. */
 export async function listTargets(id: string) {
   const where = await incentiveScope(id);
-  if (!where) return [];
   const goals = await prisma.fundGoal.findMany({ where, orderBy: { created_at: 'asc' } });
   return goals.map(tiltifyTarget);
 }
@@ -172,7 +171,6 @@ function tiltifyPoll(p: PollRow, now: Date) {
 /** `campaign/{id}/polls`. */
 export async function listPolls(id: string) {
   const where = await incentiveScope(id);
-  if (!where) return [];
   const polls = await prisma.poll.findMany({
     where,
     include: pollInclude,
@@ -185,9 +183,10 @@ export async function listPolls(id: string) {
 /** `campaign/{id}/polls/{poll_id}`: 404 unless the poll is listed under that campaign. */
 export async function getPoll(id: string, pollId: string) {
   const where = await incentiveScope(id);
-  const poll = where
-    ? await prisma.poll.findFirst({ where: { AND: [{ id: pollId }, where] }, include: pollInclude })
-    : null;
+  const poll = await prisma.poll.findFirst({
+    where: { AND: [{ id: pollId }, where] },
+    include: pollInclude,
+  });
   if (!poll) throw httpError(404, 'Poll not found');
   return tiltifyPoll(poll, new Date());
 }
