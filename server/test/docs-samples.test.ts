@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
@@ -29,6 +29,8 @@ app.use('/api/rewards', rewardsRouter);
 app.use('/api/polls', pollsRouter);
 app.use('/api/goals', goalsRouter);
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
+// Images exclude docs/ (.dockerignore); the checkout-based CI test job runs this file.
+const docsPresent = existsSync(new URL('../../docs/outbound-events.md', import.meta.url));
 
 /** `json sample=<key>` blocks in a Markdown document. */
 function samples(markdown: string) {
@@ -76,6 +78,7 @@ const publicRows: Record<'Reward' | 'Poll' | 'FundGoal', unknown> = {
 };
 
 beforeAll(async () => {
+  if (!docsPresent) return;
   const tag = crypto.randomUUID().slice(0, 8);
   const event = await prisma.event.create({
     data: { name: 'Samples', slug: `samples-${tag}`, is_active: false },
@@ -220,6 +223,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (!docsPresent) return prisma.$disconnect();
   const where = { destination_id: { in: created.destinations } };
   await prisma.webhookDelivery.deleteMany({ where });
   await prisma.webhookDestinationSeq.deleteMany({ where });
@@ -242,11 +246,13 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe('documented samples', () => {
-  const documented = new Map([
-    ...samples(read('docs/outbound-events.md')),
-    ...samples(read('docs/api-consumers.md')),
-  ]);
+describe.skipIf(!docsPresent)('documented samples', () => {
+  const documented = docsPresent
+    ? new Map([
+        ...samples(read('docs/outbound-events.md')),
+        ...samples(read('docs/api-consumers.md')),
+      ])
+    : new Map<string, unknown>();
 
   it('documents every message type, the Tiltify messages and the owner lookup', () => {
     // incentive.enabled and donation.unhidden share data with a documented twin (below).
