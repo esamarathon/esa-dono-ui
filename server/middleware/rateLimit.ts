@@ -1,6 +1,7 @@
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request } from 'express';
 import { resolveDonorToken } from './donorAuth.js';
+import { parseExemptIps } from '../lib/rateLimitExempt.js';
 
 const keyGenerator = (req: Request): string =>
   resolveDonorToken(req) ?? ipKeyGenerator(req.ip ?? '');
@@ -45,10 +46,15 @@ const feedbackLimit = rateLimit({
 // Sized for the busiest legitimate client: kollekt polls /api/tiltify every 5 s
 // (~36 requests/min per Channel), and several donors can share a venue NAT.
 // Keyed by req.ip, so TRUST_PROXY must match the proxy hops (lib/trustProxy.ts).
+// RATE_LIMIT_EXEMPT_IPS lets internal consumers on the private network skip this
+// limit only; the stricter limits above still apply to them. Parsed at import, so
+// an invalid entry stops the server at startup.
+const isApiLimitExempt = parseExemptIps(process.env.RATE_LIMIT_EXEMPT_IPS);
 const apiLimit = rateLimit({
   windowMs: 60_000,
   max: Number(process.env.RATE_LIMIT_API) || 600,
   keyGenerator: (req: Request) => ipKeyGenerator(req.ip ?? ''),
+  skip: (req: Request) => isApiLimitExempt(req.ip),
   handler: (_req, res) => res.status(429).json({ error: 'Too many requests, please slow down.' }),
 });
 

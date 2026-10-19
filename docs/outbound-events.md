@@ -359,7 +359,7 @@ Real payloads from a pooled $15 donation in the Event `ESA Winter 2026` (`eeeeee
 
 kollekt and esa-layouts-v2 need two things from us: the **Tiltify-compatible messages** (a `TILTIFY` Destination, § Formats) and the **Tiltify-compatible REST API** at `<APP_BASE_URL>/api/tiltify/` ([ADR-0010](adr/0010-tiltify-compatible-rest-api.md)).
 
-- **REST API.** It serves bare Tiltify-v5 objects and needs no key. The global per-IP API limit applies (`RATE_LIMIT_API`, default 600/min). kollekt polls about 36 times/min per Channel.
+- **REST API.** It serves bare Tiltify-v5 objects and needs no key. The global per-IP API limit applies (`RATE_LIMIT_API`, default 600/min). kollekt polls about 36 times/min per Channel, so with many Channels it exceeds the limit. When kollekt and the overlay call the backend directly on the private Docker network (`http://dono-backend:3001/api/tiltify/`), list their addresses in `RATE_LIMIT_EXEMPT_IPS` (`docs/deployment.md` § Client IP and `TRUST_PROXY`).
 - **Totals match.** `total_amount_raised` on `campaigns/{id}` is the same money total as the `fact.updated` message. Incentive totals are allocated amounts, not money totals; their sum may exceed money. Never reconcile incentive sums against donation money.
 - **Shared incentives** (no Channel) belong to one Event (ADR-0012). They are listed under every Channel of that Event, and the Event lists none of its own.
 - **Always empty:** milestones and matches are `[]`.
