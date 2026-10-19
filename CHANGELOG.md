@@ -78,6 +78,9 @@ does not clear those gates or authorize deployment.
 
 ### Changed
 
+- The seeded simulator pays a pledge that needs new money through admin intake, so it
+  becomes a donation with its incentive lines instead of staying open. It no longer
+  attempts direct Wallet claims of physical rewards, which always fail.
 - Donation money is new cash only. Shipping and incentive allocations are excluded;
   Wallet-only pledges add no money and pooled fulfillment creates no Wallet credit.
 - Pooled reversals return category Pool credit or moderator Unused pool money.
