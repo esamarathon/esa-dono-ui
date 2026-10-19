@@ -151,6 +151,7 @@ describe('amount-first donate through the routed flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    localStorage.setItem('last_donor_email', 'donor@example.com');
     sessionStorage.clear();
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
@@ -189,6 +190,36 @@ describe('amount-first donate through the routed flow', () => {
     expect(sessionStorage.getItem('donation_cart_v1')).toBeNull();
   });
 
+  it.each(['', '   ', 'not-an-email'])(
+    'requires a valid email before checkout when the address is %j',
+    async (address) => {
+      localStorage.setItem('last_donor_email', address);
+      save(saved());
+      vi.mocked(createPledge).mockResolvedValue(payment());
+      vi.mocked(reconcilePledge).mockResolvedValue(payment());
+      renderAt();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeEnabled(),
+      );
+      const email = screen.getByRole('textbox', { name: /^Email address/ });
+      fireEvent.click(screen.getByRole('button', { name: /confirm & pay/i }));
+      expect(createPledge).not.toHaveBeenCalled();
+      expect(email).toBeRequired();
+      expect(email).toBeInvalid();
+      expect(screen.queryByText('Email address (optional)')).not.toBeInTheDocument();
+
+      fireEvent.change(email, { target: { value: 'donor@example.com' } });
+      expect(email).toBeValid();
+      fireEvent.click(screen.getByRole('button', { name: /confirm & pay/i }));
+      await waitFor(() =>
+        expect(createPledge).toHaveBeenCalledWith(
+          expect.objectContaining({ email: 'donor@example.com' }),
+        ),
+      );
+      expect(await screen.findByRole('heading', { name: /Pending pledge/ })).toBeInTheDocument();
+    },
+  );
+
   it('requires at least $1 and has a just-donate message exit with retained name/email prefills', async () => {
     localStorage.setItem('last_donor_email', 'donor@example.com');
     localStorage.setItem('last_donor_display_name', 'Reader');
@@ -205,7 +236,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute('maxlength', '500');
     expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Reader');
-    expect(screen.getByRole('textbox', { name: 'Email address (optional)' })).toHaveValue(
+    expect(screen.getByRole('textbox', { name: 'Email address (required)' })).toHaveValue(
       'donor@example.com',
     );
     expect(screen.getByText(/Unused poll money: \$1.00/)).toBeInTheDocument();

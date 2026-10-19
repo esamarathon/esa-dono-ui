@@ -478,11 +478,18 @@ export default function DonateFlow() {
           {tab === 'rewards' ? <RewardList /> : tab === 'polls' ? <PollList /> : <GoalList />}
         </>
       ) : (
-        <div className="btrl-panel p-6">
+        <form
+          className="btrl-panel p-6"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void flow.checkout();
+          }}
+        >
           <h2 className="font-mono text-sm tracking-widest uppercase text-d-yellow mb-4">
             3 · review
           </h2>
           <button
+            type="button"
             className="btrl-button btrl-button-outline mb-4"
             disabled={busy}
             onClick={() => flow.setStep('browse')}
@@ -490,6 +497,7 @@ export default function DonateFlow() {
             edit selections
           </button>
           <button
+            type="button"
             className="btrl-button btrl-button-outline mb-4 ml-3"
             disabled={busy}
             onClick={() => flow.setStep('amount')}
@@ -511,10 +519,11 @@ export default function DonateFlow() {
             </p>
           ) : null}
           <label className="block font-data text-sm mb-3">
-            Email address (optional)
+            Email address (required)
             <input
               type="email"
-              aria-label="Email address (optional)"
+              required
+              aria-label="Email address (required)"
               className="block w-full px-3 py-2 mt-1"
               value={flow.email}
               disabled={busy}
@@ -549,6 +558,7 @@ export default function DonateFlow() {
           </p>
           {!flow.reviewReady && !busy && (
             <button
+              type="button"
               className="btrl-button btrl-button-outline mb-3"
               onClick={() => void flow.review()}
             >
@@ -556,22 +566,22 @@ export default function DonateFlow() {
             </button>
           )}
           {flow.corrected && (
-            <button className="btrl-button mb-3" onClick={flow.confirmCorrected}>
+            <button type="button" className="btrl-button mb-3" onClick={flow.confirmCorrected}>
               confirm corrected review
             </button>
           )}
           <button
+            type="submit"
             className="btrl-button w-full"
             disabled={
               busy || !flow.reviewReady || !plan || over || flow.corrected || !selectedChannelId
             }
-            onClick={() => void flow.checkout()}
           >
             {busy
               ? 'checking review...'
               : `confirm & pay ${fmt(plan?.new_money_cents ?? 0)}${plan?.requires_shipping ? ' + shipping' : ''}`}
           </button>
-        </div>
+        </form>
       )}
     </div>
   );
