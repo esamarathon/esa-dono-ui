@@ -51,8 +51,18 @@ it('the demo bootstrap creates an active public Event with both Channels before 
     expect(channels).toHaveLength(2);
     expect(channels).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ slug: 'main-marathon', event_id: event.id, is_active: true }),
-        expect.objectContaining({ slug: 'bonus-stream', event_id: event.id, is_active: true }),
+        expect.objectContaining({
+          id: '00000000-0000-4000-8000-000000000101',
+          slug: 'main-marathon',
+          event_id: event.id,
+          is_active: true,
+        }),
+        expect.objectContaining({
+          id: '00000000-0000-4000-8000-000000000102',
+          slug: 'bonus-stream',
+          event_id: event.id,
+          is_active: true,
+        }),
       ]),
     );
     const main = channels.find((channel) => channel.slug === 'main-marathon')!;

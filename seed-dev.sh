@@ -88,13 +88,15 @@ if [ -z "$EVENT" ]; then
     -d '{"name":"Default Event","slug":"default-event"}' | jq -er .id)
 fi
 
+# Fixed ids: consumers key their state by Channel id (Kollekt keeps one
+# Campaign per id), so a nightly reset must not mint new ones.
 C_MAIN=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"name\":\"Main Marathon\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000101\",\"name\":\"Main Marathon\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
 
 C_BONUS=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"name\":\"Bonus Stream\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000102\",\"name\":\"Bonus Stream\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
 
 # Activate before incentives/donations, not in the later accounts/banner seed.
 curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \

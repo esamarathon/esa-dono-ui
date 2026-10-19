@@ -193,6 +193,36 @@ describe('Channels', () => {
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
 
+    it('creates a channel with a caller-chosen id, once', async () => {
+      const id = crypto.randomUUID();
+      const created = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ id, name: `Fixed Id ${id}` })
+        .set(auth);
+      expect(created.status).toBe(200);
+      expect(created.body.id).toBe(id);
+      createdChannelIds.push(id);
+
+      const again = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ id, name: `Fixed Id again ${id}` })
+        .set(auth);
+      expect(again.status).toBe(409);
+      expect(again.body.error).toMatch(/id/);
+    });
+
+    it.each(['not-a-uuid', crypto.randomUUID().toUpperCase(), 42])(
+      'rejects channel id %s',
+      async (id) => {
+        const res = await request(createApp())
+          .post('/api/admin/channels')
+          .send({ id, name: `Bad Id ${crypto.randomUUID()}` })
+          .set(auth);
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/id must be a lowercase UUID/);
+      },
+    );
+
     it('rejects duplicate channel names', async () => {
       const name = `Dup Event ${crypto.randomUUID()}`;
       const first = await request(createApp()).post('/api/admin/channels').send({ name }).set(auth);

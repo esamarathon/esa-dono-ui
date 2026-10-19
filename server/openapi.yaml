@@ -1497,6 +1497,10 @@ paths:
               type: object
               required: [name]
               properties:
+                id:
+                  type: string
+                  format: uuid
+                  description: Optional. A fixed lowercase UUID, e.g. so a reseeded demo keeps its Channel ids; generated when omitted.
                 name: { type: string }
                 slug:
                   type: string
@@ -1509,9 +1513,9 @@ paths:
         '200':
           description: Channel created
         '400':
-          description: Missing name, invalid slug, or unknown/ambiguous event_id
+          description: Missing name, invalid id or slug, or unknown/ambiguous event_id
         '409':
-          description: Channel name already exists, or the slug is already used by another event or channel
+          description: Channel id or name already exists, or the slug is already used by another event or channel
 
   /admin/channels/{id}:
     put:
@@ -3684,6 +3688,10 @@ paths:
               type: object
               required: [name]
               properties:
+                id:
+                  type: string
+                  format: uuid
+                  description: Optional. A fixed lowercase UUID, e.g. so a reseeded demo keeps its Channel ids; generated when omitted.
                 name: { type: string }
                 slug:
                   type: string
@@ -3696,9 +3704,9 @@ paths:
         '200':
           description: Channel created
         '400':
-          description: Missing name, invalid slug, or unknown/ambiguous event_id
+          description: Missing name, invalid id or slug, or unknown/ambiguous event_id
         '409':
-          description: Channel name already exists, or the slug is already used by another event or channel
+          description: Channel id or name already exists, or the slug is already used by another event or channel
 
   /moderator/channels/{id}:
     put:

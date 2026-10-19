@@ -46,6 +46,9 @@ does not clear those gates or authorize deployment.
 
 ### Added
 
+- Staff can create a Channel with a fixed `id` (a lowercase UUID). The demo seed uses this,
+  so a nightly reset keeps the same Channel ids and consumers such as Kollekt do not
+  collect a stale Campaign per reset.
 - Amount-first donate flow with independent reward, poll and goal Pools, category
   meters, explicit overage correction and a message-only path.
 - Browser-local resumable drafts, cross-tab reconciliation and one payable checkout
