@@ -3,7 +3,7 @@ import multer from 'multer';
 import prisma from '../lib/prisma.js';
 import { readAccountingStatsTx } from '../services/accountingStats.js';
 import {
-  readStaffDonationTx,
+  readStaffDonationsTx,
   readStaffClaimsTx,
   incentiveAllocationTx,
 } from '../services/staffRead.js';
@@ -459,27 +459,29 @@ router.get('/donations', async (req, res) => {
     return 'Unknown item';
   };
 
-  res.json(
-    await prisma.$transaction((tx) =>
-      Promise.all(
-        donations.map(async (d) => {
-          const { pledge, ...rest } = d;
-          const { pools: _privateCredits, ...current } = await readStaffDonationTx(tx, d.id);
-          void _privateCredits; // Deliberately omit the Pool-credit panel from moderator responses.
-          return {
-            ...rest,
-            ...current,
-            pledge_items: (pledge?.items ?? []).map((i) => ({
-              kind: i.kind,
-              label: labelForItem(i),
-              amount_cents: i.amount_cents,
-              quantity: i.quantity,
-            })),
-            top_up_cents: pledge?.top_up_cents ?? null,
-          };
-        }),
-      ),
+  const staff = await prisma.$transaction((tx) =>
+    readStaffDonationsTx(
+      tx,
+      donations.map((d) => d.id),
     ),
+  );
+  res.json(
+    donations.map((d, index) => {
+      const { pledge, ...rest } = d;
+      const { pools: _privateCredits, ...current } = staff[index]!;
+      void _privateCredits; // Deliberately omit the Pool-credit panel from moderator responses.
+      return {
+        ...rest,
+        ...current,
+        pledge_items: (pledge?.items ?? []).map((i) => ({
+          kind: i.kind,
+          label: labelForItem(i),
+          amount_cents: i.amount_cents,
+          quantity: i.quantity,
+        })),
+        top_up_cents: pledge?.top_up_cents ?? null,
+      };
+    }),
   );
 });
 

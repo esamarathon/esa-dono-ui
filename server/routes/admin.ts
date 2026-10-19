@@ -7,6 +7,7 @@ import prisma from '../lib/prisma.js';
 import { readAccountingStatsTx } from '../services/accountingStats.js';
 import {
   readStaffDonationTx,
+  readStaffDonationsTx,
   readStaffClaimsTx,
   donationActionReasonsTx,
   incentiveAllocationTx,
@@ -137,17 +138,13 @@ router.get('/donations', async (req, res) => {
     },
     orderBy: { created_at: 'desc' },
   });
-  res.json(
-    await prisma.$transaction(async (tx) =>
-      Promise.all(
-        donations.map(async (donation) => ({
-          ...donation,
-          ...(await readStaffDonationTx(tx, donation.id)),
-          donor: donation.donor,
-        })),
-      ),
+  const staff = await prisma.$transaction((tx) =>
+    readStaffDonationsTx(
+      tx,
+      donations.map((donation) => donation.id),
     ),
   );
+  res.json(donations.map((donation, i) => ({ ...donation, ...staff[i], donor: donation.donor })));
 });
 router.get(
   '/donations/:id',
