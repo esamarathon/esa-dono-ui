@@ -32,6 +32,8 @@ export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
  */
 
 export interface ChannelInput {
+  /** Create only: a fixed id, e.g. so a reseeded demo keeps its Channel ids. */
+  id?: unknown;
   name?: unknown;
   slug?: unknown;
   event_id?: unknown;
@@ -54,6 +56,18 @@ function uniqueConflict(e: unknown): Error | null {
     return httpError(409, 'slug is already used by another event or channel');
   if (target.includes('name')) return httpError(409, 'Channel name already exists');
   return null;
+}
+
+/** Lowercase only, so one id cannot be stored in two spellings. */
+function optionalUuid(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  ) {
+    throw httpError(400, 'id must be a lowercase UUID');
+  }
+  return value;
 }
 
 /** `is_active` must be a boolean when given: a truthy string must not bypass the primary-channel rule. */
@@ -89,15 +103,19 @@ export async function createChannel(input: ChannelInput) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) throw httpError(400, 'name is required');
   const isActive = optionalBoolean(input.is_active, 'is_active');
+  const id = optionalUuid(input.id);
   try {
     return await prisma.$transaction(async (tx) => {
+      if (id && (await tx.channel.findUnique({ where: { id }, select: { id: true } }))) {
+        throw httpError(409, 'Channel id already exists');
+      }
       const event_id = await resolveEventId(tx, input.event_id);
       const slug =
         input.slug === undefined || input.slug === ''
           ? await availableSlugFrom(tx, name, 'channel')
           : await assertUsableSlug(tx, input.slug);
       return tx.channel.create({
-        data: { name, slug, event_id, is_active: isActive ?? true },
+        data: { id, name, slug, event_id, is_active: isActive ?? true },
       });
     });
   } catch (e) {
