@@ -75,12 +75,13 @@ esac
   },
 );
 
-it('seeds through the first of several backend networks that reaches it', async () => {
+it('seeds through the first non-internal backend network that reaches it', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'reset-demo-'));
   const log = join(dir, 'docker-calls');
   try {
     await writeFile(log, '');
     // Like Docker: `{{$k}}` concatenates network names; `{{println $k}}` puts one per line.
+    // The seed helper installs packages, so an internal network (no internet) must be skipped.
     await writeFile(
       join(dir, 'docker'),
       `#!/bin/sh
@@ -88,11 +89,13 @@ case "$*" in
   'compose ps -q dono-backend') echo backend-container ;;
   'compose exec -T -e ADMIN_API_KEY dono-backend node --input-type=module -e '*) exit 0 ;;
   'compose down -v'|'compose up -d') exit 0 ;;
-  'inspect backend-container --format '*println*) printf 'esa-dono-pollers\\nesa-dono-ui_app\\n' ;;
-  'inspect backend-container --format '*) printf 'esa-dono-pollersesa-dono-ui_app\\n' ;;
+  'inspect backend-container --format '*println*) printf 'a-internal\\nb-unreachable\\nc-app\\n' ;;
+  'inspect backend-container --format '*) printf 'a-internalb-unreachablec-app\\n' ;;
+  'network inspect --format {{.Internal}} a-internal') echo true ;;
+  'network inspect --format {{.Internal}} '*) echo false ;;
   'run --rm --network '*' curlimages/curl:'*)
     echo "health $4" >> "$CALL_LOG"
-    [ "$4" = esa-dono-ui_app ]
+    [ "$4" = c-app ]
     ;;
   'run --rm --network '*' -v '*)
     echo "seed $4" >> "$CALL_LOG"
@@ -118,9 +121,9 @@ esac
       }),
     ).rejects.toMatchObject({ code: 97 });
     expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
-      'health esa-dono-pollers',
-      'health esa-dono-ui_app',
-      'seed esa-dono-ui_app',
+      'health b-unreachable',
+      'health c-app',
+      'seed c-app',
     ]);
   } finally {
     await rm(dir, { recursive: true, force: true });

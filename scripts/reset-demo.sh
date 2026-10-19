@@ -116,14 +116,20 @@ if [ -z "$ready" ]; then
     exit 1
   fi
   # One name per line: a backend on several networks must not produce one
-  # concatenated name. Seed through the first network that reaches it.
-  NETWORKS=$(docker inspect "$BACKEND_CID" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}')
+  # concatenated name. Seed through the first network that reaches it. Skip
+  # internal networks: the seed helper downloads curl and jq.
+  NETWORKS=""
+  for candidate in $(docker inspect "$BACKEND_CID" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}'); do
+    if [ "$(docker network inspect --format '{{.Internal}}' "$candidate")" != true ]; then
+      NETWORKS="$NETWORKS $candidate"
+    fi
+  done
   if [ -z "$NETWORKS" ]; then
     echo "FAIL: could not determine dono-backend's Docker network" >&2
     exit 1
   fi
   SEED_BASE="http://dono-backend:3001"
-  echo -n "==> Waiting for backend health (via networks $(echo $NETWORKS), $SEED_BASE)"
+  echo -n "==> Waiting for backend health (via networks$NETWORKS, $SEED_BASE)"
   for _ in $(seq 1 30); do
     for candidate in $NETWORKS; do
       if docker run --rm --network "$candidate" curlimages/curl:8.10.1 -sf "$SEED_BASE/api/health" >/dev/null 2>&1; then
