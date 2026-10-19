@@ -92,6 +92,9 @@ does not clear those gates or authorize deployment.
 
 ### Fixed
 
+- The demo reset seeds a backend that is on several Docker networks. It used to join
+  their names into one invalid network name, so the reset dropped the database and
+  then failed to re-seed it.
 - A shared incentive of one Event no longer appears on, or takes money from, another
   Event's Channels: pledges, fulfillment, Pool spend and credit, Unused pool targets,
   Default goals, Tiltify lists/lookups and the donate page apply the Event (ADR-0012).
