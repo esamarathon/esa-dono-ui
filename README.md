@@ -13,6 +13,7 @@ A donation platform for ESA charity events integrating with Stripe for payment p
 
 | Topic                                         | Guide                                                          |
 | --------------------------------------------- | -------------------------------------------------------------- |
+| Admin: new Event setup                        | [docs/admin-event-setup.md](docs/admin-event-setup.md)         |
 | Local development & tests                     | [docs/local-development.md](docs/local-development.md)         |
 | Environment variables                         | [docs/environment-variables.md](docs/environment-variables.md) |
 | Webhooks & metrics (Prometheus)               | [docs/webhooks-and-metrics.md](docs/webhooks-and-metrics.md)   |
