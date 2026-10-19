@@ -3,6 +3,8 @@
   "version": "0.3.0",
   "type": "module",
   "scripts": {
+    "db:generate": "tsx scripts/database.ts generate",
+    "db:migrate": "tsx scripts/database.ts migrate",
     "dev": "tsx watch index.ts",
     "start": "tsx index.ts",
     "typecheck": "tsc --noEmit",

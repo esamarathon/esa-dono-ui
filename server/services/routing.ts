@@ -61,7 +61,6 @@ export async function resolveDonationRoute(
 export async function assignDonationChannel(donationId: string, channelId: unknown) {
   if (typeof channelId !== 'string' || !channelId) throw httpError(400, 'channel_id is required');
   return withWebhooks(async (tx, _emit, publisher) => {
-    await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
     if (await tx.paymentRefund.count({ where: { donation_id: donationId, status: 'REQUESTED' } }))
       throw httpError(409, 'A Payment refund is requested for this donation');
     const donation = await tx.donation.findUnique({ where: { id: donationId } });

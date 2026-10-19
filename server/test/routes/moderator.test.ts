@@ -1,13 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import moderatorRouter from '../../routes/moderator.js';
 import { proposeCustomEntryTx } from '../../services/spend.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

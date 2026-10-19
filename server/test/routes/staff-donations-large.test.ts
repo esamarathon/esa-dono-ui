@@ -1,13 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 // Prisma batches concurrent findUnique calls into one query. Past SQLite's 999
 // bind variables the engine splits the IN list, and Prisma 5.22 then panics

@@ -175,8 +175,9 @@ if [ ! -d "node_modules" ]; then
   npm install
 fi
 
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 cd server
-npx prisma migrate deploy 2>/dev/null || npx prisma migrate dev --name init
 npx prisma db seed 2>/dev/null || true
 cd ..
 

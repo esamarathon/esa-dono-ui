@@ -17,7 +17,7 @@ npm workspaces monorepo
 - **Payments**: Stripe Checkout (`checkout.session.completed` webhook).
 - **Auth**: magic-link email tokens + OAuth (Google / Discord / Twitch). No
   passwords. Donors are identified by email.
-- **Data**: SQLite via Prisma, single file. All money is integer cents.
+- **Data**: SQLite or PostgreSQL via Prisma, selected by `DATABASE_URL`. SQLite uses a single file. All money is integer cents.
 - **Production** ships two images: `backend` (Express, non-root `dono`, UID 1001) and `frontend` (nginx-unprivileged SPA, proxies `/api/` → backend).
 
 ```
@@ -62,7 +62,8 @@ Stripe/SMTP/OAuth unset degrades gracefully (see table below).
 ### 3. Initialize the database
 
 ```bash
-cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 ```
 
 ### 4. Run
@@ -161,9 +162,11 @@ docker compose --env-file .env.production up -d
 ```
 
 - Frontend: `http://localhost:8080` (port via `FRONTEND_PORT`, default 8080).
-- SQLite persisted in the named volume `dono-data` (mounted at `/data`).
-- Backend runs `prisma migrate deploy` on every startup (entrypoint) — safe to
-  redeploy new images without manual DB steps.
+- SQLite persists in the named volume `dono-data` (mounted at `/data`). PostgreSQL
+  uses the service named in `DATABASE_URL`; uploaded images still need the volume.
+- The entrypoint selects and deploys the provider's migrations on every startup.
+  The same image supports both providers; changing the URL does not transfer data.
+  See [Database Management](database.md).
 
 ### 4. Verify
 
@@ -369,12 +372,17 @@ reset cycle. See `docs/STAGING_SEED.md` for detailed staging instructions.
 
 ### Migrations
 
-Handled automatically by the backend entrypoint (`prisma migrate deploy`). To
-create a new migration during development:
+Handled automatically by the backend entrypoint, which selects the migration
+history from `DATABASE_URL`. From the source checkout, use:
 
 ```bash
-cd server && npx prisma migrate dev --name <name> && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 ```
+
+Model changes need new migrations in both provider histories. The canonical model
+schema stays SQLite; generation derives the PostgreSQL schema. Preserve the custom
+checks, partial indexes and triggers on both providers. See [Database Management](database.md).
 
 **Migrations that need a reset.** `20260928211407_event_channel_identity` (#114)
 switches ids to UUIDs and adds Event, slugs and a primary Channel. It applies to an
@@ -794,9 +802,9 @@ curl -s -H "Authorization: Bearer key_metrics_$METRICS_API_KEY" http://localhost
 7. **Role escalation is impossible via donation.** Roles come only from the
    `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (gated on a verified OAuth
    email) or an explicit `PATCH /api/admin/donors/:id/role`.
-8. **`prisma generate` must run** before `typecheck`/`test` (the Prisma client is
-   generated, not committed). CI does this; replicate locally after any schema
-   change.
+8. **`npm run db:generate --workspace server` must run** before `typecheck`/`test`.
+   Both Prisma clients and the derived PostgreSQL schema are generated, not
+   committed. CI does this; repeat locally after installation or a model change.
 9. **`TRUST_PROXY` equals the number of proxies in front of the backend**
    (the frontend nginx counts as one). Adding or removing a proxy (TLS
    terminator, load balancer, CDN) changes it. Wrong in either direction breaks
@@ -837,6 +845,7 @@ For high-traffic campaigns, see the README's "Future / Production at Scale"
 diagram: horizontally scale frontend replicas behind a load balancer (one more proxy
 hop: raise `TRUST_PROXY`; with several backend replicas the in-memory rate-limit
 counters are per replica, so the effective limit multiplies), scale the
-backend tier, and migrate SQLite → PostgreSQL (`datasource.provider` +
-`DATABASE_URL`) with a read replica. A dedicated webhook-sender container is the
-future path to decouple webhook ingestion from API serving.
+backend tier only after adding database-backed coordination for webhook dispatch.
+PostgreSQL is selected by `DATABASE_URL` in the same image, but financial transactions
+remain serialized and database selection does not transfer existing SQLite data.
+Read replicas and a dedicated webhook-sender container remain future work.

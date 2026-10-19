@@ -7,10 +7,6 @@ import { readRewardFundingTx } from './rewardFunding.js';
 
 type Tx = Prisma.TransactionClient;
 
-/** Serialize eligibility reads before any mutation, also across SQLite clients. */
-async function lockReversalTx(tx: Tx) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
-}
 export type AdjustmentType = 'REFUND' | 'FREEZE_ZERO' | 'MANUAL' | 'CHARGEBACK' | 'WALLET_REFUND';
 
 async function returnRowFundingTx(
@@ -145,7 +141,6 @@ export async function moderateCustomEntryTx(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const entry = await tx.pollCustomEntry.findUnique({ where: { id: entryId } });
   if (!entry) throw httpError(404, 'Entry not found');
   if (entry.status !== 'PENDING') throw httpError(400, 'Only pending entries can be moderated');
@@ -259,7 +254,6 @@ export async function refundGoalContributions(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
   if (!goal) throw httpError(404, 'Goal not found');
   const contributions = await tx.fundContribution.findMany({
@@ -296,7 +290,6 @@ export async function refundPollOptionVotes(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const option = await tx.pollOption.findUnique({ where: { id: optionId } });
   if (!option) throw httpError(404, 'Poll option not found');
   const votes = await tx.pollVote.findMany({
@@ -453,7 +446,6 @@ export async function setDonationStatusTx(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const donation = await tx.donation.findUnique({ where: { id: donationId } });
   if (!donation) throw httpError(404, 'Donation not found');
   if (donation.refund_id || ['REFUNDED', 'CHARGEBACK'].includes(donation.status))
@@ -538,7 +530,6 @@ export async function recordLegacyAsyncFailureTx(
   receipt: { donation_id: string; checkout_session_id: string; pledge_token: string | null },
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const donation = await tx.donation.findUniqueOrThrow({ where: { id: receipt.donation_id } });
   if (donation.pledge_amount_cents !== null || donation.external_id !== receipt.checkout_session_id)
     throw httpError(409, 'Legacy payment receipt does not match donation');
@@ -697,7 +688,6 @@ export async function setClaimStatusTx(
   status: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   if (!['PENDING', 'FULFILLED'].includes(status)) throw httpError(400, 'Invalid status');
   const claim = await tx.rewardClaim.findUnique({ where: { id: claimId } });
   if (!claim) throw httpError(404, 'Claim not found');
@@ -721,7 +711,6 @@ export async function acknowledgeChargebackClaimTx(
   actor: string,
   note?: string,
 ) {
-  await lockReversalTx(tx);
   if (note !== undefined && typeof note !== 'string')
     throw httpError(400, 'Invalid acknowledgement note');
   const claim = await tx.rewardClaim.findUnique({ where: { id: claimId } });
@@ -748,7 +737,6 @@ export async function reverseSpendTx(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await lockReversalTx(tx);
   const donor = await tx.donor.findUnique({ where: { id: donorId } });
   if (!donor) throw httpError(404, 'Donor not found');
   const reverse = async (

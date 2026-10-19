@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
 import eventsRouter from '../../routes/events.js';
 import { createTestChannel, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 

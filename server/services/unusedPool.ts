@@ -181,7 +181,6 @@ export async function assignUnusedTx(
   if (!actor) throw httpError(400, 'Assignment actor required');
   if (!Number.isSafeInteger(expected) || expected <= 0)
     throw httpError(400, 'Expected amount must be positive integer cents');
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const donation = await sourceTx(tx, donationId);
   const picker = await unusedTargetsTx(tx, donationId, category);
   if (picker.amount_cents !== expected)
@@ -233,7 +232,6 @@ export async function undoUnusedTx(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const row =
     category === 'poll'
       ? await tx.pollVote.findUnique({

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import crypto from 'crypto';
@@ -7,7 +7,11 @@ import prisma from '../../lib/prisma.js';
 import admin from '../../routes/admin.js';
 import moderator from '../../routes/moderator.js';
 import { catchAsyncErrors, errorHandler } from '../../lib/httpError.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 import { applyPoolCreditTx } from '../../services/poolCredit.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 const extraDonors: string[] = [];

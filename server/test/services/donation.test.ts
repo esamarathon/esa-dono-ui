@@ -1,6 +1,18 @@
-import { afterAll, afterEach, beforeEach, describe, expect, inject, it, vi } from 'vitest';
+import {
+  beforeAll,
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  inject,
+  it,
+  vi,
+} from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { execFileSync } from 'node:child_process';
 import prisma from '../../lib/prisma.js';
 import { intakeDonation } from '../../services/donation.js';
 import { createPledge as createPooledPledge } from '../../services/pledge.js';
@@ -14,7 +26,12 @@ import {
   createTestChannel,
   createLegacyPledge as createPledge,
   DEFAULT_EVENT_ID,
+  ensureDefaultEvent,
 } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
@@ -61,8 +78,8 @@ afterEach(async () => {
   await Promise.all(destinations.map(drainDestination));
   const donors = await prisma.donor.findMany({ where: { email: { in: emails } } });
   const donorIds = donors.map((donor) => donor.id);
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS intake_reject_delivery');
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS pooled_reject_vote');
+  await dropFailTrigger(prisma, 'intake_reject_delivery');
+  await dropFailTrigger(prisma, 'pooled_reject_vote');
   await prisma.blockedWord.deleteMany({ where: { id: { in: blockedWords } } });
   await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinations } } });
   await prisma.webhookDestinationSeq.deleteMany({
@@ -744,13 +761,20 @@ describe('Donation intake on SQLite', () => {
       pledges.push(pledge_token);
       const { native, tiltify } = await deliveryDestinations();
       if (failure === 'allocation')
-        await prisma.$executeRawUnsafe(
-          `CREATE TRIGGER pooled_reject_vote BEFORE INSERT ON PollVote BEGIN SELECT RAISE(ABORT, 'late vote failure'); END`,
-        );
+        await createFailTrigger(prisma, {
+          name: 'pooled_reject_vote',
+          table: 'PollVote',
+          operation: 'INSERT',
+          message: 'late vote failure',
+        });
       else
-        await prisma.$executeRawUnsafe(
-          `CREATE TRIGGER intake_reject_delivery BEFORE INSERT ON WebhookDelivery WHEN NEW.event_type = 'tiltify.fact.updated' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
-        );
+        await createFailTrigger(prisma, {
+          name: 'intake_reject_delivery',
+          table: 'WebhookDelivery',
+          operation: 'INSERT',
+          when: `NEW."event_type" = 'tiltify.fact.updated'`,
+          message: 'late outbox failure',
+        });
       const externalId = crypto.randomUUID();
       await prisma.pendingPledge.update({
         where: { pledge_token },
@@ -1258,11 +1282,54 @@ describe('Donation intake on SQLite', () => {
       const { native, tiltify } = await deliveryDestinations();
       // A synchronous, read-only observer checks the committed snapshot at the
       // exact mail boundary. An async read could race the transaction's commit.
-      const observer = new DatabaseSync(inject('testDatabaseUrl').slice('file:'.length), {
-        readOnly: true,
-      });
+      const url = inject('testDatabaseUrl');
+      const observer = url.startsWith('file:')
+        ? new DatabaseSync(url.slice('file:'.length), { readOnly: true })
+        : null;
       const visible: unknown[] = [];
       vi.mocked(sendMagicLink).mockImplementation(async (recipient) => {
+        if (!observer) {
+          // Block this worker while a separate PostgreSQL connection reads. An
+          // uncommitted writer cannot finish its commit during the observation.
+          const snapshot = execFileSync(
+            process.execPath,
+            [
+              '--import',
+              'tsx',
+              '--input-type=module',
+              '--eval',
+              `
+              import { createDatabaseClient } from ${JSON.stringify(new URL('../../lib/databaseClient.ts', import.meta.url).href)};
+              const reader = createDatabaseClient();
+              try {
+                const email = process.env.TEST_OBSERVER_EMAIL;
+                const destinationIds = JSON.parse(process.env.TEST_OBSERVER_DESTINATIONS);
+                const donations = await reader.donation.count({ where: { donor: { email } } });
+                const claims = await reader.rewardClaim.count({ where: { donor: { email } } });
+                const deliveries = await reader.webhookDelivery.count({
+                  where: { destination_id: { in: destinationIds } },
+                });
+                process.stdout.write(JSON.stringify({ donations, claims, deliveries }));
+              } finally {
+                await reader.$disconnect();
+              }
+            `,
+            ],
+            {
+              env: {
+                ...process.env,
+                DATABASE_URL: url,
+                TEST_OBSERVER_EMAIL: recipient,
+                TEST_OBSERVER_DESTINATIONS: JSON.stringify([native.id, tiltify.id]),
+              },
+              encoding: 'utf8',
+              timeout: 10_000,
+              stdio: ['ignore', 'pipe', 'pipe'],
+            },
+          );
+          visible.push(JSON.parse(snapshot));
+          return;
+        }
         visible.push({
           donations: observer
             .prepare(
@@ -1298,7 +1365,7 @@ describe('Donation intake on SQLite', () => {
         expect(result).not.toHaveProperty('duplicate');
         expect(visible).toEqual([{ donations: 1, claims: 1, deliveries: 4 }]);
       } finally {
-        observer.close();
+        observer?.close();
         vi.mocked(sendMagicLink).mockResolvedValue(undefined);
       }
     },
@@ -1340,10 +1407,14 @@ describe('Donation intake on SQLite', () => {
       });
       const { native, tiltify } = await deliveryDestinations();
       // Native and Tiltify donation messages have already been inserted when
-      // the totals fail. Exercise SQLite rollback, not a mocked transaction.
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER intake_reject_delivery
-      BEFORE INSERT ON WebhookDelivery WHEN NEW.event_type = 'tiltify.fact.updated'
-      BEGIN SELECT RAISE(ABORT, 'intake delivery failure'); END`);
+      // the totals fail. Exercise database rollback, not a mocked transaction.
+      await createFailTrigger(prisma, {
+        name: 'intake_reject_delivery',
+        table: 'WebhookDelivery',
+        operation: 'INSERT',
+        when: `NEW."event_type" = 'tiltify.fact.updated'`,
+        message: 'intake delivery failure',
+      });
       const facts = {
         externalId: crypto.randomUUID(),
         email,

@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
@@ -12,7 +13,11 @@ import {
   acknowledgeChargebackClaimTx,
 } from '../../services/reversal.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 const donors: string[] = [];
@@ -159,7 +164,7 @@ function status(id: string, value: string) {
   );
 }
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_pooled_reversal');
+  await dropFailTrigger(prisma, 'fail_pooled_reversal');
   await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.paymentRefund.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donors } } });
@@ -847,9 +852,13 @@ describe('ADR-0011 terminal reversals through real SQLite', () => {
           where: { id: f.claim.id },
           data: { status: 'FULFILLED' },
         });
-      await prisma.$executeRawUnsafe(
-        `CREATE TRIGGER fail_pooled_reversal BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${tiltify.id}' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
-      );
+      await createFailTrigger(prisma, {
+        name: 'fail_pooled_reversal',
+        table: 'WebhookDelivery',
+        operation: 'INSERT',
+        when: `NEW."destination_id" = '${tiltify.id}'`,
+        message: 'late outbox failure',
+      });
       await expect(
         action === 'item'
           ? withWebhooks((tx, _emit, publisher) =>

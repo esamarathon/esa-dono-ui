@@ -143,7 +143,9 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 
 ## Database
 
-SQLite via Prisma. All monetary values are **integer cents**. `RewardClaim.claim_data` is a JSON string (SQLite has no native JSON column); routes must `JSON.parse`/`JSON.stringify` it. To migrate to Postgres, change `datasource.provider` and `DATABASE_URL`.
+SQLite or PostgreSQL via Prisma, selected by `DATABASE_URL` without rebuilding the image. Both clients are generated from `server/prisma/schema.prisma`; PostgreSQL has a separate migration history under `server/prisma/postgresql/migrations`. All monetary values are **integer cents**. `RewardClaim.claim_data` stays a JSON string on both providers.
+
+`lib/databaseClient.ts` serializes transactions before application reads: SQLite takes its write lock, and PostgreSQL takes a transaction-scoped advisory lock at READ COMMITTED isolation. This preserves the existing financial concurrency model, rather than introducing parallel financial writes. The webhook dispatcher still requires one backend process; PostgreSQL does not make its in-process single-flight guard safe across replicas. See `docs/database.md` for commands and test setup.
 
 ## OpenTelemetry / User Journey Tracing
 

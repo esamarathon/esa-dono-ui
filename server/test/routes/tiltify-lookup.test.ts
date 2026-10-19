@@ -1,12 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import { randomUUID } from 'node:crypto';
 import tiltifyRouter from '../../routes/tiltify.js';
 
 // Public HTTP wire seam, backed by the per-run migrated SQLite database.
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const app = express();
 app.use('/api/tiltify', tiltifyRouter);
 const get = (path: string) => request(app).get(`/api/tiltify${path}`);

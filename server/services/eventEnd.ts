@@ -120,7 +120,6 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
 
 async function changeEndTx(tx: Tx, eventId: string, slug: unknown, actor: string, undo: boolean) {
   if (!actor) throw httpError(400, 'Event end actor required');
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const preview = await previewEventEndTx(tx, eventId, undo);
   if (slug !== preview.slug) throw httpError(400, 'Type the Event slug to confirm');
   if (!preview.can_apply) throw httpError(409, preview.blockers.join('; '));

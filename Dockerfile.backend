@@ -71,9 +71,9 @@ ENV NODE_ENV=test \
 
 COPY --chown=dono:dono . .
 
-# Server tests create and migrate their own temp SQLite DB per run
+# Tests provision a temp SQLite file or a unique PostgreSQL schema per run
 # (server/test/global-setup.ts), so no database is prepared here.
-RUN npx prisma generate --schema=./server/prisma/schema.prisma \
+RUN npm run db:generate --workspace server \
   && chown -R dono:dono /app
 
 USER dono
@@ -93,9 +93,9 @@ COPY --chown=dono:dono tsconfig.base.json ./
 COPY --chown=dono:dono package.json package-lock.json ./
 COPY --chown=dono:dono docker-entrypoint.backend.sh /usr/local/bin/docker-entrypoint.sh
 
-# The Prisma CLI is a production dependency (needed at startup for
-# `prisma migrate deploy`), so no dev toolchain is shipped.
-RUN DATABASE_URL="file:./dev.db" npx prisma generate --schema=./server/prisma/schema.prisma \
+# Generate both connectors from the same models. The same image selects its
+# client and migrations from DATABASE_URL; startup needs no npm or dev toolchain.
+RUN npm run db:generate --workspace server \
  && chmod +x /usr/local/bin/docker-entrypoint.sh \
  && mkdir -p /data/uploads && chown dono:dono /data /data/uploads
 

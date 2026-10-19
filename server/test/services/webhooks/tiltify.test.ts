@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../../lib/databaseClient.js';
 import crypto from 'crypto';
 import adminRouter from '../../../routes/admin.js';
 import { createLegacyPledge as createPledge } from '../../helpers/fixtures.js';
@@ -19,7 +19,7 @@ vi.mock('../../../services/email.js', () => ({
  * assertions breaks a consumer.
  */
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** `list[i]`, failing the test when it is missing (noUncheckedIndexedAccess). */

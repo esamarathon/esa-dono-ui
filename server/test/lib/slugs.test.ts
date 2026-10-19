@@ -1,5 +1,5 @@
-import { describe, it, expect, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { beforeAll, describe, it, expect, afterAll } from 'vitest';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import {
   SLUG_MAX_LENGTH,
@@ -8,9 +8,13 @@ import {
   slugProblem,
   slugify,
 } from '../../lib/slugs.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 describe('slugProblem', () => {
   it('returns null for valid slugs', () => {

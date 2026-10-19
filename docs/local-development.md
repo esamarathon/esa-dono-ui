@@ -13,7 +13,8 @@ cp .env.example .env
 # Edit .env with your Stripe credentials and other values
 
 # Initialize the database
-cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 cd server && npx prisma db seed && cd ..   # dev moderator/admin accounts + banner (see Dev Seed)
 
 # Start (server on :3001, client on :5173)

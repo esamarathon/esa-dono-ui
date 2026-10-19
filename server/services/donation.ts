@@ -87,8 +87,6 @@ async function intakeDonationInner(input: DonationIntake) {
 
   try {
     const transactionResult = await withWebhooks(async (tx, _emit, publisher) => {
-      // Write lock first: repeated intake and a draft retry see committed funding.
-      await tx.$executeRaw`UPDATE Donation SET id = id WHERE external_id = ${externalId}`;
       const pledge: Pledge | null = wallet
         ? await tx.pendingPledge.findUniqueOrThrow({
             where: { id: input.pledge.id },

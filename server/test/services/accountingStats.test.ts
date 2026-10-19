@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { afterAll, afterEach, expect, it } from 'vitest';
+import { beforeAll, afterAll, afterEach, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import adminRouter from '../../routes/admin.js';
@@ -9,7 +9,11 @@ import { metricsAuth } from '../../middleware/metricsAuth.js';
 import { refreshBusinessMetrics } from '../../services/metrics.js';
 import prisma from '../../lib/prisma.js';
 import { readAccountingStatsTx } from '../../services/accountingStats.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 const donors: string[] = [],
   events: string[] = [],

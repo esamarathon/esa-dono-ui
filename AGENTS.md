@@ -14,9 +14,10 @@ npm run dev
 # Build client only
 npm run build
 
-# DB migrations (run from server/)
-cd server && npx prisma migrate dev --name <name>
-cd server && npx prisma generate
+# Generate both clients; deploy migrations selected by DATABASE_URL
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
+# Model changes need migrations in BOTH provider histories; see docs/database.md.
 
 # DB seed (creates dev moderator/admin accounts + banner with API keys)
 cd server && npx prisma db seed
@@ -89,8 +90,10 @@ Each of these has broken before or breaks silently. Detail: `docs/architecture.m
 
 - The Stripe webhook route is mounted **before** `express.json()`: it needs the raw body for
   signature verification (`server/index.ts`).
-- Inside a Prisma transaction, use the **`tx` client**. A query on the global `prisma` waits for
-  the transaction and times out (SQLite `connection_limit=1`, ADR-0007).
+- Inside a Prisma transaction, use the **`tx` client**. Use `createDatabaseClient()` for
+  additional clients: it selects the connector and serializes transactions before reads
+  (SQLite write lock / PostgreSQL advisory lock). A global query inside a SQLite
+  transaction waits for itself (`connection_limit=1`, ADR-0007).
 - Webhook messages are emitted only through `withWebhooks(fn)`
   (`server/services/webhooks/outbox.ts`), so they commit or roll back with the change.
 - **Moderator routes never return donor email.** Only `server/routes/admin.ts` may. See the

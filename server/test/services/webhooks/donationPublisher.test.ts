@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../../helpers/failTrigger.js';
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import prisma from '../../../lib/prisma.js';
@@ -8,7 +9,11 @@ import { proposeCustomEntryTx, votePollTx } from '../../../services/spend.js';
 import { createPledge } from '../../../services/pledge.js';
 import { intakeDonation } from '../../../services/donation.js';
 import { planPledge } from '@dono/shared';
-import { DEFAULT_EVENT_ID } from '../../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 // Only replace the network delivery boundary, never the outbox or database.
 vi.mock('../../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
@@ -125,7 +130,7 @@ async function pooledWriteIn({ pledge, directed }: Readonly<{ pledge: number; di
 }
 
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_pooled_rejection');
+  await dropFailTrigger(prisma, 'fail_pooled_rejection');
   await prisma.webhookDelivery.deleteMany({ where: { destination_id: { in: destinations } } });
   await prisma.webhookDestinationSeq.deleteMany({
     where: { destination_id: { in: destinations } },
@@ -467,9 +472,13 @@ describe('Donation publisher through the SQLite outbox', () => {
     });
     const beforeNative = await messages(native.id);
     const beforeTiltify = await messages(tiltify.id);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_pooled_rejection BEFORE INSERT ON PoolCredit
-      WHEN (SELECT COUNT(*) FROM PoolCredit WHERE donation_id IN (SELECT id FROM Donation WHERE donor_id = '${donor.id}')) = 1
-      BEGIN SELECT RAISE(ABORT, 'late rejection ledger failure'); END`);
+    await createFailTrigger(prisma, {
+      name: 'fail_pooled_rejection',
+      table: 'PoolCredit',
+      operation: 'INSERT',
+      when: `(SELECT COUNT(*) FROM "PoolCredit" WHERE "donation_id" IN (SELECT "id" FROM "Donation" WHERE "donor_id" = '${donor.id}')) = 1`,
+      message: 'late rejection ledger failure',
+    });
     await expect(
       withWebhooks((tx, _emit, publisher) =>
         moderateCustomEntryTx(tx, entry.id, 'REJECTED', 'moderator', publisher),

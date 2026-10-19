@@ -1,6 +1,7 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import type { PathLike } from 'fs';
 
 // Observe the filesystem boundary, while still deleting real fixture files.
@@ -19,7 +20,11 @@ vi.mock('fs/promises', async (importOriginal) => {
 // Real SQLite and outbox; no delivery network calls.
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 import prisma from '../../lib/prisma.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 const channelIds: string[] = [];
 import {
   createReward,
@@ -39,7 +44,7 @@ import { UPLOADS_DIR, ensureUploadsDir } from '../../lib/uploads.js';
 
 const imagePaths: string[] = [];
 // A separate WAL reader sees committed state even while the writer has a transaction open.
-const committed = new PrismaClient();
+const committed = createDatabaseClient();
 
 const rewardIds: string[] = [];
 const pollIds: string[] = [];
@@ -70,8 +75,8 @@ async function messages(destinationId: string) {
 
 afterEach(async () => {
   files.beforeUnlink.mockReset();
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_lifecycle_delivery');
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_lifecycle_deactivation');
+  await dropFailTrigger(prisma, 'fail_lifecycle_delivery');
+  await dropFailTrigger(prisma, 'fail_lifecycle_deactivation');
   for (const path of imagePaths.splice(0)) await unlink(path).catch(() => {});
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
@@ -166,9 +171,13 @@ describe('Incentive lifecycle on SQLite', () => {
         deletedStates.push(await committed.reward.findUnique({ where: { id: reward.id } }));
     });
     await prisma.webhookDelivery.deleteMany({ where: { destination_id: target } });
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_lifecycle_delivery BEFORE INSERT ON WebhookDelivery
-      WHEN NEW.destination_id = '${target}' AND NEW.event_type = 'incentive.value_changed'
-      BEGIN SELECT RAISE(ABORT, 'forced delivery failure'); END`);
+    await createFailTrigger(prisma, {
+      name: 'fail_lifecycle_delivery',
+      table: 'WebhookDelivery',
+      operation: 'INSERT',
+      when: `NEW."destination_id" = '${target}' AND NEW."event_type" = 'incentive.value_changed'`,
+      message: 'forced delivery failure',
+    });
     await expect(
       updateReward(reward.id, {
         cost_cents: 700,
@@ -183,7 +192,7 @@ describe('Incentive lifecycle on SQLite', () => {
       image_url: `/api/uploads/${filename}`,
     });
     expect(await messages(target)).toEqual([]);
-    await prisma.$executeRawUnsafe('DROP TRIGGER fail_lifecycle_delivery');
+    await dropFailTrigger(prisma, 'fail_lifecycle_delivery');
     await updateReward(reward.id, { cost_cents: 700, image_url: '/api/uploads/new.webp' });
     await expect(access(imagePath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(deletedStates).toEqual([
@@ -810,11 +819,16 @@ describe('Incentive lifecycle on SQLite', () => {
           amount_cents: 500,
         },
       });
-      await prisma.$executeRawUnsafe(
-        kind === 'GOAL'
-          ? `CREATE TRIGGER fail_lifecycle_deactivation BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${target}' AND NEW.event_type = 'incentive.disabled' BEGIN SELECT RAISE(ABORT, 'forced failure'); END`
-          : `CREATE TRIGGER fail_lifecycle_deactivation BEFORE UPDATE ON PollOption WHEN NEW.id = '${option.id}' AND NEW.status = 'REJECTED' BEGIN SELECT RAISE(ABORT, 'forced failure'); END`,
-      );
+      await createFailTrigger(prisma, {
+        name: 'fail_lifecycle_deactivation',
+        table: kind === 'GOAL' ? 'WebhookDelivery' : 'PollOption',
+        operation: kind === 'GOAL' ? 'INSERT' : 'UPDATE',
+        when:
+          kind === 'GOAL'
+            ? `NEW."destination_id" = '${target}' AND NEW."event_type" = 'incentive.disabled'`
+            : `NEW."id" = '${option.id}' AND NEW."status" = 'REJECTED'`,
+        message: 'forced failure',
+      });
       await expect(
         reverseAndDeactivate(kind, kind === 'GOAL' ? goal.id : option.id, 'admin'),
       ).rejects.toMatchObject({ code: 'P2003' });
@@ -930,8 +944,13 @@ describe('Incentive lifecycle on SQLite', () => {
     async (kind) => {
       const target = await destination();
       const title = `Failed ${crypto.randomUUID()}`;
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_lifecycle_delivery BEFORE INSERT ON WebhookDelivery
-      WHEN NEW.destination_id = '${target}' BEGIN SELECT RAISE(ABORT, 'forced delivery failure'); END`);
+      await createFailTrigger(prisma, {
+        name: 'fail_lifecycle_delivery',
+        table: 'WebhookDelivery',
+        operation: 'INSERT',
+        when: `NEW."destination_id" = '${target}'`,
+        message: 'forced delivery failure',
+      });
       const create =
         kind === 'REWARD'
           ? createReward({ event_id: DEFAULT_EVENT_ID, title, type: 'DIGITAL', cost_cents: 500 })

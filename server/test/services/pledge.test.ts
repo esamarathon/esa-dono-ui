@@ -1,11 +1,16 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import prisma from '../../lib/prisma.js';
 import { planPledge, type PledgePlan } from '@dono/shared';
 import { createPledge, type PledgeItemInput } from '../../services/pledge.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
@@ -15,7 +20,7 @@ const drafts: string[] = [];
 const rewards: string[] = [];
 const goals: string[] = [];
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS reject_pledge_hold');
+  await dropFailTrigger(prisma, 'reject_pledge_hold');
   await prisma.pendingPledge.deleteMany({ where: { draft_id: { in: drafts } } });
   await prisma.donor.deleteMany({ where: { id: { in: donors } } });
   await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
@@ -83,8 +88,12 @@ describe('pooled pledge creation on SQLite', () => {
     donors.push(donor.id);
     const draft_id = crypto.randomUUID();
     drafts.push(draft_id);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_pledge_hold BEFORE INSERT ON PendingPledge
-      BEGIN SELECT RAISE(ABORT, 'reject pledge after hold'); END`);
+    await createFailTrigger(prisma, {
+      name: 'reject_pledge_hold',
+      table: 'PendingPledge',
+      operation: 'INSERT',
+      message: 'reject pledge after hold',
+    });
     await expect(
       createPledge({
         draft_id,

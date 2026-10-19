@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import express from 'express';
 import requestHttp from 'supertest';
 import type { CreditApplyRequest } from '@dono/shared';
@@ -183,7 +184,7 @@ async function fixture({
   return { donor, event, channel, reward, sources, request, apply, read };
 }
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_credit');
+  await dropFailTrigger(prisma, 'fail_credit');
   await prisma.poolCreditRedemption.deleteMany({ where: { batch: { donor_id: { in: donors } } } });
   await prisma.poolCreditBatch.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
@@ -467,9 +468,13 @@ it.each(['PoolCreditRedemption', 'WebhookDelivery'])(
       ],
     };
     const before = await f.read();
-    await prisma.$executeRawUnsafe(
-      `CREATE TRIGGER fail_credit BEFORE INSERT ON ${table} ${table === 'PoolCreditRedemption' ? 'WHEN NEW.claim_id IS NOT NULL' : ''} BEGIN SELECT RAISE(ABORT, 'late credit failure'); END`,
-    );
+    await createFailTrigger(prisma, {
+      name: 'fail_credit',
+      table,
+      operation: 'INSERT',
+      when: table === 'PoolCreditRedemption' ? 'NEW."claim_id" IS NOT NULL' : undefined,
+      message: 'late credit failure',
+    });
     await expect(
       withWebhooks((tx, _emit, publisher) =>
         applyPoolCreditTx(tx, f.donor.id, f.event.id, reviewed, publisher),

@@ -155,9 +155,6 @@ export async function createPledge(input: CreatePledgeInput) {
       throw httpError(400, 'draft_id is required (maximum 128 characters)');
     }
     const pledge = await prisma.$transaction(async (tx) => {
-      // Take SQLite's write lock before any read, so competing draft/Wallet
-      // attempts serialize instead of both trying to upgrade a read lock.
-      await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE draft_id = ${input.draft_id}`;
       const existing = await tx.pendingPledge.findFirst({
         where: {
           draft_id: input.draft_id,
@@ -385,7 +382,6 @@ export async function createCheckoutForPledge(
 
 async function checkoutForPledge(pledgeToken: string, donor?: WalletDonor | null) {
   const pledge = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE pledge_token = ${pledgeToken}`;
     const stored = await tx.pendingPledge.findUniqueOrThrow({
       where: { pledge_token: pledgeToken },
       include: { items: true },

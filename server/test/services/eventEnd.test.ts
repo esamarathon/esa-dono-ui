@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { previewEventEndTx, endEventTx, undoEventEndTx } from '../../services/eventEnd.js';
@@ -70,7 +71,7 @@ const end = (id: string, slug: string) =>
 const undo = (id: string, slug: string) =>
   prisma.$transaction((tx) => undoEventEndTx(tx, id, slug, 'undo@example.com'));
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_end_audit');
+  await dropFailTrigger(prisma, 'fail_end_audit');
   await prisma.pendingPledge.deleteMany({ where: { channel: { event_id: { in: events } } } });
   await prisma.paymentRefund.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.poolCreditRedemption.deleteMany({ where: { batch: { donor_id: { in: donors } } } });
@@ -291,9 +292,13 @@ it('does not classify a later credit-funded claim by the original physical pledg
 
 it('rolls back end state if audit persistence fails', async () => {
   const f = await fixture({ pledge: 100, pollCredit: 60 });
-  await prisma.$executeRawUnsafe(
-    `CREATE TRIGGER fail_end_audit BEFORE INSERT ON EventEndAudit WHEN NEW.event_id = '${f.event.id}' BEGIN SELECT RAISE(ABORT, 'late audit failure'); END`,
-  );
+  await createFailTrigger(prisma, {
+    name: 'fail_end_audit',
+    table: 'EventEndAudit',
+    operation: 'INSERT',
+    when: `NEW."event_id" = '${f.event.id}'`,
+    message: 'late audit failure',
+  });
   await expect(end(f.event.id, f.event.slug)).rejects.toThrow();
   expect(await preview(f.event.id)).toMatchObject({
     action: 'END',

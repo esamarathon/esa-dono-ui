@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 
 // Keep the real outbox; replace only the delivery adapter so no network calls run.
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
@@ -15,7 +16,11 @@ import {
 } from '../../services/reversal.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 import { proposeCustomEntryTx } from '../../services/spend.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 const donorIds: string[] = [];
 const rewardIds: string[] = [];
@@ -34,7 +39,7 @@ async function donor(balance: number) {
 }
 
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_reversal_adjustment');
+  await dropFailTrigger(prisma, 'fail_reversal_adjustment');
   await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donorIds } } } });
   await prisma.rewardClaim.deleteMany({ where: { donor_id: { in: donorIds } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donorIds } } });
@@ -271,8 +276,13 @@ describe('Reversal accounting on SQLite', () => {
 
     // Fail at the actual database boundary, after the donor balance has been changed.
     // The interpolated id is a database-generated UUID, not external input.
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_reversal_adjustment BEFORE INSERT ON BalanceAdjustment
-      WHEN NEW.donor_id = '${owner.id}' BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
+    await createFailTrigger(prisma, {
+      name: 'fail_reversal_adjustment',
+      table: 'BalanceAdjustment',
+      operation: 'INSERT',
+      when: `NEW."donor_id" = '${owner.id}'`,
+      message: 'forced ledger failure',
+    });
     await expect(
       withWebhooks(async (tx, _emit, publisher) => {
         switch (action) {
@@ -411,9 +421,13 @@ describe('Reversal accounting on SQLite', () => {
           },
         ],
       });
-      await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_reversal_adjustment BEFORE INSERT ON BalanceAdjustment
-      WHEN (SELECT COUNT(*) FROM BalanceAdjustment WHERE donor_id IN ('${first.id}', '${second.id}')) = 1
-      BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
+      await createFailTrigger(prisma, {
+        name: 'fail_reversal_adjustment',
+        table: 'BalanceAdjustment',
+        operation: 'INSERT',
+        when: `(SELECT COUNT(*) FROM "BalanceAdjustment" WHERE "donor_id" IN ('${first.id}', '${second.id}')) = 1`,
+        message: 'forced ledger failure',
+      });
       await expect(
         withWebhooks(async (tx, _emit, publisher) => {
           if (action === 'poll-option')

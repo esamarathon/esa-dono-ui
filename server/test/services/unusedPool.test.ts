@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
@@ -64,7 +65,7 @@ function assign(id: string, category: 'poll' | 'goal', target: string, cents: nu
   );
 }
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_unused');
+  await dropFailTrigger(prisma, 'fail_unused');
   await prisma.poolCredit.deleteMany({ where: { donation: { donor_id: { in: donors } } } });
   await prisma.pollVote.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.fundContribution.deleteMany({ where: { donor_id: { in: donors } } });
@@ -217,11 +218,16 @@ it.each(['tally', 'outbox'])(
       data: { url: 'http://127.0.0.1:1', secret: 's', event_types: '["donation.updated"]' },
     });
     destinations.push(destination.id);
-    await prisma.$executeRawUnsafe(
-      failure === 'tally'
-        ? `CREATE TRIGGER fail_unused BEFORE UPDATE ON Poll WHEN NEW.id = '${f.poll.id}' BEGIN SELECT RAISE(ABORT, 'late tally failure'); END`
-        : `CREATE TRIGGER fail_unused BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${destination.id}' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
-    );
+    await createFailTrigger(prisma, {
+      name: 'fail_unused',
+      table: failure === 'tally' ? 'Poll' : 'WebhookDelivery',
+      operation: failure === 'tally' ? 'UPDATE' : 'INSERT',
+      when:
+        failure === 'tally'
+          ? `NEW."id" = '${f.poll.id}'`
+          : `NEW."destination_id" = '${destination.id}'`,
+      message: failure === 'tally' ? 'late tally failure' : 'late outbox failure',
+    });
     await expect(assign(f.donation.id, 'poll', f.poll.options[0]!.id, 37)).rejects.toThrow();
     expect(
       (await prisma.$transaction((tx) => listUnusedTx(tx, {}))).find((d) => d.id === f.donation.id),
@@ -232,11 +238,15 @@ it.each(['tally', 'outbox'])(
     expect(await prisma.webhookDelivery.count({ where: { destination_id: destination.id } })).toBe(
       0,
     );
-    await prisma.$executeRawUnsafe('DROP TRIGGER fail_unused');
+    await dropFailTrigger(prisma, 'fail_unused');
     const row = await assign(f.donation.id, 'poll', f.poll.options[0]!.id, 37);
-    await prisma.$executeRawUnsafe(
-      `CREATE TRIGGER fail_unused BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${destination.id}' BEGIN SELECT RAISE(ABORT, 'late undo outbox failure'); END`,
-    );
+    await createFailTrigger(prisma, {
+      name: 'fail_unused',
+      table: 'WebhookDelivery',
+      operation: 'INSERT',
+      when: `NEW."destination_id" = '${destination.id}'`,
+      message: 'late undo outbox failure',
+    });
     await expect(
       withWebhooks((tx, _emit, publisher) => undoUnusedTx(tx, 'poll', row.id, 'staff', publisher)),
     ).rejects.toThrow();
@@ -249,7 +259,7 @@ it.each(['tally', 'outbox'])(
     expect(await prisma.webhookDelivery.count({ where: { destination_id: destination.id } })).toBe(
       1,
     );
-    await prisma.$executeRawUnsafe('DROP TRIGGER fail_unused');
+    await dropFailTrigger(prisma, 'fail_unused');
     await withWebhooks((tx, _emit, publisher) =>
       undoUnusedTx(tx, 'poll', row.id, 'staff', publisher),
     );

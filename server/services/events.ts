@@ -94,8 +94,6 @@ export async function updateEvent(id: string, input: EventInput) {
   const isActive = optionalBoolean(input.is_active, 'is_active');
   try {
     return await prisma.$transaction(async (tx) => {
-      // Serialize activation with explicit End/Undo end.
-      await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
       const current = await tx.event.findUnique({ where: { id } });
       if (!current) throw httpError(404, 'Event not found');
       const data: Prisma.EventUncheckedUpdateInput = {};

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 
 vi.mock('../../services/oauth.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/oauth.js')>();
@@ -11,7 +11,7 @@ vi.mock('../../services/oauth.js', async (importOriginal) => {
 import authRouter from '../../routes/auth.js';
 import { exchangeCodeForUser } from '../../services/oauth.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

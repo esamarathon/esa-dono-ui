@@ -8,7 +8,11 @@ import prisma from '../../lib/prisma.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
 import { catchAsyncErrors, errorHandler } from '../../lib/httpError.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 const app = express();
 app.use(express.json());

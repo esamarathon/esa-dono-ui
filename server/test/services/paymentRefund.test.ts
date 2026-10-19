@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
@@ -192,7 +193,7 @@ beforeEach(() => {
   stripe.listPaymentRefunds.mockResolvedValue([]);
 });
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_payment_refund');
+  await dropFailTrigger(prisma, 'fail_payment_refund');
   await prisma.balanceAdjustment.deleteMany({
     where: { donor_id: { in: donors }, payment_refund_id: { not: null } },
   });
@@ -1266,9 +1267,13 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
       );
       let requestedId: string | undefined;
       if (category === 'poll') {
-        await prisma.$executeRawUnsafe(
-          `CREATE TRIGGER fail_payment_refund BEFORE UPDATE ON PaymentRefund WHEN NEW.accepted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'late refund audit failure'); END`,
-        );
+        await createFailTrigger(prisma, {
+          name: 'fail_payment_refund',
+          table: 'PaymentRefund',
+          operation: 'UPDATE',
+          when: `NEW."accepted_at" IS NOT NULL`,
+          message: 'late refund audit failure',
+        });
         await expect(requestPaymentRefund(f.claim.id, 'admin')).rejects.toThrow();
         const pending = (await prisma.$transaction((tx) => listPaymentRefundsTx(tx))).records[0]!;
         requestedId = pending.id;
@@ -1287,7 +1292,7 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
         expect(
           await prisma.poolCreditRedemption.findMany({ where: { batch_id: applied.batch_id } }),
         ).toMatchObject([{ amount_cents: 1000, reduced_cents: 0 }]);
-        await prisma.$executeRawUnsafe('DROP TRIGGER fail_payment_refund');
+        await dropFailTrigger(prisma, 'fail_payment_refund');
         stripe.listPaymentRefunds.mockResolvedValueOnce([
           {
             id: `re_${pending.id}`,
@@ -1589,9 +1594,13 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
         }
       }
       const rows = await queued(native.id);
-      await prisma.$executeRawUnsafe(
-        `CREATE TRIGGER fail_payment_refund BEFORE INSERT ON WebhookDelivery WHEN NEW.destination_id = '${stage === 'request' ? native.id : tiltify.id}' BEGIN SELECT RAISE(ABORT, 'late outbox failure'); END`,
-      );
+      await createFailTrigger(prisma, {
+        name: 'fail_payment_refund',
+        table: 'WebhookDelivery',
+        operation: 'INSERT',
+        when: `NEW."destination_id" = '${stage === 'request' ? native.id : tiltify.id}'`,
+        message: 'late outbox failure',
+      });
       await expect(
         stage === 'request'
           ? requestPaymentRefund(f.claim.id, 'admin')
@@ -1608,7 +1617,7 @@ describe('physical Payment refund public interface / real SQLite and outbox', ()
         quantity_claimed: stage === 'resolution' ? 0 : 1,
       });
       expect(await prisma.balanceAdjustment.count({ where: { donor_id: f.donor.id } })).toBe(0);
-      await prisma.$executeRawUnsafe('DROP TRIGGER fail_payment_refund');
+      await dropFailTrigger(prisma, 'fail_payment_refund');
       if (stage === 'acceptance')
         expect(await retryPaymentRefund(record!.id)).toMatchObject({ status: 'PENDING' });
     },

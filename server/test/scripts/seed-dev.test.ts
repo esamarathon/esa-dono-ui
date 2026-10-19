@@ -1,4 +1,4 @@
-import { afterAll, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { execFile } from 'node:child_process';
@@ -14,7 +14,11 @@ import rewardsRouter from '../../routes/rewards.js';
 import pollsRouter from '../../routes/polls.js';
 import goalsRouter from '../../routes/goals.js';
 import eventsRouter from '../../routes/events.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 const exec = promisify(execFile);

@@ -14,9 +14,6 @@ import {
 } from './stripe.js';
 
 type Tx = Prisma.TransactionClient;
-async function lock(tx: Tx) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
-}
 export async function getPaymentRefundTx(tx: Tx, id: string) {
   const record = await tx.paymentRefund.findUnique({ where: { id } });
   if (!record) throw httpError(404, 'Payment refund not found');
@@ -183,7 +180,6 @@ export async function reconcilePaymentRefundTx(
   receipt: PaymentRefundReceipt,
   publisher: DonationPublisher,
 ) {
-  await lock(tx);
   const id = receipt.metadata?.payment_refund_id;
   if (!id) return null;
   const record = await tx.paymentRefund.findUnique({ where: { id } });
@@ -329,7 +325,6 @@ async function executePaymentRefund(id: string, retry: boolean) {
     });
   } catch (error) {
     return withWebhooks(async (tx, _emit, publisher) => {
-      await lock(tx);
       const latest = await getPaymentRefundTx(tx, id);
       if (latest.status !== 'REQUESTED') return latest;
       if (isDefiniteRefundRejection(error))
@@ -352,7 +347,6 @@ async function executePaymentRefund(id: string, retry: boolean) {
 export async function requestPaymentRefund(claimId: string, actor: string) {
   if (!actor) throw httpError(400, 'Payment refund actor required');
   const record = await withWebhooks(async (tx, _emit, publisher) => {
-    await lock(tx);
     const preview = await previewPaymentRefundTx(tx, claimId);
     if (!preview.eligible) throw httpError(409, preview.reason ?? 'Claim is not eligible');
     const before = await publisher.snapshot(preview.donation_id);
@@ -387,7 +381,6 @@ export async function resolvePaymentRefundItem(id: string, resolution: unknown, 
   )
     throw httpError(400, 'Invalid item resolution or actor');
   return withWebhooks(async (tx, _emit, publisher) => {
-    await lock(tx);
     const record = await getPaymentRefundTx(tx, id);
     if (record.resolution) {
       if (record.resolution === resolution) return record;
@@ -456,7 +449,6 @@ export async function resolvePaymentRefundShipping(id: string, resolution: unkno
   )
     throw httpError(400, 'Invalid shipping resolution or actor');
   return prisma.$transaction(async (tx) => {
-    await lock(tx);
     const record = await getPaymentRefundTx(tx, id);
     if (record.shipping_resolution) {
       if (record.shipping_resolution === resolution) return record;

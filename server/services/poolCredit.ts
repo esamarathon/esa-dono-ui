@@ -226,7 +226,6 @@ export async function applyPoolCreditTx(
   request: CreditApplyRequest,
   publisher: DonationPublisher,
 ): Promise<CreditApplyResult> {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   if (
     !request ||
     typeof request.idempotency_key !== 'string' ||

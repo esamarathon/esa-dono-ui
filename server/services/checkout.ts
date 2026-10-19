@@ -65,7 +65,6 @@ async function recordNonPayment(
   asyncFailed = false,
 ) {
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE pledge_token = ${token}`;
     const pledge = await tx.pendingPledge.findUniqueOrThrow({ where: { pledge_token: token } });
     // A success transaction always wins over an older expiration response.
     if (pledge.fulfilled_by_donation_id || pledge.status === 'FULFILLED') return;

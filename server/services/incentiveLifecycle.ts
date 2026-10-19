@@ -54,7 +54,6 @@ const EVENT_FIXED = 'An incentive cannot move to another Event. Copy it instead.
  * Event when exactly one exists.
  */
 async function validateIdentity(tx: Tx, data: Identity, required = false) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   if (required || data.title !== undefined) data.title = text(data.title, 'title');
   return channelEvent(tx, data.channel_id);
 }
@@ -160,8 +159,6 @@ export async function reverseAndDeactivate(
   actor: string,
 ) {
   return withWebhooks(async (tx, emit, publisher) => {
-    // Match the common Reversal lock before reading activation state.
-    await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
     if (kind === 'POLL_OPTION') {
       const refund = await refundPollOptionVotes(tx, id, actor, publisher);
       await tx.pollOption.update({ where: { id }, data: { status: 'REJECTED' } });
