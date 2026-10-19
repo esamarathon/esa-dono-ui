@@ -45,7 +45,7 @@
 -    await check(`${kind} direct wallet`, 'backend fulfillment', async () => { assert.equal(wallet.length, 1); assert.deepEqual(wallet[0]!.claim_data, data); assert.equal(await total(), raisedBefore, 'Wallet claim counted as new money'); });
 +    if (kind === 'PHYSICAL') {
 +      const stockBefore = (await api<Reward[]>('/rewards')).find(r => r.id === reward.id)!.quantity_claimed;
-+      const response = await fetch(`${backend}/rewards/${reward.id}/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${funding.token}` }, body: JSON.stringify({ quantity: 1, claim_data: data }), signal: AbortSignal.timeout(15000) });
++      const response = await fetch(`${backend}/rewards/${reward.id}/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${funding.token}` }, body: JSON.stringify({ channel_id: state.channelId, quantity: 1, claim_data: data }), signal: AbortSignal.timeout(15000) });
 +      await check(`${kind} direct wallet`, 'backend fulfillment', async () => {
 +        assert.equal(response.status, 400);
 +        assert.deepEqual(await response.json(), { error: 'Physical rewards require a cash-funded pledge through Stripe checkout' });
@@ -55,14 +55,34 @@
 +        assert.equal(await total(), raisedBefore);
 +      });
 +    } else {
-+      await api(`/rewards/${reward.id}/claim`, { quantity: 1, claim_data: data }, 'POST', funding.token);
++      await api(`/rewards/${reward.id}/claim`, { channel_id: state.channelId, quantity: 1, claim_data: data }, 'POST', funding.token);
 +      const wallet = (await allClaims()).filter(c => c.donor_id === funding.donor.id && c.reward_id === reward.id);
 +      await check(`${kind} direct wallet`, 'backend fulfillment', async () => { assert.equal(wallet.length, 1); assert.deepEqual(wallet[0]!.claim_data, data); assert.equal(await total(), raisedBefore, 'Wallet claim counted as new money'); });
 +    }
      walletCases.push(`${kind} direct wallet`);
    }
  }
-@@ -190,8 +209,8 @@
+@@ -159,9 +178,9 @@
+   await check('Auto-approved write-in', 'Kollekt donation selection', async () => { await until(async () => { const d = await kget<KDonation>(`/Donation/${custom.id}`); return !!d?.redeems.some(r => r.type === 'Poll Response' && r.value === label); }, 'Kollekt custom poll selection missing'); });
+ 
+   const funding = await fund('Wallet poll');
+-  await api(`/polls/${poll.id}/vote`, { poll_option_id: poll.options[0]!.id, amount_cents: 100 }, 'POST', funding.token);
++  await api(`/polls/${poll.id}/vote`, { channel_id: state.channelId, poll_option_id: poll.options[0]!.id, amount_cents: 100 }, 'POST', funding.token);
+   const walletLabel = `${prefix} wallet write-in`;
+-  await api(`/polls/${poll.id}/custom-entry`, { label: walletLabel, amount_cents: 100 }, 'POST', funding.token);
++  await api(`/polls/${poll.id}/custom-entry`, { channel_id: state.channelId, label: walletLabel, amount_cents: 100 }, 'POST', funding.token);
+   const walletOption = (await publicPoll(poll.id)).options.find(o => o.label === walletLabel); assert.ok(walletOption);
+   await check('Direct wallet poll votes/write-in', 'backend progress', async () => { assert.equal((await publicPoll(poll.id)).total_votes_cents, 500); });
+   pollsExpected.push({ label: 'Poll + approved/write-in + wallet votes', poll, amounts: new Map([[poll.options[0]!.id, 200], [customOption.id, 200], [walletOption.id, 100]]) });
+@@ -183,15 +202,15 @@
+   await check('Goal contribution', 'backend progress', async () => { assert.equal((await publicGoal(goal.id)).current_cents, 500); });
+   await check('Goal contribution', 'Kollekt donation selection', async () => { await until(async () => { const d = await kget<KDonation>(`/Donation/${donation.id}`); return !!d?.redeems.some(r => r.incentiveId === goal.id); }, 'Kollekt goal selection missing'); });
+   const wallet = await fund('Wallet goal');
+-  await api(`/goals/${goal.id}/contribute`, { amount_cents: 300 }, 'POST', wallet.token);
++  await api(`/goals/${goal.id}/contribute`, { channel_id: state.channelId, amount_cents: 300 }, 'POST', wallet.token);
+   await check('Direct wallet goal', 'backend progress', async () => { assert.equal((await publicGoal(goal.id)).current_cents, 800); });
+   goalsExpected.push({ label: 'Goal checkout + wallet contribution', goal, cents: 800 });
+ 
    const p1 = await makePoll('Multi poll A'), p2 = await makePoll('Multi poll B');
    const g1 = await makeGoal('Multi goal A'), g2 = await makeGoal('Multi goal B');
    const digital = rewardFixtures.find(f => f.reward.type === 'DIGITAL')!.reward;

@@ -130,6 +130,8 @@ reward1500, polls500+1000, goals643+857 (money1500, not category sum4500). The d
 staging caller uses the shared planner. Both settle through admin simulated intake,
 preserving optional pledge token and external id; neither claims Stripe Checkout or
 exact-Session coverage. Physical direct-Wallet claims must reject without side effects.
+Direct Wallet claims, votes, write-ins and goal contributions send the test Channel as
+`channel_id` (ADR-0012).
 The matrix requires a dedicated fresh sandbox; the staging probe has no live defaults.
 
 Historical correction replays retain donation ids, statuses, refund links and allocations.

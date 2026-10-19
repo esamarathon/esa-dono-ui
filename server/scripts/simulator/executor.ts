@@ -66,6 +66,12 @@ export class Executor {
     return id;
   }
 
+  /** Direct Wallet spends target one Channel (ADR-0012). Older logs have none; the server rejects them. */
+  private spendChannelId(entry: DecisionEntry): string | undefined {
+    const channelRef = entry.targetRef?.channelRef;
+    return channelRef ? this.ref(channelRef) : undefined;
+  }
+
   private async dispatch(
     entry: DecisionEntry,
   ): Promise<{ status: number; accepted: boolean; note?: string }> {
@@ -99,12 +105,14 @@ export class Executor {
 
       case 'CLAIM_REWARD':
         return this.spend(donorRef, `/api/rewards/${this.ref(entry.targetRef!.rewardRef!)}/claim`, {
+          channel_id: this.spendChannelId(entry),
           claim_data: {},
           quantity: p.quantity ?? 1,
         });
 
       case 'VOTE_POLL':
         return this.spend(donorRef, `/api/polls/${this.ref(entry.targetRef!.pollRef!)}/vote`, {
+          channel_id: this.spendChannelId(entry),
           poll_option_id: this.ref(entry.targetRef!.optionRef!),
           amount_cents: p.amountCents,
         });
@@ -114,6 +122,7 @@ export class Executor {
           donorRef,
           `/api/goals/${this.ref(entry.targetRef!.goalRef!)}/contribute`,
           {
+            channel_id: this.spendChannelId(entry),
             amount_cents: p.amountCents,
           },
         );

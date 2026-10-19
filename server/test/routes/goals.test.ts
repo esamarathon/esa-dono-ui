@@ -1,10 +1,10 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import goalsRouter from '../../routes/goals.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -30,7 +30,14 @@ async function makeDonor(balanceCents: number) {
 }
 
 describe('Goals routes', () => {
+  // Wallet spends target one Channel (ADR-0012); the fixtures are shared incentives of its Event.
+  let channelId = '';
+  beforeAll(async () => {
+    channelId = (await createTestChannel(prisma)).id;
+  });
+
   afterAll(async () => {
+    await prisma.channel.delete({ where: { id: channelId } });
     await prisma.$disconnect();
   });
 
@@ -71,7 +78,7 @@ describe('Goals routes', () => {
     const res = await request(createApp())
       .post(`/api/goals/${goal.id}/contribute`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ amount_cents: 100 });
+      .send({ channel_id: channelId, amount_cents: 100 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -90,7 +97,7 @@ describe('Goals routes', () => {
     const res = await request(createApp())
       .post(`/api/goals/${goal.id}/contribute`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ amount_cents: 100 });
+      .send({ channel_id: channelId, amount_cents: 100 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Insufficient balance');

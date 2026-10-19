@@ -33,6 +33,7 @@ Consumers, read at kollekt `b955b6d` (same lines on `master`) and esa-layouts-v2
    - A **shared incentive** has `channel_id = null`. It is available on every Channel of **its** Event, and only there.
    - An incentive never moves to another Event. To use it in a later Event, copy it.
 2. **Event scope applies everywhere.** Every check in Context §2 accepts a shared incentive only when its `event_id` equals the Event of the donation, pledge or Channel. A shared incentive of another Event is not available.
+   - Direct Wallet spends (`POST /api/rewards/:id/claim`, `/api/polls/:id/vote`, `/api/polls/:id/custom-entry`, `/api/goals/:id/contribute`) had no scope check. Like a pledge, each now requires an active `channel_id` and accepts only an incentive available on that Channel (`server/services/spend.ts`).
 3. **The owner is never null on the wire.** These changes are additive; existing fields keep their meaning.
    - Native `incentive.*` messages add `event_id` (never null). `channel_id` stays null for a shared incentive.
    - The ESA lookup routes return the owner as `campaign_id`: the Channel id for a Channel incentive, the **Event id** (team campaign) for a shared incentive. `campaigns/{id}` already resolves an Event id as a team campaign (ADR-0010 §2).

@@ -43,6 +43,12 @@ does not clear those gates or authorize deployment.
   changes nothing; `docs/deployment.md` § Migrations lists the query and the fix.
   Staff API creates of shared incentives need `event_id` when two or more Events
   exist. A Channel that owns incentives can no longer move to another Event.
+- **Breaking direct Wallet spend API change:** `POST /api/rewards/:id/claim`,
+  `/api/polls/:id/vote`, `/api/polls/:id/custom-entry` and `/api/goals/:id/contribute`
+  require `channel_id`, like a pledge. Without it they return 400; an unknown or
+  inactive Channel returns 404; an incentive not available on that Channel returns 400
+  with no Wallet debit. Update callers, including the parent test caller patch.
+  Simulator decision logs recorded before this change send no `channel_id`; regenerate them.
 
 ### Added
 
@@ -97,7 +103,8 @@ does not clear those gates or authorize deployment.
   then failed to re-seed it.
 - A shared incentive of one Event no longer appears on, or takes money from, another
   Event's Channels: pledges, fulfillment, Pool spend and credit, Unused pool targets,
-  Default goals, Tiltify lists/lookups and the donate page apply the Event (ADR-0012).
+  Default goals, Tiltify lists/lookups, the donate page and direct Wallet spends apply
+  the Event (ADR-0012).
 - Downstream consumers get an owner for shared incentives: native `incentive.*`
   messages add `event_id`, and ESA lookups return the Event as `campaign_id` instead
   of `null`.

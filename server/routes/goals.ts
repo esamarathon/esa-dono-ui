@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { donorAuth } from '../middleware/donorAuth.js';
 import { spendLimit } from '../middleware/rateLimit.js';
-import { contributeGoalTx } from '../services/spend.js';
+import { assertWalletSpendScopeTx, contributeGoalTx } from '../services/spend.js';
 
 const router = Router();
 
@@ -19,6 +19,7 @@ router.post('/:id/contribute', spendLimit, donorAuth, async (req: Request, res: 
   try {
     const { amount_cents } = req.body;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await assertWalletSpendScopeTx(tx, req.body.channel_id, 'goal', req.params.id!);
       await contributeGoalTx(tx, req.donor!.id, req.params.id!, Number(amount_cents));
     });
     res.json({ success: true });

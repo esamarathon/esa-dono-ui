@@ -1,10 +1,10 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import pollsRouter from '../../routes/polls.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, createTestChannel } from '../helpers/fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -30,7 +30,14 @@ async function makeDonor(balanceCents: number) {
 }
 
 describe('Polls routes', () => {
+  // Wallet spends target one Channel (ADR-0012); the fixtures are shared incentives of its Event.
+  let channelId = '';
+  beforeAll(async () => {
+    channelId = (await createTestChannel(prisma)).id;
+  });
+
   afterAll(async () => {
+    await prisma.channel.delete({ where: { id: channelId } });
     await prisma.$disconnect();
   });
 
@@ -64,7 +71,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/vote`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ poll_option_id: option.id, amount_cents: 100 });
+      .send({ channel_id: channelId, poll_option_id: option.id, amount_cents: 100 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -87,7 +94,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/vote`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ poll_option_id: option.id, amount_cents: 100 });
+      .send({ channel_id: channelId, poll_option_id: option.id, amount_cents: 100 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Insufficient balance');
@@ -111,7 +118,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/custom-entry`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ label: 'My idea', amount_cents: 100 });
+      .send({ channel_id: channelId, label: 'My idea', amount_cents: 100 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -140,7 +147,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/custom-entry`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ label: 'spamword', amount_cents: 100 });
+      .send({ channel_id: channelId, label: 'spamword', amount_cents: 100 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('blocked word');
