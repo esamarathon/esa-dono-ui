@@ -216,7 +216,7 @@ export function generate(opts: GenerateOptions): DecisionEntry[] {
         };
         break;
       case 'CLAIM_REWARD': {
-        const rewardRef = choose(catalog.rewards, (ref) => ref);
+        const rewardRef = choose(catalog.pledgeableRewards, (ref) => ref);
         targetRef = { rewardRef, channelRef: spendChannel(rewardRef) };
         params = { quantity: rewardQuantity(s.quantity) };
         break;
@@ -358,7 +358,7 @@ function trafficPhases(
 function availableSpends(catalog: Catalog): readonly (readonly [ActionType, number])[] {
   const has: Record<ActionType, boolean> = {
     DONATE: true,
-    CLAIM_REWARD: catalog.rewards.length > 0,
+    CLAIM_REWARD: catalog.pledgeableRewards.length > 0,
     VOTE_POLL: catalog.polls.some((p) => p.options.length > 0),
     CONTRIBUTE_GOAL: catalog.goals.length > 0,
     BID_AUCTION: catalog.auctions.length > 0,

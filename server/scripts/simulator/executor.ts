@@ -225,9 +225,10 @@ export class Executor {
   }
 
   /**
-   * Confirm the shared plan through /api/pledge, then read the actual pledge
-   * state. This simulator never completes Stripe or releases Wallet funding.
-   * HTTP success and a zero new-money estimate alone do not prove fulfillment.
+   * Confirm the shared plan through /api/pledge, pay any confirmed new money
+   * through admin intake (never Stripe), then read the actual pledge state.
+   * This simulator never releases Wallet funding. HTTP success and a zero
+   * new-money estimate alone do not prove fulfillment.
    */
   private async pledgeCheckout(
     donorRef: string,
@@ -306,9 +307,32 @@ export class Executor {
     });
     if (!res.ok) return { status: res.status, accepted: false };
 
-    const json = (await res.json()) as { pledge_token?: string };
+    const json = (await res.json()) as {
+      pledge_token?: string;
+      status?: string;
+      new_money_cents?: number;
+    };
     if (!json.pledge_token)
       return { status: res.status, accepted: false, note: 'pledge response has no token' };
+    // New money is paid through the admin intake boundary instead of Stripe,
+    // so the pledge becomes one donation with its incentive lines.
+    if (json.status === 'OPEN' && (json.new_money_cents ?? 0) > 0) {
+      const payment = await fetch(`${this.opts.baseUrl}/api/admin/simulate-donation`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer key_admin_${this.opts.adminKey}`,
+        },
+        body: JSON.stringify({
+          email: donorEmail(this.opts.runId, donorRef),
+          donor_name: params.displayName ?? donorRef,
+          amount_cents: json.new_money_cents,
+          pledge_token: json.pledge_token,
+        }),
+      });
+      if (!payment.ok)
+        return { status: payment.status, accepted: false, note: 'pledge payment failed' };
+    }
     const state = await fetch(`${this.opts.baseUrl}/api/pledge/${json.pledge_token}`);
     if (!state.ok) return { status: state.status, accepted: false };
     const pledge = (await state.json()) as { format?: string; status?: string };
@@ -318,7 +342,7 @@ export class Executor {
       accepted: fulfilled,
       note: fulfilled
         ? undefined
-        : 'pledge not fulfilled (no Stripe in sim); confirmed funding stays held until non-payment is reconciled',
+        : 'pledge not fulfilled; confirmed funding stays held until non-payment is reconciled',
     };
   }
 }

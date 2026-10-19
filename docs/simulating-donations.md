@@ -74,7 +74,7 @@ Key flags: `--seed` (int or string; the repro handle), `--events`/`--duration` (
 
 Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl` (observed server responses, keyed by `seq`), and `manifest.json` (seed, simVersion, args, git SHA) under `--out`.
 
-**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards remain excluded from pledges because the simulator does not complete Stripe payments. Wallet sufficiency is not guaranteed: cash-funded pending pledges and rejected spends remain useful outcomes.
+**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards are excluded from pledges and direct Wallet claims because they need a Stripe checkout. Wallet sufficiency is not guaranteed: rejected spends remain useful outcomes.
 
 **Pooled executor (#185):** it reads the actual `/api/donor` Wallet balance and live reward
 prices/types, computes the same pure shared plan as the server, and posts amount, plan
@@ -83,8 +83,11 @@ older logs without it use the smallest independent Pools that fit their selectio
 not the old cart sum. An empty selection set is a valid message-only pledge. Acceptance
 is checked by `GET /api/pledge/:token` (`POOLED` + `FULFILLED`), never by obsolete
 `total_cents`/discount fields or a zero-charge estimate. A 409 is logged for correction,
-not silently reconfirmed. The simulator does not complete Stripe or release Wallet
-holds; an OPEN pledge keeps held funding until checkout reconciliation proves non-payment.
+not silently reconfirmed. A pledge that needs new money is paid like Option C: the
+executor posts its confirmed `new_money_cents` and pledge token to `simulate-donation`,
+so it becomes one donation with its incentive lines. It never completes a Stripe
+payment, but `/api/pledge` still creates a Checkout Session when Stripe is configured.
+It never releases Wallet holds.
 Run only against an explicitly owned test/demo target. The complete release, coordinated
 callers and consumer acceptance are separate gates in `docs/deployment.md`; a simulator
 run is not Stripe, browser or combined-consumer runtime proof.
