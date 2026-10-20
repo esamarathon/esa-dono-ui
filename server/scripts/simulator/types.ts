@@ -76,8 +76,8 @@ export interface Catalog {
    * Non-physical reward refs only. PHYSICAL rewards always require a Stripe
    * checkout to collect a shipping address (never wallet-auto-fulfilled), and
    * this simulator never drives real Stripe checkouts — so a pledge cart
-   * containing one would just sit OPEN forever. Excluded from PLEDGE_CHECKOUT's
-   * reward pool (CLAIM_REWARD's plain wallet-claim pool is unaffected).
+   * containing one would just sit OPEN forever. A direct Wallet claim of one is
+   * always rejected. Both CLAIM_REWARD and PLEDGE_CHECKOUT draw from this pool.
    */
   pledgeableRewards: string[];
   /**

@@ -153,7 +153,7 @@ describe('simulator decision generation', () => {
     }
   });
 
-  it('falls back to donations when only empty polls or physical pledge rewards exist', () => {
+  it('falls back to donations when only empty polls or physical rewards exist', () => {
     const empty: Catalog = {
       ...catalog,
       rewards: [],
@@ -162,10 +162,19 @@ describe('simulator decision generation', () => {
       goals: [],
     };
     expect(generate({ ...options, catalog: empty }).every((e) => e.action === 'DONATE')).toBe(true);
+    // A physical reward always needs Stripe checkout: never a Wallet claim or pledge item.
     const physicalOnly: Catalog = { ...empty, rewards: ['r3'] };
-    const log = generate({ ...options, catalog: physicalOnly });
-    expect(log.some((e) => e.action === 'CLAIM_REWARD')).toBe(true);
-    expect(log.some((e) => e.action === 'PLEDGE_CHECKOUT')).toBe(false);
+    expect(
+      generate({ ...options, catalog: physicalOnly }).every((e) => e.action === 'DONATE'),
+    ).toBe(true);
+  });
+
+  it('claims only non-physical rewards directly', () => {
+    const claimed = generate(options)
+      .filter((e) => e.action === 'CLAIM_REWARD')
+      .map((e) => e.targetRef!.rewardRef);
+    expect(claimed.length).toBeGreaterThan(0);
+    expect(claimed.every((ref) => catalog.pledgeableRewards.includes(ref!))).toBe(true);
   });
 
   it('uses profile-specific activity levels and spend preferences', () => {

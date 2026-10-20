@@ -312,7 +312,7 @@ describe('Simulator Executor', () => {
     { format: 'LEGACY', status: 'FULFILLED' },
     { format: 'POOLED', status: 'CANCELLED' },
     { status: 'FULFILLED' },
-  ])('checks actual fulfillment state %j without completing Stripe', async (body) => {
+  ])('checks actual fulfillment state %j', async (body) => {
     await fund();
     preparePledge(body);
     const outcome = await executor.execute(pledge());
@@ -321,7 +321,41 @@ describe('Simulator Executor', () => {
       items: [{ kind: 'GOAL', target_id: 'goal-id', amount_cents: 500 }],
     });
     expect(outcome).toMatchObject({ status: 200, accepted: false });
-    expect(outcome.note).toContain('pledge not fulfilled (no Stripe in sim)');
+    expect(outcome.note).toContain('pledge not fulfilled');
+  });
+
+  it('pays a cash-funded pledge through admin intake, like a completed checkout', async () => {
+    await fund();
+    fetchMock.mockResolvedValueOnce(response({ balance_remaining: 0 }));
+    fetchMock.mockResolvedValueOnce(
+      response({ pledge_token: 'confirmed', status: 'OPEN', new_money_cents: 700 }),
+    );
+    fetchMock.mockResolvedValueOnce(response({ success: true }));
+    fetchMock.mockResolvedValueOnce(response({ format: 'POOLED', status: 'FULFILLED' }));
+    const outcome = await executor.execute(pledge());
+    const payment = fetchMock.mock.calls.find(
+      ([url]) => url === `${baseUrl}/api/admin/simulate-donation`,
+    )!;
+    expect(payment[1]?.headers).toMatchObject({ Authorization: 'Bearer key_admin_admin-secret' });
+    expect(JSON.parse(payment[1]?.body as string)).toEqual({
+      email: expect.stringContaining('donor1'),
+      donor_name: 'donor1',
+      amount_cents: 700,
+      pledge_token: 'confirmed',
+    });
+    expect(outcome).toMatchObject({ status: 200, accepted: true });
+  });
+
+  it('reports a failed pledge payment', async () => {
+    await fund();
+    fetchMock.mockResolvedValueOnce(response({ balance_remaining: 0 }));
+    fetchMock.mockResolvedValueOnce(
+      response({ pledge_token: 'confirmed', status: 'OPEN', new_money_cents: 700 }),
+    );
+    fetchMock.mockResolvedValueOnce(response({ error: 'Payment differs' }, 409));
+    const outcome = await executor.execute(pledge());
+    expect(outcome).toMatchObject({ status: 409, accepted: false });
+    expect(outcome.note).toContain('pledge payment failed');
   });
 
   const actions: DecisionEntry[] = [
