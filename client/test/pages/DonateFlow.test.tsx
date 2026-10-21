@@ -243,6 +243,19 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.queryByText(/Wallet credit returned/i)).not.toBeInTheDocument();
   });
 
+  it('shows the 500-character message limit in the label and a live counter (#150)', async () => {
+    renderAt();
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Pledge amount ($)' }), {
+      target: { value: '5' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /just donate/i }));
+    const message = await screen.findByRole('textbox', { name: 'Message' });
+    expect(message.closest('label')).toHaveTextContent('500 characters maximum');
+    expect(screen.getByText(/^0\/500/)).toBeInTheDocument();
+    fireEvent.change(message, { target: { value: 'GL HF' } });
+    expect(screen.getByText(/^5\/500/)).toBeInTheDocument();
+  });
+
   it('keeps empty poll review customer-facing without staff reservation details', async () => {
     save(saved({ amountCents: 5000 }));
     renderAt();
