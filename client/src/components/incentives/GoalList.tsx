@@ -29,6 +29,7 @@ export default function GoalList() {
   } = useDraftPledge();
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounce syncing an edited amount to an already-in-cart goal — see the
   // matching pattern in PollList for why.
@@ -38,6 +39,7 @@ export default function GoalList() {
     const timers = cartSyncTimers.current;
     return () => {
       Object.values(timers).forEach(clearTimeout);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
     };
   }, []);
 
@@ -73,7 +75,8 @@ export default function GoalList() {
       label: goal.title,
     });
     setFlashId(goal.id);
-    setTimeout(() => setFlashId((id) => (id === goal.id ? null : id)), 300);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId((id) => (id === goal.id ? null : id)), 300);
   };
 
   const syncCartAmount = (goal: Goal, value: string) => {
