@@ -1,8 +1,12 @@
 node_modules
+server/generated/
+server/prisma/postgresql/schema.prisma
 .env
 client/dist
 server/prisma/dev.db
 server/prisma/dev.db-journal
+server/prisma/dev.db-wal
+server/prisma/dev.db-shm
 coverage
 .claude
 .server-context

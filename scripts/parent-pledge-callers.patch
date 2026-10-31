@@ -1,0 +1,285 @@
+--- a/scripts/e2e-incentives.ts
++++ b/scripts/e2e-incentives.ts
+@@ -1,6 +1,6 @@
+ // Tests only: public HTTP APIs + Kollekt reads + NodeCG Replicants.
+-// Synthetic checkout.session.completed events exercise fulfillment, not Stripe
+-// Checkout, signature verification, shipping-address capture or OAuth login.
++// Admin simulated settled intake exercises pooled fulfillment, not Stripe
++// Checkout/session binding, signatures, shipping-address capture or OAuth login.
+ import assert from 'node:assert/strict';
+ import { randomUUID } from 'node:crypto';
+ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+@@ -92,13 +92,19 @@
+ 
+ async function purchase(label: string, items: unknown[], expectedCents: number): Promise<Donation> {
+   const email = `${prefix}-${randomUUID().slice(0, 6)}@example.test`;
+-  const pledge = await api<{ pledge_token: string; total_cents: number }>('/pledge', { email, display_name: `${prefix} ${label}`.slice(0, 60), channel_id: state.channelId, items });
+-  assert.equal(pledge.total_cents, expectedCents);
+-  const sessionId = `cs_test_incentives_${randomUUID()}`;
+-  await api('/webhooks/stripe', { type: 'checkout.session.completed', data: { object: {
+-    id: sessionId, amount_total: expectedCents, customer_details: { email, name: `${prefix} ${label}`.slice(0, 60) },
+-    metadata: { pledge_token: pledge.pledge_token }, total_details: { amount_shipping: 0 },
+-  } } });
++  const review = { email, display_name: `${prefix} ${label}`.slice(0, 60), channel_id: state.channelId,
++    pledge_amount_cents: expectedCents, draft_id: `${prefix}-${randomUUID()}`, items, plan: {} };
++  // Exercise the real corrected-review boundary; confirm its canonical plan, not duplicate planner math.
++  const corrected = await fetch(backend + '/pledge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(review), signal: AbortSignal.timeout(15000) });
++  assert.equal(corrected.status, 409);
++  const confirmation = await corrected.json() as { plan: unknown; items: unknown[] };
++  const pledge = await api<{ pledge_token: string; pledge_amount_cents: number; new_money_cents: number; wallet_applied_cents: number }>('/pledge', { ...review, ...confirmation });
++  assert.equal(pledge.pledge_amount_cents, expectedCents);
++  assert.equal(pledge.wallet_applied_cents, 0);
++  assert.equal(pledge.new_money_cents, expectedCents);
++  const sessionId = `${prefix}-settled-${randomUUID()}`;
++  await api('/admin/simulate-donation', { email, donor_name: review.display_name, amount_cents: pledge.new_money_cents,
++    pledge_token: pledge.pledge_token, channel_id: state.channelId, external_id: sessionId });
+   const after = await api<{ status: string }>(`/pledge/${pledge.pledge_token}`);
+   assert.equal(after.status, 'FULFILLED');
+   const donation = (await api<Donation[]>('/admin/donations')).find(d => d.external_id === sessionId);
+@@ -140,9 +146,22 @@
+ 
+     const funding = await fund(`${kind} wallet`);
+     const raisedBefore = await total();
+-    await api(`/rewards/${reward.id}/claim`, { quantity: 1, claim_data: data }, 'POST', funding.token);
+-    const wallet = (await allClaims()).filter(c => c.donor_id === funding.donor.id && c.reward_id === reward.id);
+-    await check(`${kind} direct wallet`, 'backend fulfillment', async () => { assert.equal(wallet.length, 1); assert.deepEqual(wallet[0]!.claim_data, data); assert.equal(await total(), raisedBefore, 'Wallet claim counted as new money'); });
++    if (kind === 'PHYSICAL') {
++      const stockBefore = (await api<Reward[]>('/rewards')).find(r => r.id === reward.id)!.quantity_claimed;
++      const response = await fetch(`${backend}/rewards/${reward.id}/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${funding.token}` }, body: JSON.stringify({ channel_id: state.channelId, quantity: 1, claim_data: data }), signal: AbortSignal.timeout(15000) });
++      await check(`${kind} direct wallet`, 'backend fulfillment', async () => {
++        assert.equal(response.status, 400);
++        assert.deepEqual(await response.json(), { error: 'Physical rewards require a cash-funded pledge through Stripe checkout' });
++        assert.equal((await allClaims()).filter(c => c.donor_id === funding.donor.id).length, 0);
++        assert.equal((await api<{ balance_remaining: number }>('/donor', undefined, 'GET', funding.token)).balance_remaining, 2000);
++        assert.equal((await api<Reward[]>('/rewards')).find(r => r.id === reward.id)!.quantity_claimed, stockBefore);
++        assert.equal(await total(), raisedBefore);
++      });
++    } else {
++      await api(`/rewards/${reward.id}/claim`, { channel_id: state.channelId, quantity: 1, claim_data: data }, 'POST', funding.token);
++      const wallet = (await allClaims()).filter(c => c.donor_id === funding.donor.id && c.reward_id === reward.id);
++      await check(`${kind} direct wallet`, 'backend fulfillment', async () => { assert.equal(wallet.length, 1); assert.deepEqual(wallet[0]!.claim_data, data); assert.equal(await total(), raisedBefore, 'Wallet claim counted as new money'); });
++    }
+     walletCases.push(`${kind} direct wallet`);
+   }
+ }
+@@ -159,9 +178,9 @@
+   await check('Auto-approved write-in', 'Kollekt donation selection', async () => { await until(async () => { const d = await kget<KDonation>(`/Donation/${custom.id}`); return !!d?.redeems.some(r => r.type === 'Poll Response' && r.value === label); }, 'Kollekt custom poll selection missing'); });
+ 
+   const funding = await fund('Wallet poll');
+-  await api(`/polls/${poll.id}/vote`, { poll_option_id: poll.options[0]!.id, amount_cents: 100 }, 'POST', funding.token);
++  await api(`/polls/${poll.id}/vote`, { channel_id: state.channelId, poll_option_id: poll.options[0]!.id, amount_cents: 100 }, 'POST', funding.token);
+   const walletLabel = `${prefix} wallet write-in`;
+-  await api(`/polls/${poll.id}/custom-entry`, { label: walletLabel, amount_cents: 100 }, 'POST', funding.token);
++  await api(`/polls/${poll.id}/custom-entry`, { channel_id: state.channelId, label: walletLabel, amount_cents: 100 }, 'POST', funding.token);
+   const walletOption = (await publicPoll(poll.id)).options.find(o => o.label === walletLabel); assert.ok(walletOption);
+   await check('Direct wallet poll votes/write-in', 'backend progress', async () => { assert.equal((await publicPoll(poll.id)).total_votes_cents, 500); });
+   pollsExpected.push({ label: 'Poll + approved/write-in + wallet votes', poll, amounts: new Map([[poll.options[0]!.id, 200], [customOption.id, 200], [walletOption.id, 100]]) });
+@@ -183,15 +202,15 @@
+   await check('Goal contribution', 'backend progress', async () => { assert.equal((await publicGoal(goal.id)).current_cents, 500); });
+   await check('Goal contribution', 'Kollekt donation selection', async () => { await until(async () => { const d = await kget<KDonation>(`/Donation/${donation.id}`); return !!d?.redeems.some(r => r.incentiveId === goal.id); }, 'Kollekt goal selection missing'); });
+   const wallet = await fund('Wallet goal');
+-  await api(`/goals/${goal.id}/contribute`, { amount_cents: 300 }, 'POST', wallet.token);
++  await api(`/goals/${goal.id}/contribute`, { channel_id: state.channelId, amount_cents: 300 }, 'POST', wallet.token);
+   await check('Direct wallet goal', 'backend progress', async () => { assert.equal((await publicGoal(goal.id)).current_cents, 800); });
+   goalsExpected.push({ label: 'Goal checkout + wallet contribution', goal, cents: 800 });
+ 
+   const p1 = await makePoll('Multi poll A'), p2 = await makePoll('Multi poll B');
+   const g1 = await makeGoal('Multi goal A'), g2 = await makeGoal('Multi goal B');
+   const digital = rewardFixtures.find(f => f.reward.type === 'DIGITAL')!.reward;
+-  const mixed = await purchase('Mixed cart', [{ kind: 'REWARD', target_id: digital.id, quantity: 3 }, voteItem(p1, 100), voteItem(p2, 200), goalItem(g1, 300), goalItem(g2, 400)], 2500);
+-  await check('Mixed cart', 'backend all items', async () => { assert.equal((await allClaims()).filter(c => c.donation_id === mixed.id).length, 3); assert.equal((await publicPoll(p1.id)).total_votes_cents, 100); assert.equal((await publicPoll(p2.id)).total_votes_cents, 200); assert.equal((await publicGoal(g1.id)).current_cents, 300); assert.equal((await publicGoal(g2.id)).current_cents, 400); });
++  const mixed = await purchase('Mixed cart', [{ kind: 'REWARD', target_id: digital.id, quantity: 3 }, voteItem(p1, 100), voteItem(p2, 200), goalItem(g1, 300), goalItem(g2, 400)], 1500);
++  await check('Mixed cart', 'backend all items', async () => { assert.equal((await allClaims()).filter(c => c.donation_id === mixed.id).length, 3); assert.equal(mixed.amount_cents, 1500); assert.equal((await publicPoll(p1.id)).total_votes_cents, 500); assert.equal((await publicPoll(p2.id)).total_votes_cents, 1000); assert.equal((await publicGoal(g1.id)).current_cents, 643); assert.equal((await publicGoal(g2.id)).current_cents, 857); });
+   // Syncing poll/target metadata can save a partial donation before the final
+   // redeem list. Existence alone is not a completion barrier for ingestion.
+   await until(async () => { const row = await kget<KDonation>(`/Donation/${mixed.id}`); return row?.redeems.filter(r => r.type === 'Reward').length === 3; }, 'Mixed reward units missing after ingestion');
+@@ -199,7 +218,7 @@
+   await check('Mixed cart', 'Kollekt all reward units', async () => { assert.equal(d.redeems.filter(r => r.type === 'Reward').length, 3); });
+   await check('Mixed cart', 'Kollekt all poll selections', async () => { assert.ok([p1.id, p2.id].every(id => d.redeems.some(r => r.type === 'Poll Response' && r.incentiveId === id)), 'Only the first scalar poll selection reached Kollekt'); });
+   await check('Mixed cart', 'Kollekt all goal selections', async () => { assert.ok([g1.id, g2.id].every(id => d.redeems.some(r => r.type === 'Contributed to target' && r.incentiveId === id)), 'Only the first scalar goal selection reached Kollekt'); });
+-  await check('Mixed cart', 'Kollekt target allocation amounts', async () => { assert.ok(d.redeems.some(r => r.incentiveId === g1.id && r.value === '3.00 USD')); assert.ok(d.redeems.some(r => r.incentiveId === g2.id && r.value === '4.00 USD')); });
++  await check('Mixed cart', 'Kollekt target allocation amounts', async () => { assert.ok(d.redeems.some(r => r.incentiveId === g1.id && r.value === '6.43 USD')); assert.ok(d.redeems.some(r => r.incentiveId === g2.id && r.value === '8.57 USD')); });
+   // A unique fixture tag lets browser views select this one donation without
+   // marking other donations read or relying on the live unread queue's order.
+   const tagSlug = `it-${runId}`;
+@@ -210,8 +229,8 @@
+   const tagged = await fetch(`${kollekt}/Donation/${mixed.id}/_addTags`, { method: 'PATCH', headers, body: JSON.stringify([tagSlug]), signal: AbortSignal.timeout(15000) });
+   assert.ok(tagged.ok);
+   mixedFixture = { donationId: mixed.id, donor: mixed.donor_name, tagSlug, tagName, rewards: 3, pollNames: [p1.title, p2.title], goalNames: [g1.title, g2.title] };
+-  pollsExpected.push({ label: 'Multi poll A', poll: p1, amounts: new Map([[p1.options[0]!.id, 100]]) }, { label: 'Multi poll B', poll: p2, amounts: new Map([[p2.options[0]!.id, 200]]) });
+-  goalsExpected.push({ label: 'Multi goal A', goal: g1, cents: 300 }, { label: 'Multi goal B', goal: g2, cents: 400 });
++  pollsExpected.push({ label: 'Multi poll A', poll: p1, amounts: new Map([[p1.options[0]!.id, 500]]) }, { label: 'Multi poll B', poll: p2, amounts: new Map([[p2.options[0]!.id, 1000]]) });
++  goalsExpected.push({ label: 'Multi goal A', goal: g1, cents: 643 }, { label: 'Multi goal B', goal: g2, cents: 857 });
+ }
+ async function observe() {
+   // REST progress refresh is throttled and may take a full minute. Await the
+@@ -252,7 +271,7 @@
+   }
+   const report = {
+     runId, prefix, generatedAt: new Date().toISOString(), scope: 'Regression coverage; overlay targets/polls, Kollekt fulfillment for new-payment checkouts; simulated payments; auctions excluded',
+-    exclusions: ['Auctions (not used)', 'Real Stripe Checkout', 'Shipping-address capture', 'Stripe signature verification', 'OAuth identity verification'],
++    exclusions: ['Cold cross-Channel Kollekt hydration (explicit HOLD; not exercised or prewarmed)', 'Auctions (not used)', 'Real Stripe Checkout/session binding', 'Shipping-address capture', 'Stripe signature verification', 'OAuth identity verification'],
+     checks, fixtures: { rewards: rewardFixtures.map(f => ({ id: f.reward.id, title: f.reward.title, type: f.reward.type, checkoutQuantity: f.quantity })), polls: pollsExpected.map(p => ({ id: p.poll.id, title: p.poll.title, expectedOptions: [...p.amounts].map(([id, cents]) => ({ id, cents })) })), goals: goalsExpected.map(g => ({ id: g.goal.id, title: g.goal.title, expectedCents: g.cents, targetCents: 10000 })), mixed: mixedFixture },
+     summary: Object.fromEntries(['PASS', 'FAIL', 'BLOCKED', 'N/A'].map(status => [status, checks.filter(c => c.status === status).length])),
+   };
+--- a/scripts/test-incentives.sh
++++ b/scripts/test-incentives.sh
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ # Run the full incentive coverage matrix against the running local E2E stack.
+ # Optional --browser also captures real UI evidence, even if API checks fail.
+-# Uses synthetic payment webhooks, never Stripe Checkout or a database reset.
++# Uses admin simulated settled intake, never Stripe Checkout or a database reset.
+ # Exit 1 means at least one unsupported/failing/blocked path; see the report at
+ # /bundles/esa-layouts-v2/shared/test-reports/latest.html on the overlay host.
+ # Reward fulfillment is tested in Kollekt; overlay scope is incentive progress.
+@@ -12,17 +12,21 @@
+ # shellcheck source=e2e-common.sh
+ source "$(dirname "${BASH_SOURCE[0]}")/e2e-common.sh"
+ [[ "$E2E_WITH_KOLLEKT" == 1 ]] || { echo 'Start the stack with --with-kollekt first' >&2; exit 1; }
++[[ "$E2E_PROJECT" == esa-e2e-* && -z "${E2E_EXISTING_OVERLAY:-}" ]] || { echo 'Requires an explicit dedicated esa-e2e-* project with a fresh overlay' >&2; exit 1; }
+ e2e_prepare_engine
+ backend="$("${E2E_COMPOSE[@]}" ps -q dono-backend)"
+ [[ -n "$backend" ]] || { echo 'E2E backend is not running' >&2; exit 1; }
+ label="$("$E2E_ENGINE" inspect "$backend" --format '{{index .Config.Labels "com.docker.compose.project"}}')"
+ [[ "$label" == "$E2E_PROJECT" ]] || { echo 'Wrong backend project; refusing synthetic payment injection' >&2; exit 1; }
+ "$E2E_ENGINE" exec "$backend" node -e '
+-  if (process.env.STRIPE_SECRET_KEY || process.env.STRIPE_WEBHOOK_SECRET || process.env.SMTP_HOST) {
++  if (process.env.STRIPE_SECRET_KEY || process.env.STRIPE_WEBHOOK_SECRET || process.env.SMTP_HOST || process.env.GOOGLE_CLIENT_ID || process.env.DISCORD_CLIENT_ID || process.env.TWITCH_CLIENT_ID) {
+     console.error("Stripe and SMTP must be disabled for this matrix"); process.exit(1);
+   }
+   if (process.env.DATABASE_URL !== "file:/data/dono.db") process.exit(1);
+ '
++overlay="$(e2e_overlay_container)"
++label="$("$E2E_ENGINE" inspect "$overlay" --format '{{index .Config.Labels "com.docker.compose.project"}}')"
++[[ "$label" == "$E2E_PROJECT" ]] || { echo 'Wrong overlay project; refusing fixtures' >&2; exit 1; }
+ e2e_wait_overlay
+ status=0
+ e2e_node_script e2e-incentives.ts || status=$?
+--- a/staging/incentive-test.py
++++ b/staging/incentive-test.py
+@@ -1,13 +1,35 @@
+ #!/usr/bin/env python3
+ """Verify list ingestion and target progress without creating Stripe checkout."""
++import argparse
+ import json
++import re
+ import subprocess
+ 
++parser = argparse.ArgumentParser(description='Sandbox-only simulated settled intake; no Stripe Checkout/session binding.')
++parser.add_argument('--engine', choices=['podman', 'docker'], required=True)
++parser.add_argument('--sandbox-project', required=True)
++parser.add_argument('--backend', required=True)
++parser.add_argument('--overlay', required=True)
++parser.add_argument('--channel-slug', required=True)
++args = parser.parse_args()
++if not re.fullmatch(r'esa-e2e-[a-z0-9_-]+', args.sandbox_project):
++    parser.error('Use a dedicated esa-e2e-* sandbox project, never staging/live defaults')
++for container in [args.backend, args.overlay]:
++    info = json.loads(subprocess.check_output([args.engine, 'inspect', container]))[0]
++    if info['Config']['Labels'].get('com.docker.compose.project') != args.sandbox_project:
++        parser.error('Container does not belong to the explicit sandbox project')
++backend = json.loads(subprocess.check_output([args.engine, 'inspect', args.backend]))[0]
++env = dict(entry.split('=', 1) for entry in backend['Config']['Env'] if '=' in entry)
++if any(env.get(k) for k in ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'SMTP_HOST', 'GOOGLE_CLIENT_ID', 'DISCORD_CLIENT_ID', 'TWITCH_CLIENT_ID']):
++    parser.error('Stripe/SMTP/OAuth must be disabled')
++if env.get('DATABASE_URL') != 'file:/data/dono.db':
++    parser.error('Expected the sandbox volume database')
++
+ fixture = r'''
+-Promise.all([import('./services/pledge.ts'), import('./lib/prisma.ts')]).then(async ([service, database]) => {
++Promise.all([import('./services/pledge.ts'), import('./lib/prisma.ts'), import('@dono/shared')]).then(async ([service, database, shared]) => {
+  const prisma = database.default;
+  try {
+-  const channel = await prisma.channel.findFirstOrThrow({ where: { slug: 'main-marathon', is_active: true } });
++  const channel = await prisma.channel.findFirstOrThrow({ where: { slug: process.env.INCENTIVE_CHANNEL_SLUG, is_active: true } });
+   const polls = (await prisma.poll.findMany({ where: { is_active: true }, include: { options: true } }))
+    .filter(p => (!p.channel_id || p.channel_id === channel.id) && (!p.ends_at || p.ends_at > new Date()) && p.options.some(o => o.status === 'ACTIVE')).slice(0,2);
+   const goals = (await prisma.fundGoal.findMany({ where: { is_active: true, is_complete: false } }))
+@@ -18,18 +40,21 @@
+   const items = polls.map(p => ({ kind: 'POLL_VOTE', poll_id: p.id, target_id: p.options.find(o => o.status === 'ACTIVE').id, amount_cents: 100 }))
+    .concat(goals.map((g,i) => ({ kind: 'GOAL', target_id: g.id, amount_cents: i === 0 ? 300 : 400 })));
+   // createPledge only validates/persists; createCheckoutForPledge is deliberately not called.
++  const selections = items.map((item, insertion_order) => ({ ...item, insertion_order }));
++  const plan = shared.planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null });
++  // Independent literal oracle: polls 500/500, goals 429/571; new money is 1000, NOT 900 or 3000.
++  if (plan.new_money_cents !== 1000 || JSON.stringify(plan.top_up_rows.map(r => r.amount_cents)) !== '[400,400,129,171]') throw Error('Unexpected pooled plan');
+   const pledge = await service.createPledge({ channel_id: channel.id, email, display_name: name,
+-   comment: 'One donation with two polls and two targets.', items });
++   pledge_amount_cents: 1000, draft_id: 'sandbox-' + crypto.randomUUID(), plan,
++   comment: 'One donation with two independent Pools.', items: selections });
+   process.stdout.write(JSON.stringify({ pledge, email, name, channelId: channel.id,
+-   pollIds: polls.map(p => p.id), goals: goals.map((g,i) => ({ id: g.id, expectedRaised: (g.current_cents + (i === 0 ? 300 : 400))/100 })) }));
++   pollIds: polls.map(p => p.id), goals: goals.map((g,i) => ({ id: g.id, expectedRaised: (g.current_cents + (i === 0 ? 429 : 571))/100 })) }));
+  } finally { await prisma.$disconnect(); }
+ }).catch(error => { console.error(error.message); process.exitCode = 1; });
+ '''
+-r = subprocess.run(['docker', 'exec', '-w', '/app/server', 'esa-dono-ui-dono-backend-1',
++r = subprocess.run([args.engine, 'exec', '-e', 'INCENTIVE_CHANNEL_SLUG=' + args.channel_slug, '-w', '/app/server', args.backend,
+                     '/app/node_modules/.bin/tsx', '--eval', fixture], capture_output=True, text=True, check=True, timeout=60)
+ data = json.loads(r.stdout)
+-backend = json.loads(subprocess.check_output(['docker', 'inspect', 'esa-dono-ui-dono-backend-1']))[0]
+-env = dict(entry.split('=', 1) for entry in backend['Config']['Env'] if '=' in entry)
+ data['adminKey'] = env['ADMIN_API_KEY']
+ probe = r'''
+ const fs=require('fs'), assert=require('assert/strict'), {randomUUID}=require('crypto');
+@@ -43,7 +68,7 @@
+   await new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('connect_error',reject);});
+   const result=await fetch('http://dono-backend:3001/api/admin/simulate-donation',{
+    method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer key_admin_'+input.adminKey},
+-   body:JSON.stringify({email:input.email,donor_name:input.name,amount_cents:input.pledge.total_cents,
++   body:JSON.stringify({email:input.email,donor_name:input.name,amount_cents:input.pledge.new_money_cents,
+     pledge_token:input.pledge.pledge_token,channel_id:input.channelId,external_id:'staging-incentive-lists-'+randomUUID()})
+   });
+   assert.equal(result.status,200);
+@@ -75,5 +100,5 @@
+  }
+ })().catch(error=>{console.error(error.message);process.exitCode=1;});
+ '''
+-raise SystemExit(subprocess.run(['docker', 'exec', '-i', 'esa-consumers-staging-overlay-1', 'node', '-e', probe],
++raise SystemExit(subprocess.run([args.engine, 'exec', '-i', args.overlay, 'node', '-e', probe],
+                                input=json.dumps(data), text=True, timeout=160).returncode)
+--- a/scripts/e2e-incentives-browser.ts
++++ b/scripts/e2e-incentives-browser.ts
+@@ -103,15 +103,20 @@ async function main() {
+       const items = label === 'donations' ? donation.locator('.donation-redeem') : donation.locator('.flex-fill');
+       assert.equal(await items.count(), mixed.rewards + mixed.pollNames.length + mixed.goalNames.length);
+       for (const name of [...mixed.pollNames, ...mixed.goalNames]) assert.ok((await donation.innerText()).includes(name));
+-      assert.ok((await donation.innerText()).includes('3.00 USD'));
+-      assert.ok((await donation.innerText()).includes('4.00 USD'));
++      for (const name of mixed.goalNames) {
++        const goal = report.fixtures.goals.find(goal => goal.title === name);
++        assert.ok(goal, `Missing expected goal fixture: ${name}`);
++        const row = items.filter({ hasText: name });
++        assert.equal(await row.count(), 1, `Expected one received goal: ${name}`);
++        assert.ok((await row.innerText()).includes(`${(goal.expectedCents / 100).toFixed(2)} USD`), `Wrong received amount for ${name}`);
++      }
+       if (label !== 'donations') {
+         for (const name of [...mixed.pollNames, ...mixed.goalNames]) await page!.getByRole('heading', { name, exact: true }).waitFor({ state: 'visible', timeout: 10000 });
+       }
+     });
+     await page.screenshot({ path: `/results/screenshots/kollekt-${label}.png`, fullPage: true });
+     if (label === 'prompter') {
+-      for (const width of [1024, 768, 1500]) await check(`Prompter containment at ${width}px`, async () => {
++      for (const width of [1024, 1500]) await check(`Prompter containment at ${width}px`, async () => {
+         await page!.setViewportSize({ width, height: 600 });
+         const bounds = await page!.evaluate(() => {
+           const outer = document.querySelector('.page')!;
+@@ -127,6 +132,8 @@ async function main() {
+             itemsOutsideCard: [...card.querySelectorAll('.flex-fill')].filter(el => { const r = rectangle(el); return r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1; }).length,
+           };
+         });
++        assert.equal(bounds.outer.width, 1024, 'Prompter hardware canvas width must stay fixed');
++        assert.equal(bounds.outer.height, 600, 'Prompter hardware canvas height must stay fixed');
+         assert.ok(bounds.outer.right <= bounds.viewport + 1, 'Prompter canvas extends beyond viewport width');
+         assert.ok(bounds.scrollWidth <= bounds.clientWidth + 1, 'Prompter has horizontal overflow');
+         assert.ok(bounds.scrollHeight <= bounds.clientHeight + 1, `Content bleeds outside canvas: ${bounds.scrollHeight}px content in ${bounds.clientHeight}px box`);
+@@ -264,7 +271,7 @@ finally {
+   await browser?.close();
+   const output = { runId: report.runId, generatedAt: new Date().toISOString(), results, pageErrors: errors };
+   writeFileSync('/results/browser-results.json', JSON.stringify(output, null, 2));
+-  const shots = ['prompter-navigation.png', 'prompter-last-donation.png', 'kollekt-donations.png', 'kollekt-reader.png', 'kollekt-prompter.png', 'kollekt-rewards.png', 'kollekt-polls.png', 'kollekt-goals.png', ...[1024, 768, 1500].map(w => `prompter-layout-${w}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered poll:') && r.status === 'PASS').map((_, i) => `overlay-poll-${i + 1}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered target:') && r.status === 'PASS').map((_, i) => `overlay-target-${i + 1}.png`), 'overlay-final.png'].filter(s => existsSync(`/results/screenshots/${s}`));
++  const shots = ['prompter-navigation.png', 'prompter-last-donation.png', 'kollekt-donations.png', 'kollekt-reader.png', 'kollekt-prompter.png', 'kollekt-rewards.png', 'kollekt-polls.png', 'kollekt-goals.png', ...[1024, 1500].map(w => `prompter-layout-${w}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered poll:') && r.status === 'PASS').map((_, i) => `overlay-poll-${i + 1}.png`), ...results.filter(r => r.case.startsWith('Overlay rendered target:') && r.status === 'PASS').map((_, i) => `overlay-target-${i + 1}.png`), 'overlay-final.png'].filter(s => existsSync(`/results/screenshots/${s}`));
+   writeFileSync('/results/index.html', `<!doctype html><html><head><meta charset="utf-8"><title>Incentive browser evidence</title><style>body{font:16px system-ui;margin:2rem}img{max-width:100%}.FAIL{color:#a00}.PASS{color:#080}.BLOCKED{color:#a60}</style></head><body><h1>Browser evidence: ${escape(report.prefix)}</h1><p>Read-only views. No Replicant injection or fulfillment status changes.</p>${results.map(r => `<p class="${r.status}"><b>${r.status}</b> ${escape(r.case)}: ${escape(r.detail)}</p>`).join('')}${shots.map(s => `<h2>${s}</h2><a href="screenshots/${s}"><img src="screenshots/${s}" loading="lazy"></a>`).join('')}</body></html>`);
+   process.exitCode = results.some(r => r.status === 'FAIL') ? 1 : 0;
+ }

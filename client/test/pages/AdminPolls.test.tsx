@@ -5,12 +5,14 @@ const mocks = vi.hoisted(() => ({
   adminClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   refundPollOption: vi.fn(),
   refundGoal: vi.fn(),
+  getReversalPreview: vi.fn(),
 }));
 
 vi.mock('../../src/api/admin', () => ({
   default: mocks.adminClient,
   refundPollOption: mocks.refundPollOption,
   refundGoal: mocks.refundGoal,
+  getReversalPreview: mocks.getReversalPreview,
 }));
 
 import AdminPolls from '../../src/pages/admin/AdminPolls';
@@ -87,6 +89,26 @@ describe('AdminPolls', () => {
         label: 'Runner B',
       }),
     );
+  });
+
+  it('keeps each poll its own new-option text (#149)', async () => {
+    const other = { ...poll, id: 'p2', title: 'Best Category', options: [] };
+    mocks.adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/polls' ? [poll, other] : [] }),
+    );
+    mocks.adminClient.post.mockResolvedValue({ data: { id: 'o2' } });
+    render(<AdminPolls />);
+    await screen.findByText('Best Category');
+    const [first, second] = screen.getAllByPlaceholderText('New option...');
+    fireEvent.change(first!, { target: { value: 'Runner B' } });
+    expect(second).toHaveValue('');
+    fireEvent.change(second!, { target: { value: 'Any%' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'add' })[1]!);
+    await waitFor(() =>
+      expect(mocks.adminClient.post).toHaveBeenCalledWith('/polls/p2/options', { label: 'Any%' }),
+    );
+    await waitFor(() => expect(second).toHaveValue(''));
+    expect(first).toHaveValue('Runner B');
   });
 
   it('starts editing a poll option inline', async () => {

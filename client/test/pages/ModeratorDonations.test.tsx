@@ -43,13 +43,15 @@ describe('ModeratorDonations', () => {
     expect(screen.getByText('UNMODERATED')).toBeInTheDocument();
   });
 
-  it('shows what the donor selected/pledged toward, human-readable (#58)', async () => {
+  it('shows live source-tagged allocations, not obsolete pledge choices or additional contributions', async () => {
     const donationWithPledge = {
       ...donation,
-      pledge_items: [
-        { kind: 'REWARD', label: 'T-shirt', amount_cents: 500 },
-        { kind: 'POLL_VOTE', label: 'Best Runner: Runner A', amount_cents: 400 },
-      ],
+      pledge_amount_cents: 1000,
+      allocations: {
+        reward: [{ id: 'c1', label: 'T-shirt', amount_cents: 500, source: 'donor' }],
+        poll: [{ id: 'v1', label: 'Best Runner: Runner A', amount_cents: 400, source: 'auto' }],
+        goal: [],
+      },
       top_up_cents: 1000,
     };
     moderatorClient.get.mockImplementation((path: string) =>
@@ -64,7 +66,8 @@ describe('ModeratorDonations', () => {
 
     expect(await screen.findByText(/T-shirt/)).toBeInTheDocument();
     expect(screen.getByText(/Best Runner: Runner A/)).toBeInTheDocument();
-    expect(screen.getByText(/additional contribution/)).toBeInTheDocument();
+    expect(screen.queryByText(/additional contribution/)).not.toBeInTheDocument();
+    expect(screen.getByText('auto')).toBeInTheDocument();
     expect(screen.getByText(/\$10\.00/)).toBeInTheDocument();
   });
 

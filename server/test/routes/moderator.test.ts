@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import moderatorRouter from '../../routes/moderator.js';
 import { proposeCustomEntryTx } from '../../services/spend.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -52,6 +57,7 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     const donor = await makeDonorWithBalance(1000);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Approve me',
         is_active: true,
         allow_custom_entries: true,
@@ -88,13 +94,14 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 
   it('REJECTED: refunds balance, reverses the vote, marks option REJECTED, writes a BalanceAdjustment', async () => {
     const { token: modToken } = await makeModerator();
     const donor = await makeDonorWithBalance(1000);
     const poll = await prisma.poll.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Reject me',
         is_active: true,
         allow_custom_entries: true,
@@ -145,13 +152,18 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 
   it('rejects moderating an already-decided entry', async () => {
     const { token: modToken } = await makeModerator();
     const donor = await makeDonorWithBalance(1000);
     const poll = await prisma.poll.create({
-      data: { title: 'Already done', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Already done',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
 
     const { entry } = await prisma.$transaction((tx) =>
@@ -171,7 +183,7 @@ describe('Moderator custom-entry approve/reject money movement', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.deleteMany({ where: { magic_token: modToken } });
-  }, 10000);
+  });
 });
 
 describe('Moderator access control', () => {
@@ -285,13 +297,23 @@ describe('Moderator donations', () => {
     const donor = await makeDonorWithBalance(1000);
 
     const reward = await prisma.reward.create({
-      data: { title: 'Signed Poster', type: 'PHYSICAL', cost_cents: 500 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Signed Poster',
+        type: 'PHYSICAL',
+        cost_cents: 500,
+      },
     });
     const goal = await prisma.fundGoal.create({
-      data: { title: 'New PC Fund', target_cents: 100000 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'New PC Fund', target_cents: 100000 },
     });
     const poll = await prisma.poll.create({
-      data: { title: 'Best Runner', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Best Runner',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
     const option = await prisma.pollOption.create({
       data: { poll_id: poll.id, label: 'Runner A' },
@@ -376,7 +398,7 @@ describe('Moderator donations', () => {
     const donor = await makeDonorWithBalance(1000);
 
     const reward = await prisma.reward.create({
-      data: { title: 'Sticker Pack', type: 'DIGITAL', cost_cents: 500 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Sticker Pack', type: 'DIGITAL', cost_cents: 500 },
     });
     const donation = await prisma.donation.create({
       data: {
@@ -501,6 +523,7 @@ describe('Moderator reward deletion', () => {
   async function makeReward() {
     return prisma.reward.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: `Reward ${Date.now()}-${Math.random()}`,
         type: 'DIGITAL',
         cost_cents: 500,

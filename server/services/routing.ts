@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { publishRoutedDonation, withWebhooks } from './webhooks/outbox.js';
+import { withWebhooks } from './webhooks/outbox.js';
 
 /** Where a donation is routed. Both null = unassigned (PRD-0002 §E5, §E6). */
 export interface DonationRoute {
@@ -60,18 +60,21 @@ export async function resolveDonationRoute(
  */
 export async function assignDonationChannel(donationId: string, channelId: unknown) {
   if (typeof channelId !== 'string' || !channelId) throw httpError(400, 'channel_id is required');
-  return withWebhooks(async (tx, emit, tiltify) => {
+  return withWebhooks(async (tx, _emit, publisher) => {
+    if (await tx.paymentRefund.count({ where: { donation_id: donationId, status: 'REQUESTED' } }))
+      throw httpError(409, 'A Payment refund is requested for this donation');
     const donation = await tx.donation.findUnique({ where: { id: donationId } });
     if (!donation) throw httpError(404, 'Donation not found');
     if (donation.channel_id || donation.event_id) {
       throw httpError(409, 'Donation is already assigned');
     }
+    const before = await publisher.snapshot(donationId);
     const route = await resolveDonationRoute(tx, { channelId });
     const updated = await tx.donation.update({
       where: { id: donationId },
       data: { channel_id: route.channelId, event_id: route.eventId },
     });
-    await publishRoutedDonation(emit, tiltify, updated);
+    await publisher.publish(donationId, before);
     return updated;
   });
 }

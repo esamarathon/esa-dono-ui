@@ -76,16 +76,14 @@ export interface Catalog {
    * Non-physical reward refs only. PHYSICAL rewards always require a Stripe
    * checkout to collect a shipping address (never wallet-auto-fulfilled), and
    * this simulator never drives real Stripe checkouts — so a pledge cart
-   * containing one would just sit OPEN forever. Excluded from PLEDGE_CHECKOUT's
-   * reward pool (CLAIM_REWARD's plain wallet-claim pool is unaffected).
+   * containing one would just sit OPEN forever. A direct Wallet claim of one is
+   * always rejected. Both CLAIM_REWARD and PLEDGE_CHECKOUT draw from this pool.
    */
   pledgeableRewards: string[];
   /**
-   * rewardRef -> cost_cents, so PLEDGE_CHECKOUT can send amount_cents on a
-   * REWARD cart item — the real donor cart always does (RewardList.tsx),
-   * and the server defaults a REWARD item's stored amount_cents to 0 when a
-   * client omits it (the pledge total itself is computed server-side from
-   * the reward, but the *per-item* amount is whatever the client sent).
+   * rewardRef -> cost_cents for seeded selection generation. The pooled
+   * executor reads live prices/types at review and uses the shared planner;
+   * creation stores confirmed line totals, not a replay log's old estimate.
    */
   rewardCostCents: Record<string, number>;
 }

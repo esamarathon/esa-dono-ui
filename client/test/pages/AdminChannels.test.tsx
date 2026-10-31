@@ -92,6 +92,58 @@ describe('AdminChannels', () => {
     expect(screen.getByText(/Changing a slug breaks overlay bindings/)).toBeInTheDocument();
   });
 
+  it('edits ordered own/shared defaults, preserves ineligible entries and excludes foreign goals', async () => {
+    adminClient.get.mockImplementation((path: string) =>
+      Promise.resolve({
+        data:
+          path === '/channels'
+            ? [
+                {
+                  ...channel,
+                  default_goals: ['g1', 'g2'],
+                  has_eligible_default: false,
+                  fallback_goal: { id: 'g3', title: 'Fallback' },
+                },
+              ]
+            : path === '/goals'
+              ? [
+                  {
+                    id: 'g1',
+                    title: 'Closed',
+                    channel_id: 'c1',
+                    is_active: false,
+                    current_cents: 300,
+                    target_cents: 500,
+                  },
+                  {
+                    id: 'g2',
+                    title: 'Shared',
+                    channel_id: null,
+                    is_active: true,
+                    current_cents: 100,
+                    target_cents: 500,
+                  },
+                  { id: 'g3', title: 'Foreign', channel_id: 'c2', is_active: true },
+                ]
+              : [],
+      }),
+    );
+    adminClient.put.mockResolvedValue({ data: {} });
+    render(<AdminChannels />);
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.getByText('receives goal-Pool money now')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Foreign' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Move Shared up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    await waitFor(() =>
+      expect(adminClient.put).toHaveBeenCalledWith(
+        '/channels/c1',
+        expect.objectContaining({ default_goals: ['g2', 'g1'] }),
+      ),
+    );
+  });
+
   it('deactivates a channel after confirmation', async () => {
     vi.stubGlobal(
       'confirm',

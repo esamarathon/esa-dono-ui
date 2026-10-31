@@ -30,6 +30,7 @@ import { startMetricsRefresh } from './services/metrics.js';
 import { startAuctionScheduler } from './services/auctionScheduler.js';
 import { UPLOADS_DIR, ensureUploadsDir } from './lib/uploads.js';
 import { tracingMiddleware } from './lib/tracing.js';
+import { catchAsyncErrors, errorHandler } from './lib/httpError.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -105,6 +106,9 @@ app.use('/api/moderator', moderatorRouter);
 app.use('/api/auctions', auctionsRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/tiltify', tiltifyRouter);
+
+catchAsyncErrors(app);
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

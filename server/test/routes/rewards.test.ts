@@ -1,11 +1,16 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import rewardsRouter from '../../routes/rewards.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent, createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -29,16 +34,35 @@ async function makeDonor(balanceCents: number) {
 }
 
 describe('Rewards routes', () => {
+  // Wallet spends target one Channel (ADR-0012); the fixtures are shared incentives of its Event.
+  let channelId = '';
+  beforeAll(async () => {
+    channelId = (await createTestChannel(prisma)).id;
+  });
+
   afterAll(async () => {
+    await prisma.channel.delete({ where: { id: channelId } });
     await prisma.$disconnect();
   });
 
   it('GET / returns only active rewards', async () => {
     const active = await prisma.reward.create({
-      data: { title: 'Active Reward', type: 'DIGITAL', cost_cents: 100, is_active: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Active Reward',
+        type: 'DIGITAL',
+        cost_cents: 100,
+        is_active: true,
+      },
     });
     const inactive = await prisma.reward.create({
-      data: { title: 'Inactive Reward', type: 'DIGITAL', cost_cents: 100, is_active: false },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Inactive Reward',
+        type: 'DIGITAL',
+        cost_cents: 100,
+        is_active: false,
+      },
     });
 
     const res = await request(createApp()).get('/api/rewards');
@@ -54,13 +78,13 @@ describe('Rewards routes', () => {
   it('POST /:id/claim claims a reward', async () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({
-      data: { title: 'Claim Reward', type: 'DIGITAL', cost_cents: 500 },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Claim Reward', type: 'DIGITAL', cost_cents: 500 },
     });
 
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ claim_data: { name: 'Alice' } });
+      .send({ channel_id: channelId, claim_data: { name: 'Alice' } });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -70,16 +94,56 @@ describe('Rewards routes', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
   });
 
+  it('POST /:id/claim rejects physical rewards funded by Wallet credit without changing funds or stock', async () => {
+    const { donor, token } = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Physical reward',
+        type: 'PHYSICAL',
+        cost_cents: 1000,
+        quantity_total: 2,
+      },
+    });
+    try {
+      const res = await request(createApp())
+        .post(`/api/rewards/${reward.id}/claim`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ channel_id: channelId, claim_data: { name: 'Alice' } });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(
+        'Physical rewards require a cash-funded pledge through Stripe checkout',
+      );
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 5000,
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 0,
+      });
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
   it('POST /:id/claim returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
     const reward = await prisma.reward.create({
-      data: { title: 'Expensive Reward', type: 'DIGITAL', cost_cents: 500 },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Expensive Reward',
+        type: 'DIGITAL',
+        cost_cents: 500,
+      },
     });
 
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ channel_id: channelId });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Insufficient balance');
@@ -92,6 +156,7 @@ describe('Rewards routes', () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Bulk Reward',
         type: 'DIGITAL',
         cost_cents: 500,
@@ -102,7 +167,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 });
+      .send({ channel_id: channelId, quantity: 3 });
 
     expect(res.status).toBe(200);
 
@@ -124,6 +189,7 @@ describe('Rewards routes', () => {
     const { donor, token } = await makeDonor(10000);
     const reward = await prisma.reward.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Scarce Reward',
         type: 'DIGITAL',
         cost_cents: 500,
@@ -134,7 +200,7 @@ describe('Rewards routes', () => {
     const res = await request(createApp())
       .post(`/api/rewards/${reward.id}/claim`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 });
+      .send({ channel_id: channelId, quantity: 3 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Reward sold out');

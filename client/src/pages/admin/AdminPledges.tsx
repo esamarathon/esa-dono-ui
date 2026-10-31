@@ -1,156 +1,216 @@
-import { useEffect, useState, Fragment } from 'react';
+import { useCallback, useEffect, useRef, useState, Fragment } from 'react';
 import adminClient from '../../api/admin';
 import LoadingSpinner from '../../components/LoadingSpinner';
-import type { AdminPledge } from '../../types';
-
-function fmt(cents: number) {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function ago(date: string) {
-  const diff = Date.now() - new Date(date).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m ago`;
-}
-
+import { NotMoneyNote } from '../../components/StaffAmounts';
+import { fmt } from '../../utils/money';
+import { apiErrorMessage, type AdminPledge } from '../../types';
+const STATUSES = ['OPEN', 'FULFILLED', 'EXPIRED', 'CANCELLED', 'LEGACY_PAID', 'PAYMENT_REVIEW'];
 export default function AdminPledges() {
   const [pledges, setPledges] = useState<AdminPledge[]>([]);
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState('OPEN');
+  const [overdue, setOverdue] = useState(false);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
-
+  const requestRevision = useRef(0);
+  const reload = useCallback(async () => {
+    const revision = ++requestRevision.current;
+    const result = await adminClient.get<AdminPledge[]>('/pledges', {
+      params: {
+        ...(status === 'LEGACY_PAID' ? { payment_state: 'LEGACY_PAID' } : status ? { status } : {}),
+        ...(overdue ? { overdue: 'true' } : {}),
+        offset,
+        limit: 50,
+      },
+    });
+    if (revision !== requestRevision.current) return;
+    setPledges(result.data);
+    setTotal(Number(result.headers?.['x-total-count'] ?? result.data.length));
+  }, [status, overdue, offset]);
   useEffect(() => {
-    adminClient
-      .get('/pledges')
-      .then((r) => setPledges(r.data))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return <LoadingSpinner />;
-
+    let live = true;
+    setLoading(true);
+    reload()
+      .catch((e) => {
+        if (live) setError(apiErrorMessage(e, 'Failed to load pledges'));
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [reload]);
+  const check = async (id: string) => {
+    setBusy(id);
+    setError('');
+    try {
+      await adminClient.post(`/pledges/${id}/check-stripe`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Stripe state is unresolved; funding stays held.'));
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
-    <div>
-      <h1 className="font-display text-4xl uppercase mb-4">pledges</h1>
-      <p className="font-body text-sm text-off-white/55 mb-4">
-        {pledges.length} total pledges. Each pledge is created when a donor builds a cart, then
-        fulfilled when a matching donation arrives.
+    <div className="space-y-4">
+      <h1 className="font-display text-4xl uppercase">pledges</h1>
+      <p className="font-body text-sm text-off-white/55">
+        {total} total pledges matching filters. Draft pledges stay in the browser. This list
+        contains server-confirmed Pending pledges. A deadline does not prove non-payment. Check
+        Stripe; never manually release a hold.
       </p>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-              {['status', 'email', 'total', 'items', 'relay', 'fulfilled by', 'created', ''].map(
-                (h) => (
-                  <th
-                    key={h}
-                    className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
-                  >
+      <NotMoneyNote />
+      <div className="flex flex-wrap gap-2">
+        {['', ...STATUSES].map((s) => (
+          <button
+            key={s}
+            className="btrl-button btrl-button-outline"
+            aria-pressed={s === status}
+            onClick={() => {
+              setStatus(s);
+              setOffset(0);
+            }}
+          >
+            {s || 'all'}
+          </button>
+        ))}
+        <label>
+          <input
+            type="checkbox"
+            checked={overdue}
+            onChange={(e) => {
+              setOverdue(e.target.checked);
+              setOffset(0);
+            }}
+          />{' '}
+          overdue only
+        </label>
+      </div>
+      {error && <p role="alert">{error}</p>}
+      {loading ? (
+        <LoadingSpinner />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr>
+                {[
+                  'status',
+                  'email',
+                  'pledge amount',
+                  'held Wallet credit',
+                  'new money due / shipping',
+                  'Stripe Session / payment',
+                  'deadline',
+                  'donation',
+                  '',
+                ].map((h) => (
+                  <th key={h} className="text-left p-3">
                     {h}
                   </th>
-                ),
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {pledges.map((p) => (
-              <Fragment key={p.id}>
-                <tr
-                  style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
-                  className="cursor-pointer hover:opacity-80"
-                  onClick={() => setExpanded(expanded === p.id ? null : p.id)}
-                >
-                  <td className="px-4 py-2">
-                    <span
-                      className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
-                      style={{
-                        background:
-                          p.status === 'FULFILLED'
-                            ? 'rgba(92,189,125,.16)'
-                            : p.status === 'OPEN'
-                              ? 'rgba(115,78,158,.3)'
-                              : 'rgba(208,152,70,.16)',
-                        color:
-                          p.status === 'FULFILLED'
-                            ? 'var(--green)'
-                            : p.status === 'OPEN'
-                              ? 'var(--off-white)'
-                              : 'var(--d-yellow)',
-                      }}
-                    >
-                      {p.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 font-data text-off-white/55">{p.donor_email || '-'}</td>
-                  <td className="px-4 py-2 font-data font-bold text-off-white">
-                    {fmt(p.total_cents)}
-                  </td>
-                  <td className="px-4 py-2 font-data text-off-white/55">{p.items.length}</td>
-                  <td className="px-4 py-2 font-mono text-sm text-off-white/55 max-w-[120px] truncate">
-                    {p.relay_client_key ? `${p.relay_client_key.slice(0, 16)}...` : '-'}
-                  </td>
-                  <td className="px-4 py-2 font-data text-off-white/55">
-                    {p.fulfilled_by
-                      ? `${p.fulfilled_by.donor?.email || '-'} (${fmt(p.fulfilled_by.amount_cents)})`
-                      : '-'}
-                  </td>
-                  <td className="px-4 py-2 font-data text-off-white/55">{ago(p.created_at)}</td>
-                  <td className="px-4 py-2 text-off-white/55">
-                    {expanded === p.id ? '\u25b2' : '\u25bc'}
-                  </td>
-                </tr>
-                {expanded === p.id && (
-                  <tr key={`${p.id}-items`}>
-                    <td colSpan={8} className="px-8 py-4" style={{ background: 'rgba(0,0,0,.2)' }}>
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-5 gap-2 font-mono text-sm uppercase tracking-wider text-off-white/55 mb-1">
-                          <span>kind</span>
-                          <span>target</span>
-                          <span>amount</span>
-                          <span>poll</span>
-                          <span>data</span>
-                        </div>
-                        {p.items.map((item) => (
-                          <div
-                            key={item.id}
-                            className="grid grid-cols-5 gap-2 font-data text-sm text-off-white"
-                          >
-                            <span>{item.kind}</span>
-                            <span className="font-mono text-sm truncate">{item.target_id}</span>
-                            <span className="text-d-yellow">{fmt(item.amount_cents)}</span>
-                            <span className="font-mono text-sm text-off-white/55 truncate">
-                              {item.poll_id || '-'}
-                            </span>
-                            <span className="font-mono text-sm text-off-white/55 truncate">
-                              {item.data || '-'}
-                            </span>
-                          </div>
-                        ))}
-                        {p.relay_key_id && (
-                          <div
-                            className="mt-3 pt-3"
-                            style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
-                          >
-                            <p className="font-mono text-sm text-off-white/55">
-                              relay_key_id: {p.relay_key_id}
-                            </p>
-                            <p className="font-mono text-sm text-off-white/55">
-                              relay_client_key: {p.relay_client_key}
-                            </p>
-                            <p className="font-mono text-sm text-off-white/55">
-                              expires: {new Date(p.expires_at).toLocaleString()}
-                            </p>
-                          </div>
-                        )}
-                      </div>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {pledges.map((p) => (
+                <Fragment key={p.id}>
+                  <tr className="border-t border-off-white/10">
+                    <td className="p-3">
+                      <span>{p.status}</span>
+                      {p.overdue && <strong> · overdue</strong>}
+                      {p.payment_state === 'LEGACY_PAID' && (
+                        <p>paid after transition: not fulfilled</p>
+                      )}
+                      {p.payment_state === 'PAYMENT_REVIEW' && (
+                        <p>Needs admin review: cash-only recovery, not original fulfillment</p>
+                      )}
+                    </td>
+                    <td>{p.donor_email ?? '—'}</td>
+                    <td>{p.pledge_amount_cents == null ? '—' : fmt(p.pledge_amount_cents)}</td>
+                    <td>
+                      {fmt(p.wallet_held_cents)} currently held
+                      <p>
+                        Confirmed Wallet funding: {fmt(p.held_wallet_cents)} ·{' '}
+                        {p.wallet_hold_status}
+                      </p>
+                    </td>
+                    <td>
+                      <span>{p.new_money_cents == null ? '—' : fmt(p.new_money_cents)}</span>
+                      <p className="text-off-white/55">
+                        Shipping (outside totals):{' '}
+                        {p.shipping_cents == null
+                          ? 'unknown / calculated by Stripe'
+                          : fmt(p.shipping_cents)}
+                      </p>
+                    </td>
+                    <td>
+                      {p.checkout_session_status ?? 'not bound'} / {p.payment_status ?? 'unknown'}
+                      <p>{p.payment_state}</p>
+                    </td>
+                    <td>{new Date(p.expires_at).toLocaleString()}</td>
+                    <td>
+                      {p.fulfilled_by ? (
+                        <a href={`/admin/donations/${p.fulfilled_by.id}`} className="underline">
+                          Donation {p.fulfilled_by.id}
+                        </a>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className="btrl-button"
+                        disabled={
+                          busy === p.id ||
+                          ['LEGACY_PAID', 'PAYMENT_REVIEW'].includes(p.payment_state)
+                        }
+                        onClick={() => check(p.id)}
+                      >
+                        Check Stripe
+                      </button>
+                      <button
+                        className="underline ml-2"
+                        onClick={() => setExpanded(expanded === p.id ? null : p.id)}
+                      >
+                        items / prices
+                      </button>
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+                  {expanded === p.id && (
+                    <tr>
+                      <td colSpan={9} className="p-4 bg-purple/10">
+                        {p.items.map((item) => (
+                          <p key={item.id}>
+                            {item.label} · {item.kind} · recorded allocation{' '}
+                            {fmt(item.amount_cents)}{' '}
+                            {item.kind === 'REWARD' &&
+                              `· confirmed unit price ${item.unit_price_cents == null ? 'unavailable' : fmt(item.unit_price_cents)} · price now ${item.current_price_cents == null ? 'unavailable' : fmt(item.current_price_cents)}`}
+                          </p>
+                        ))}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="flex gap-3">
+        <button disabled={!offset} onClick={() => setOffset(offset - 50)}>
+          previous
+        </button>
+        <span>
+          {offset + pledges.length} of {total}
+        </span>
+        <button disabled={offset + 50 >= total} onClick={() => setOffset(offset + 50)}>
+          next
+        </button>
       </div>
     </div>
   );

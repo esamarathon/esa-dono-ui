@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 
 vi.mock('../../services/stripe.js', () => ({
   createAuctionCheckoutSession: vi.fn().mockImplementation(async () => ({
@@ -23,13 +23,17 @@ import {
   cancelAuctionTx,
   reopenAuctionTx,
 } from '../../services/auction.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 describe('auction service', () => {
   beforeAll(() => {
     process.env.APP_BASE_URL = 'http://localhost:5173';
-    vi.setConfig({ testTimeout: 15000 });
   });
 
   afterEach(() => {
@@ -71,6 +75,7 @@ describe('auction service', () => {
   async function makeAuction(overrides: Partial<Record<string, unknown>> = {}) {
     return prisma.auction.create({
       data: {
+        event_id: DEFAULT_EVENT_ID,
         title: 'Signed Guitar',
         type: 'PHYSICAL',
         starting_price_cents: 1000,

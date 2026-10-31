@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { getDonor, requestToken } from '../api/donor';
 import { getOAuthProviders } from '../api/auth';
+import { getFeatureFlags } from '../api/featureFlags';
 import { track, identifyDonor } from '../lib/tracing';
 import {
   extractToken,
@@ -13,6 +14,7 @@ import {
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
 import ChannelPill from '../components/ChannelPill';
+import PoolCredits from '../components/PoolCredits';
 import type { DonorWallet } from '../types';
 import { hasModeratorAccess } from '../types';
 
@@ -178,6 +180,13 @@ export default function MyWallet() {
   const [donor, setDonor] = useState<DonorWallet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [auctionsEnabled, setAuctionsEnabled] = useState(false);
+
+  useEffect(() => {
+    getFeatureFlags()
+      .then((flags) => setAuctionsEnabled(flags.auctions ?? false))
+      .catch(() => setAuctionsEnabled(false));
+  }, []);
 
   const loadDonor = async () => {
     setLoading(true);
@@ -250,9 +259,9 @@ export default function MyWallet() {
   if (!donor) return <WalletLogin message={error} onLogin={handleLogin} />;
 
   return (
-    <div className="max-w-2xl mx-auto p-8">
+    <div className="max-w-6xl mx-auto p-4 sm:p-8">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="font-display text-4xl uppercase">my wallet</h1>
+        <p className="font-data text-sm uppercase">my wallet</p>
         <button
           onClick={handleLogout}
           className="font-data font-bold text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
@@ -269,10 +278,6 @@ export default function MyWallet() {
               <p className="font-data text-xs text-d-yellow mt-1">moderator access enabled</p>
             )}
           </div>
-          <div className="text-right">
-            <p className="font-data text-sm text-off-white/55">available balance</p>
-            <p className="font-display text-3xl text-d-yellow">{fmt(donor.balance_remaining)}</p>
-          </div>
         </div>
         <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
           <div className="flex gap-8">
@@ -283,6 +288,8 @@ export default function MyWallet() {
           </div>
         </div>
       </Card>
+
+      <PoolCredits donorId={donor.id} wallet={donor.balance_remaining} />
 
       <h2 className="font-display text-3xl uppercase mb-3">donation history</h2>
       {donor.donations.length === 0 ? (
@@ -315,7 +322,9 @@ export default function MyWallet() {
             <Card key={c.id} className="flex justify-between items-center">
               <div>
                 <p className="font-data font-bold text-off-white">{c.reward.title}</p>
-                <p className="font-data text-sm text-off-white/55">{fmt(c.reward.cost_cents)}</p>
+                <p className="font-data text-sm text-off-white/55">
+                  {fmt(c.amount_cents)} allocated
+                </p>
               </div>
               <span
                 className={`font-data text-xs font-bold px-2 py-1 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : 'text-d-yellow'}`}
@@ -384,61 +393,67 @@ export default function MyWallet() {
         </div>
       )}
 
-      {(donor.auction_offers ?? []).length > 0 && (
+      {auctionsEnabled && (
         <>
-          <h2 className="font-display text-3xl uppercase mb-3">pay for your win</h2>
-          <div className="space-y-2 mb-6">
-            {(donor.auction_offers ?? []).map((o) => (
-              <Card key={o.id} className="flex justify-between items-center">
-                <div>
-                  <p className="font-data font-bold text-off-white">{o.auction.title}</p>
-                  <p className="font-data text-sm text-off-white/55">
-                    {fmt(o.amount_cents)} · pay by {new Date(o.expires_at).toLocaleString()}
-                  </p>
-                </div>
-                {o.checkout_url && (
-                  <a href={o.checkout_url} className="btrl-button">
-                    pay now
-                  </a>
-                )}
-              </Card>
-            ))}
-          </div>
+          {(donor.auction_offers ?? []).length > 0 && (
+            <>
+              <h2 className="font-display text-3xl uppercase mb-3">pay for your win</h2>
+              <div className="space-y-2 mb-6">
+                {(donor.auction_offers ?? []).map((o) => (
+                  <Card key={o.id} className="flex justify-between items-center">
+                    <div>
+                      <p className="font-data font-bold text-off-white">{o.auction.title}</p>
+                      <p className="font-data text-sm text-off-white/55">
+                        {fmt(o.amount_cents)} · pay by {new Date(o.expires_at).toLocaleString()}
+                      </p>
+                    </div>
+                    {o.checkout_url && (
+                      <a href={o.checkout_url} className="btrl-button">
+                        pay now
+                      </a>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            </>
+          )}
+
+          <h2 className="font-display text-3xl uppercase mb-3">my bids</h2>
+          {(donor.bids ?? []).length === 0 ? (
+            <p className="font-body text-sm text-off-white/55">No auction bids yet.</p>
+          ) : (
+            <div className="space-y-2 mb-6">
+              {(donor.bids ?? []).map((b) => (
+                <Card key={b.id} className="flex justify-between items-center">
+                  <div>
+                    <p className="font-data font-bold text-off-white">{b.auction.title}</p>
+                    <p className="font-data text-sm text-off-white/55">{fmt(b.amount_cents)}</p>
+                  </div>
+                  <StatusBadge status={b.status} />
+                </Card>
+              ))}
+            </div>
+          )}
+
+          <h2 className="font-display text-3xl uppercase mb-3">my auction wins</h2>
+          {(donor.auction_wins ?? []).length === 0 ? (
+            <p className="font-body text-sm text-off-white/55">No auction wins yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {(donor.auction_wins ?? []).map((w) => (
+                <Card key={w.id} className="flex justify-between items-center">
+                  <div>
+                    <p className="font-data font-bold text-off-white">{w.auction.title}</p>
+                    <p className="font-data text-sm text-off-white/55">
+                      {fmt(w.winning_bid_cents)}
+                    </p>
+                  </div>
+                  <StatusBadge status={w.status} />
+                </Card>
+              ))}
+            </div>
+          )}
         </>
-      )}
-
-      <h2 className="font-display text-3xl uppercase mb-3">my bids</h2>
-      {(donor.bids ?? []).length === 0 ? (
-        <p className="font-body text-sm text-off-white/55">No auction bids yet.</p>
-      ) : (
-        <div className="space-y-2 mb-6">
-          {(donor.bids ?? []).map((b) => (
-            <Card key={b.id} className="flex justify-between items-center">
-              <div>
-                <p className="font-data font-bold text-off-white">{b.auction.title}</p>
-                <p className="font-data text-sm text-off-white/55">{fmt(b.amount_cents)}</p>
-              </div>
-              <StatusBadge status={b.status} />
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <h2 className="font-display text-3xl uppercase mb-3">my auction wins</h2>
-      {(donor.auction_wins ?? []).length === 0 ? (
-        <p className="font-body text-sm text-off-white/55">No auction wins yet.</p>
-      ) : (
-        <div className="space-y-2">
-          {(donor.auction_wins ?? []).map((w) => (
-            <Card key={w.id} className="flex justify-between items-center">
-              <div>
-                <p className="font-data font-bold text-off-white">{w.auction.title}</p>
-                <p className="font-data text-sm text-off-white/55">{fmt(w.winning_bid_cents)}</p>
-              </div>
-              <StatusBadge status={w.status} />
-            </Card>
-          ))}
-        </div>
       )}
     </div>
   );

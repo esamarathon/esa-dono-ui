@@ -7,6 +7,14 @@ import StatusBadge from '../../components/StatusBadge';
 import ChannelPill from '../../components/ChannelPill';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Reward } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import {
+  availableOnSelected,
+  defaultOwner,
+  ownerLabel,
+  ownerPayload,
+  useStaffEvents,
+} from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -23,6 +31,7 @@ interface RewardForm {
   custom_type_label: string;
   image_url: string | null;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: RewardForm = {
@@ -35,6 +44,7 @@ const EMPTY: RewardForm = {
   custom_type_label: '',
   image_url: null,
   channel_id: null,
+  event_id: null,
 };
 
 type RewardModal = 'create' | Reward | null;
@@ -49,21 +59,19 @@ export default function ModeratorRewards() {
   const [uploadError, setUploadError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const { channels, selectedChannelId } = useModeratorChannelFilter();
+  const events = useStaffEvents(moderatorClient);
 
   const reload = () => moderatorClient.get('/rewards').then((r) => setRewards(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
-  const filteredRewards = rewards.filter(
-    (r) => !selectedChannelId || r.channel_id === selectedChannelId || r.channel_id == null,
+  const filteredRewards = rewards.filter((r) =>
+    availableOnSelected(r, channels, selectedChannelId),
   );
 
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
     setUploadError('');
@@ -75,6 +83,7 @@ export default function ModeratorRewards() {
       quantity_total: r.quantity_total ?? '',
       image_url: r.image_url ?? null,
       channel_id: r.channel_id ?? null,
+      event_id: r.event_id,
     } as RewardForm);
     setModal(r);
     setError('');
@@ -105,8 +114,12 @@ export default function ModeratorRewards() {
     setError('');
     const data = {
       ...form,
+      ...ownerPayload(form),
       cost_cents: Math.round(parseFloat(String(form.cost_dollars)) * 100),
-      quantity_total: form.quantity_total ? parseInt(String(form.quantity_total)) : null,
+      quantity_total:
+        form.quantity_total === '' || form.quantity_total === null
+          ? null
+          : Number(form.quantity_total),
     };
     try {
       if (modal === 'create') await moderatorClient.post('/rewards', data);
@@ -154,12 +167,16 @@ export default function ModeratorRewards() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="font-data font-bold text-lg text-off-white">{r.title}</h2>
-                    <ChannelPill label={channelName(r.channel_id)} />
+                    <ChannelPill label={ownerLabel(r, channels, events)} />
                   </div>
                   <p className="font-data text-sm text-off-white/55">
-                    {r.type} &middot; {fmt(r.cost_cents)}
+                    {r.type} &middot; current price {fmt(r.cost_cents)}
                   </p>
-                  {r.quantity_total && (
+                  <p className="font-data text-sm text-off-white/55">
+                    {r.live_count ?? r.quantity_claimed} claimed · {fmt(r.allocated_cents ?? 0)}{' '}
+                    allocated
+                  </p>
+                  {r.quantity_total !== null && (
                     <p className="font-data text-sm text-off-white/55">
                       {r.quantity_claimed}/{r.quantity_total} claimed
                     </p>
@@ -301,21 +318,13 @@ export default function ModeratorRewards() {
               </p>
             )}
           </div>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

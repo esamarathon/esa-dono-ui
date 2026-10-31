@@ -11,7 +11,8 @@ model Donor {
   id                String          @id @default(uuid())
   email             String          @unique
   total_donated     Int             @default(0)
-  balance_remaining Int             @default(0)
+  balance_remaining Int             @default(0) // available Wallet credit
+  balance_held_cents Int             @default(0)
   magic_token       String?         @unique
   token_expires_at  DateTime?
   role              String          @default("USER") // USER | MODERATOR | ADMIN
@@ -32,6 +33,8 @@ model Donor {
   auction_offers    AuctionOffer[]
   auction_wins      AuctionWin[]
   current_bid_auctions Auction[] @relation("CurrentBidder")
+  held_pledges       PendingPledge[] @relation("PledgeWalletDonor")
+  pool_credit_batches PoolCreditBatch[]
 }
 
 model Donation {
@@ -39,6 +42,18 @@ model Donation {
   external_id String   @unique
   donor_id    String
   amount_cents Int
+  /// Null selects legacy accounting. Never infer a pledge amount for historical donations.
+  pledge_amount_cents Int?
+  wallet_applied_cents Int @default(0)
+  /// Cumulative Wallet credit already granted; needed to avoid granting it twice.
+  wallet_credit_granted_cents Int @default(0)
+  /// Failed Payment refunds grant a gap in every Pool, not new available Pool money.
+  failed_payment_wallet_credit_cents Int @default(0)
+  /// Null means shipping has not been extracted for a historical Stripe payment.
+  shipping_cents Int?
+  shipping_refunded_cents Int @default(0)
+  shipping_recorded_at DateTime?
+  payment_intent String?
   donor_name  String?
   comment     String?
   moderated    Boolean   @default(false)
@@ -64,6 +79,9 @@ model Donation {
   reward_claims RewardClaim[]
   poll_votes    PollVote[]
   contributions FundContribution[]
+  payment_refunds PaymentRefund[]
+  adjustments BalanceAdjustment[] @relation("DonationAdjustments")
+  pool_credits PoolCredit[]
 }
 
 /// A charity event: a marathon, or a one-day stream event. Parent of Channels
@@ -77,11 +95,22 @@ model Event {
   is_active          Boolean    @default(false)
   /// Where a donation that names no Channel is routed. Must be one of `channels`.
   primary_channel_id String?    @unique
+  /// Deactivation is not Event end. Pool-credit expiry is derived from this field.
+  ended_at           DateTime?
+  ended_by           String?
+  end_undone_at      DateTime?
+  end_undone_by      String?
+  end_audits         EventEndAudit[]
+  pool_credit_batches PoolCreditBatch[]
   created_at         DateTime   @default(now())
   updated_at         DateTime   @updatedAt
   channels           Channel[]  @relation("EventChannels")
   primary_channel    Channel?   @relation("EventPrimaryChannel", fields: [primary_channel_id], references: [id], onDelete: SetNull)
   donations          Donation[]
+  rewards            Reward[]
+  polls              Poll[]
+  goals              FundGoal[]
+  auctions           Auction[]
 }
 
 /// One stream within an Event (Tiltify: a campaign). See CONTEXT.md.
@@ -102,6 +131,7 @@ model Channel {
   donations  Donation[]
   pledges    PendingPledge[]
   auctions   Auction[]
+  default_goals ChannelDefaultGoal[]
 }
 
 model Reward {
@@ -115,18 +145,23 @@ model Reward {
   is_active        Boolean       @default(true)
   custom_type_label String?
   image_url        String?       // served at /api/uploads/<uuid>.webp
-  channel_id        String?       // null = shared across all channels
+  channel_id        String?       // null = shared incentive of its Event (ADR-0012)
+  event_id          String
   created_at       DateTime      @default(now())
   updated_at       DateTime      @updatedAt
   claims           RewardClaim[]
   channel          Channel?      @relation(fields: [channel_id], references: [id])
+  event            Event         @relation(fields: [event_id], references: [id])
 }
 
 model RewardClaim {
   id         String   @id @default(uuid())
   reward_id  String
   donor_id   String
-  status     String   @default("PENDING") // PENDING | FULFILLED | REVERSED
+  status     String   @default("PENDING") // PENDING | FULFILLED | CANCELLING | REVERSED
+  /// Price actually allocated. Historical claims use the reward price at migration.
+  /// The default only preserves old callers until pooled fulfillment supplies the price.
+  amount_cents Int    @default(0)
   claim_data String?  // JSON string
   /// The donation whose pledge created this claim (null for a direct wallet claim).
   /// Lets the Tiltify donation message list the claims it paid for (PRD-0002 §T4).
@@ -138,6 +173,14 @@ model RewardClaim {
   reward     Reward   @relation(fields: [reward_id], references: [id])
   donation   Donation? @relation(fields: [donation_id], references: [id], onDelete: SetNull)
   donor      Donor    @relation(fields: [donor_id], references: [id])
+  payment_refunds PaymentRefund[]
+  pool_credit_origin PoolCredit? @relation("ClaimCreditOrigin")
+  credit_redemptions PoolCreditRedemption[]
+  /// A shipped claim on a charged-back donation needs explicit acknowledgement.
+  chargeback_flagged_at DateTime?
+  chargeback_acknowledged_at DateTime?
+  chargeback_acknowledged_by String?
+  chargeback_acknowledgement_note String?
 }
 
 model Poll {
@@ -150,13 +193,15 @@ model Poll {
   allow_custom_entries Boolean      @default(false)
   max_entry_chars      Int?
   auto_approve         Boolean      @default(true)
-  channel_id           String?      // null = shared across all channels
+  channel_id           String?      // null = shared incentive of its Event (ADR-0012)
+  event_id             String
   created_at           DateTime     @default(now())
   updated_at           DateTime     @updatedAt
   options              PollOption[]
   votes                PollVote[]
   custom_entries       PollCustomEntry[]
   channel              Channel?     @relation(fields: [channel_id], references: [id])
+  event                Event        @relation(fields: [event_id], references: [id])
 }
 
 model PollOption {
@@ -177,6 +222,9 @@ model PollVote {
   poll_option_id String
   donor_id       String
   amount_cents   Int
+  source         String     @default("donor") // donor | auto | moderator
+  allocated_by   String?
+  allocated_at   DateTime?
   /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
   donation_id    String?
   reversed_at    DateTime?
@@ -186,6 +234,8 @@ model PollVote {
   poll_option    PollOption @relation(fields: [poll_option_id], references: [id])
   donor          Donor      @relation(fields: [donor_id], references: [id])
   donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
+  pool_credit_origin PoolCredit? @relation("VoteCreditOrigin")
+  credit_redemptions PoolCreditRedemption[]
 }
 
 model PollCustomEntry {
@@ -213,11 +263,14 @@ model FundGoal {
   current_cents Int                @default(0)
   is_active     Boolean            @default(true)
   is_complete   Boolean            @default(false)
-  channel_id    String?            // null = shared across all channels
+  channel_id    String?            // null = shared incentive of its Event (ADR-0012)
+  event_id      String
   created_at    DateTime           @default(now())
   updated_at    DateTime           @updatedAt
   contributions FundContribution[]
+  default_for   ChannelDefaultGoal[]
   channel       Channel?           @relation(fields: [channel_id], references: [id])
+  event         Event              @relation(fields: [event_id], references: [id])
 }
 
 model FundContribution {
@@ -225,6 +278,9 @@ model FundContribution {
   goal_id      String
   donor_id     String
   amount_cents Int
+  source       String   @default("donor") // donor | auto | moderator
+  allocated_by String?
+  allocated_at DateTime?
   /// The donation whose pledge paid for this row (null when spent from the wallet). PRD-0002 §T4.
   donation_id    String?
   reversed_at  DateTime?
@@ -233,6 +289,8 @@ model FundContribution {
   goal         FundGoal @relation(fields: [goal_id], references: [id])
   donor        Donor    @relation(fields: [donor_id], references: [id])
   donation       Donation?  @relation(fields: [donation_id], references: [id], onDelete: SetNull)
+  pool_credit_origin PoolCredit? @relation("ContributionCreditOrigin")
+  credit_redemptions PoolCreditRedemption[]
 }
 
 model BalanceAdjustment {
@@ -240,24 +298,54 @@ model BalanceAdjustment {
   donor_id          String
   amount_cents      Int
   balance_after_cents Int
-  type              String   // REFUND | FREEZE_ZERO | MANUAL | CHARGEBACK
+  type              String   // REFUND (legacy) | WALLET_REFUND | FAILED_PAYMENT_REFUND | FREEZE_ZERO | MANUAL | CHARGEBACK
   reason            String?
   reference_id      String?  // id of the reversed claim/vote/contribution
   created_by        String   @default("admin")
   created_at        DateTime @default(now())
   donor             Donor    @relation(fields: [donor_id], references: [id])
   refunded_donation Donation? @relation("DonationRefund")
+  donation_id       String?
+  payment_refund_id String? @unique
+  idempotency_key   String? @unique
+  donation         Donation? @relation("DonationAdjustments", fields: [donation_id], references: [id], onDelete: Restrict)
+  payment_refund   PaymentRefund? @relation(fields: [payment_refund_id], references: [id], onDelete: Restrict)
+
+  @@index([donation_id])
 }
 
 model PendingPledge {
   id                    String       @id @default(uuid())
   pledge_token          String       @unique
   donor_email           String?
-  total_cents           Int
+  /// LEGACY keeps the old cart shape readable; POOLED uses pledge_amount_cents.
+  format                String       @default("LEGACY") // LEGACY | POOLED
+  pledge_amount_cents   Int?
+  /// At most one OPEN pledge per draft (partial unique index in the migration).
+  draft_id              String?
+  /// Immutable server-validated plan JSON; line prices/types also live on PledgeItem.
+  confirmed_plan        String?
+  new_money_cents       Int?
+  held_wallet_cents     Int          @default(0) // original held amount; status controls whether still held
+  wallet_donor_id       String?
+  wallet_hold_status    String       @default("NONE") // NONE | HELD | CONSUMED | RELEASED
+  wallet_consumed_at    DateTime?
+  wallet_released_at    DateTime?
+  non_payment_confirmed_at DateTime?
+  payment_status        String? // Stripe value, or failed as a verified async-failure receipt
+  checkout_session_status String? // Stripe value, or unknown after an indeterminate operation
+  reconciled_at         DateTime?
+  /// Retained only for old-shape returns and late payments. New pledges leave these at zero.
+  total_cents           Int          @default(0)
   top_up_cents          Int          @default(0) // optional additional donation beyond cart items
   wallet_discount_cents Int          @default(0) // cents deducted from existing wallet balance at checkout
-  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED
+  /// Late LEGACY receipts stay EXPIRED; LEGACY_PAID is derived (old dev values remain readable).
+  status                String       @default("OPEN") // OPEN | FULFILLED | EXPIRED | CANCELLED | PAYMENT_REVIEW
   requires_shipping     Boolean      @default(false) // true when any cart item is a PHYSICAL reward
+  /// Written BEFORE the external create. Null session id does not prove no payment opportunity exists.
+  checkout_requested_at DateTime?
+  /// Exact Stripe create parameters, frozen for same-key retries (including configuration).
+  checkout_request      String?
   checkout_session_id   String?      // Stripe Checkout Session id for deterministic linkage
   checkout_url          String?      // Stripe Checkout Session URL used in the redirect
   comment               String?      // donor comment captured in the cart before checkout
@@ -270,6 +358,10 @@ model PendingPledge {
   items                 PledgeItem[]
   fulfilled_by          Donation?    @relation(fields: [fulfilled_by_donation_id], references: [id])
   channel               Channel?     @relation(fields: [channel_id], references: [id])
+  wallet_donor          Donor? @relation("PledgeWalletDonor", fields: [wallet_donor_id], references: [id], onDelete: Restrict)
+
+  @@index([draft_id])
+  @@index([wallet_donor_id, wallet_hold_status])
 }
 
 model PledgeItem {
@@ -279,10 +371,135 @@ model PledgeItem {
   target_id   String       // reward_id | poll_option_id | goal_id | poll_id (POLL_CUSTOM)
   poll_id     String?      // required for POLL_VOTE and POLL_CUSTOM
   amount_cents Int
+  /// Confirmed unit price and reward type: do not consult the live price for reversals.
+  unit_price_cents Int?
+  confirmed_reward_type String?
+  source      String       @default("donor") // donor | auto; retains proportional top-up provenance
   quantity    Int          @default(1) // REWARD only — how many units of the reward this line claims; amount_cents is already the line total (cost_cents * quantity), not the unit price. Always 1 for other kinds.
   data        String?      // JSON string for claim_data (shoutout message, custom reward fields, etc.)
   created_at  DateTime     @default(now())
   pledge      PendingPledge @relation(fields: [pledge_id], references: [id], onDelete: Cascade)
+}
+
+/// Category-bound credit, issued once per reversed row. Event-end effects are
+/// derived from Donation.event.ended_at; never persist end/undo transfers here.
+model PoolCredit {
+  id                     String   @id @default(uuid())
+  donation_id            String
+  category               String   // reward | poll | goal
+  amount_cents           Int      // original grant, retained for audit
+  remaining_cents        Int      // outstanding after redemptions, pool shrink or terminal clearing
+  source_claim_id        String?  @unique
+  source_vote_id         String?  @unique
+  source_contribution_id String?  @unique
+  created_by             String
+  created_at             DateTime @default(now())
+  cleared_at             DateTime?
+  cleared_by             String?
+  donation               Donation @relation(fields: [donation_id], references: [id], onDelete: Restrict)
+  source_claim           RewardClaim? @relation("ClaimCreditOrigin", fields: [source_claim_id], references: [id], onDelete: Restrict)
+  source_vote            PollVote? @relation("VoteCreditOrigin", fields: [source_vote_id], references: [id], onDelete: Restrict)
+  source_contribution    FundContribution? @relation("ContributionCreditOrigin", fields: [source_contribution_id], references: [id], onDelete: Restrict)
+  redemptions            PoolCreditRedemption[]
+
+  @@index([donation_id, category])
+}
+
+/// Whole credit-spend batches are atomic. Save the request and result for retries.
+model PoolCreditBatch {
+  id              String   @id @default(uuid())
+  donor_id        String
+  event_id        String
+  idempotency_key String
+  request_data    String   // JSON
+  result_data     String?  // JSON
+  created_at      DateTime @default(now())
+  donor           Donor    @relation(fields: [donor_id], references: [id], onDelete: Restrict)
+  event           Event    @relation(fields: [event_id], references: [id], onDelete: Restrict)
+  redemptions     PoolCreditRedemption[]
+
+  @@unique([donor_id, idempotency_key])
+}
+
+/// Each redemption links its grant and batch to exactly one resulting allocation.
+/// Several grants may fund one row; rows still carry the source donation.
+model PoolCreditRedemption {
+  id              String   @id @default(uuid())
+  credit_id       String
+  batch_id        String
+  amount_cents    Int
+  /// Immutable original consumption minus this audited Payment-refund reduction is effective funding.
+  reduced_cents   Int      @default(0)
+  claim_id        String?
+  vote_id         String?
+  contribution_id String?
+  created_at      DateTime @default(now())
+  credit          PoolCredit @relation(fields: [credit_id], references: [id], onDelete: Restrict)
+  batch           PoolCreditBatch @relation(fields: [batch_id], references: [id], onDelete: Restrict)
+  claim           RewardClaim? @relation(fields: [claim_id], references: [id], onDelete: Restrict)
+  vote            PollVote? @relation(fields: [vote_id], references: [id], onDelete: Restrict)
+  contribution    FundContribution? @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
+
+  @@index([credit_id])
+  @@index([batch_id])
+  @@index([claim_id])
+  @@index([vote_id])
+  @@index([contribution_id])
+}
+
+/// Persistent end/undo history, including repeated end/undo cycles. No credit transfers.
+model EventEndAudit {
+  id         String   @id @default(uuid())
+  event_id   String
+  action     String   // END | UNDO_END
+  created_by String
+  created_at DateTime @default(now())
+  event      Event    @relation(fields: [event_id], references: [id], onDelete: Restrict)
+
+  @@index([event_id, created_at])
+}
+
+/// The id is Stripe's idempotency key. Multiple rejected attempts can reference one claim.
+/// Only one REQUESTED record per donation (partial unique index in the migration).
+model PaymentRefund {
+  id               String   @id @default(uuid())
+  donation_id      String
+  claim_id         String
+  item_cents       Int
+  shipping_cents   Int      @default(0)
+  status           String   @default("REQUESTED") // REQUESTED | PENDING | REQUIRES_ACTION | SUCCEEDED | FAILED | RESOLVED
+  stripe_refund_id String?  @unique
+  /// Snapshot of the proportional shrink and affected targets for audit/retry.
+  pool_shrink_data String?
+  failure_reason   String?
+  resolution       String?  // REJECTED | RETURNED_OUTSIDE_APP | WALLET_CREDIT | SETTLED_BY_DISPUTE
+  shipping_resolution String? // RETURNED_OUTSIDE_APP | KEPT_BY_AGREEMENT
+  created_by       String
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  accepted_at      DateTime?
+  resolved_at      DateTime?
+  resolved_by      String?
+  shipping_resolved_at DateTime?
+  shipping_resolved_by String?
+  donation         Donation @relation(fields: [donation_id], references: [id], onDelete: Restrict)
+  claim            RewardClaim @relation(fields: [claim_id], references: [id], onDelete: Restrict)
+  wallet_adjustment BalanceAdjustment?
+
+  @@index([donation_id, status])
+  @@index([claim_id])
+}
+
+/// Ordered Default goal list. Eligibility is checked against live goals by the owning slice.
+model ChannelDefaultGoal {
+  channel_id String
+  goal_id    String
+  position   Int
+  channel    Channel  @relation(fields: [channel_id], references: [id], onDelete: Cascade)
+  goal       FundGoal @relation(fields: [goal_id], references: [id], onDelete: Restrict)
+
+  @@id([channel_id, goal_id])
+  @@unique([channel_id, position])
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +529,8 @@ model Auction {
   ends_at             DateTime
   status              String          @default("OPEN") // OPEN | CLOSED | AWAITING_PAYMENT | SETTLED | UNSOLD | CANCELLED
   current_offer_id    String?         @unique
-  channel_id          String?         // null = shared across all channels
+  channel_id          String?         // null = shared incentive of its Event (ADR-0012)
+  event_id            String
   is_active           Boolean         @default(true)
   created_at          DateTime        @default(now())
   updated_at          DateTime        @updatedAt
@@ -321,6 +539,7 @@ model Auction {
   current_offer       AuctionOffer?   @relation("CurrentOffer", fields: [current_offer_id], references: [id])
   win                 AuctionWin?
   channel             Channel?        @relation(fields: [channel_id], references: [id])
+  event               Event           @relation(fields: [event_id], references: [id])
   current_bidder      Donor?          @relation("CurrentBidder", fields: [current_bidder_id], references: [id])
 }
 

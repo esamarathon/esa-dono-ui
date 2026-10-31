@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
   getRewards: vi.fn(),
@@ -22,10 +22,12 @@ vi.mock('../../src/lib/tracing', () => ({
   identifyDonor: vi.fn(),
 }));
 
-import { CartProvider } from '../../src/context/CartContext';
+import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPledgeContext';
 import PollList from '../../src/components/incentives/PollList';
 import GoalList from '../../src/components/incentives/GoalList';
 import RewardList from '../../src/components/incentives/RewardList';
+
+const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
 
 const poll = {
   id: 'p1',
@@ -37,6 +39,7 @@ const poll = {
   is_active: true,
   allow_custom_entries: false,
   channel_id: null,
+  event_id: 'e1',
 };
 
 const goal = {
@@ -48,6 +51,7 @@ const goal = {
   is_active: true,
   is_complete: false,
   channel_id: null,
+  event_id: 'e1',
 };
 
 const reward = {
@@ -59,9 +63,27 @@ const reward = {
   quantity_claimed: 0,
   is_active: true,
   channel_id: null,
+  event_id: 'e1',
 };
 
 function Wrapper({ children }: { children: React.ReactNode }) {
+  localStorage.setItem(
+    'donation_draft_v1',
+    JSON.stringify({
+      id: 'list-draft',
+      updatedAt: Date.now(),
+      amountCents: 1000,
+      selections: [],
+      channelId: 'c1',
+      eventSlug: null,
+      path: '/donate',
+      comment: '',
+      displayName: '',
+      lastStep: 'browse',
+      tab: 'rewards',
+      pendingToken: null,
+    }),
+  );
   return <CartProvider>{children}</CartProvider>;
 }
 
@@ -72,7 +94,7 @@ describe('PollList', () => {
     mocks.getPolls.mockResolvedValue([poll]);
     mocks.getRewards.mockResolvedValue([]);
     mocks.getGoals.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 
@@ -110,7 +132,7 @@ describe('PollList', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
     // submit without entering a label
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
     expect(screen.getByText('Please enter your option')).toBeInTheDocument();
   });
 
@@ -128,7 +150,7 @@ describe('PollList', () => {
     // change amount to 0
     const amountInputs = screen.getAllByRole('spinbutton');
     fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
     expect(screen.getByText(/Minimum amount/)).toBeInTheDocument();
   });
 
@@ -155,7 +177,7 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My runner' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
     // modal closes after add
     expect(screen.queryByText('add your own option')).toBeNull();
@@ -172,7 +194,7 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My runner' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'add to cart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
     // Now in cart, showing the read-only summary with edit/remove.
     expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();
@@ -283,7 +305,7 @@ describe('GoalList', () => {
     mocks.getGoals.mockResolvedValue([goal]);
     mocks.getRewards.mockResolvedValue([]);
     mocks.getPolls.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 
@@ -392,7 +414,7 @@ describe('RewardList', () => {
     mocks.getRewards.mockResolvedValue([reward]);
     mocks.getPolls.mockResolvedValue([]);
     mocks.getGoals.mockResolvedValue([]);
-    mocks.getChannels.mockResolvedValue([]);
+    mocks.getChannels.mockResolvedValue([channel]);
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 

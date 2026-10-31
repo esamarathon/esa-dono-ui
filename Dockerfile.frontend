@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27
 # Frontend image for esa-dono-ui: builds the Vite SPA and serves it via nginx,
 # proxying /api to the backend service.
 #
@@ -39,7 +39,7 @@ COPY client ./client
 RUN npm run build --workspace client
 
 # ---------- Serve ----------
-FROM docker.io/nginxinc/nginx-unprivileged:1.27-alpine AS runner
+FROM docker.io/nginxinc/nginx-unprivileged:1.31-alpine AS runner
 
 LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.description="ESA charity donation platform SPA (nginx)" \
@@ -47,9 +47,10 @@ LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.vendor="ESA"
 
-# Patch OS packages to fix CVEs in the base image (e.g. libcrypto3/OpenSSL)
+# Patch OS packages to fix CVEs in the base image (e.g. libcrypto3/OpenSSL).
+# The version floor also refreshes a cached upgrade layer (CVE-2026-77214).
 USER root
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache && apk add --no-cache 'libexpat>=2.9.0-r0'
 USER nginx
 
 COPY nginx.conf /etc/nginx/templates/default.conf.template

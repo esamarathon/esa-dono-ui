@@ -1,6 +1,9 @@
 import type { TiltifyMessage } from './tiltifyPayload.js';
 import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
+import type { readDonationAccountingTx } from '../poolAccounting.js';
+
+type NativeAllocations = Awaited<ReturnType<typeof readDonationAccountingTx>>['allocations'];
 
 /** A Destination's payload format (ADR-0009): our envelope, or bare Tiltify-v5 objects. */
 export const PAYLOAD_FORMATS = ['NATIVE', 'TILTIFY'] as const;
@@ -11,6 +14,7 @@ export const TILTIFY_DEFAULT_EXCHANGE = 'tiltify';
 
 export const WEBHOOK_MESSAGE_TYPES = [
   'donation.created',
+  'donation.updated',
   'donation.moderated',
   'donation.hidden',
   'donation.unhidden',
@@ -34,6 +38,10 @@ export type WebhookPayloadDonationCreated = {
     donation_id: string;
     external_id: string;
     amount_cents: number;
+    status: string;
+    pledge_amount_cents: number | null;
+    wallet_applied_cents: number;
+    allocations: NativeAllocations;
     channel_id: string | null;
     event_id: string | null;
     donor_ref: string;
@@ -43,6 +51,9 @@ export type WebhookPayloadDonationCreated = {
     donor_comment: string | null;
     hidden_from_overlay: boolean;
   };
+};
+export type WebhookPayloadDonationUpdated = Omit<WebhookPayloadDonationCreated, 'type'> & {
+  type: 'donation.updated';
 };
 /** A moderator hid a donation from the overlay, or showed it again (PRD-0002 §N2, §T5–T6). */
 export type WebhookPayloadDonationVisibility = {
@@ -81,7 +92,9 @@ export type WebhookPayloadIncentiveCreated = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
     is_active: boolean;
@@ -99,7 +112,9 @@ export type WebhookPayloadIncentiveEnabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
   };
@@ -112,7 +127,9 @@ export type WebhookPayloadIncentiveDisabled = {
   data: {
     incentive_kind: 'REWARD' | 'POLL' | 'GOAL';
     incentive_id: string;
-    /** The Channel the incentive belongs to, or null when shared by every Channel. */
+    /** The Event the incentive belongs to (ADR-0012). Never null. */
+    event_id: string;
+    /** The Channel the incentive belongs to, or null for a shared incentive of its Event. */
     channel_id: string | null;
     title: string;
   };
@@ -126,6 +143,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'REWARD';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -135,6 +153,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'POLL';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -144,6 +163,7 @@ export type WebhookPayloadIncentiveValueChanged = {
     | {
         incentive_kind: 'GOAL';
         incentive_id: string;
+        event_id: string;
         channel_id: string | null;
         title: string;
         changed_fields: string[];
@@ -154,6 +174,7 @@ export type WebhookPayloadIncentiveValueChanged = {
 
 export type WebhookPayload =
   | WebhookPayloadDonationCreated
+  | WebhookPayloadDonationUpdated
   | WebhookPayloadDonationModerated
   | WebhookPayloadDonationVisibility
   | WebhookPayloadIncentiveCreated
@@ -284,6 +305,9 @@ export interface DonationForPayload {
   donor_name: string | null;
   comment: string | null;
   hidden_from_overlay: boolean;
+  status: string;
+  pledge_amount_cents: number | null;
+  wallet_applied_cents: number;
 }
 
 /**
@@ -291,25 +315,49 @@ export interface DonationForPayload {
  * never the donor's email. A donation already hidden from the overlay sends them as
  * null, so a moderator's decision holds downstream.
  */
+export function buildDonationStateData(
+  donation: DonationForPayload,
+  allocations: NativeAllocations,
+): WebhookPayloadDonationCreated['data'] {
+  const hidden = donation.hidden_from_overlay;
+  return {
+    donation_id: donation.id,
+    external_id: donation.external_id,
+    amount_cents: donation.amount_cents,
+    status: donation.status,
+    pledge_amount_cents: donation.pledge_amount_cents,
+    wallet_applied_cents: donation.wallet_applied_cents,
+    allocations,
+    channel_id: donation.channel_id,
+    event_id: donation.event_id,
+    donor_ref: donation.donor_id,
+    donor_name: hidden ? null : donation.donor_name,
+    donor_comment: hidden ? null : donation.comment,
+    hidden_from_overlay: hidden,
+  };
+}
+
 export function buildDonationCreatedPayload(
   donation: DonationForPayload,
+  allocations: NativeAllocations = { reward: [], poll: [], goal: [] },
 ): WebhookPayloadDonationCreated {
-  const hidden = donation.hidden_from_overlay;
   return {
     id: crypto.randomUUID(),
     type: 'donation.created',
     created_at: new Date().toISOString(),
-    data: {
-      donation_id: donation.id,
-      external_id: donation.external_id,
-      amount_cents: donation.amount_cents,
-      channel_id: donation.channel_id,
-      event_id: donation.event_id,
-      donor_ref: donation.donor_id,
-      donor_name: hidden ? null : donation.donor_name,
-      donor_comment: hidden ? null : donation.comment,
-      hidden_from_overlay: hidden,
-    },
+    data: buildDonationStateData(donation, allocations),
+  };
+}
+
+/** Envelopes are generated only when queued, never compared as state. */
+export function buildDonationUpdatedPayload(
+  data: WebhookPayloadDonationCreated['data'],
+): WebhookPayloadDonationUpdated {
+  return {
+    id: crypto.randomUUID(),
+    type: 'donation.updated',
+    created_at: new Date().toISOString(),
+    data,
   };
 }
 
@@ -358,6 +406,7 @@ export function buildDonationModeratedPayload(opts: {
 export function buildIncentiveCreatedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
   isActive: boolean;
@@ -368,6 +417,7 @@ export function buildIncentiveCreatedPayload(opts: {
   const base = {
     incentive_kind: opts.incentiveKind,
     incentive_id: opts.incentiveId,
+    event_id: opts.eventId,
     channel_id: opts.channelId,
     title: opts.title,
     is_active: opts.isActive,
@@ -399,6 +449,7 @@ export function buildIncentiveCreatedPayload(opts: {
 export function buildIncentiveEnabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveEnabled {
@@ -409,6 +460,7 @@ export function buildIncentiveEnabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
     },
@@ -418,6 +470,7 @@ export function buildIncentiveEnabledPayload(opts: {
 export function buildIncentiveDisabledPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
 }): WebhookPayloadIncentiveDisabled {
@@ -428,6 +481,7 @@ export function buildIncentiveDisabledPayload(opts: {
     data: {
       incentive_kind: opts.incentiveKind,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
     },
@@ -437,6 +491,7 @@ export function buildIncentiveDisabledPayload(opts: {
 export function buildIncentiveValueChangedPayload(opts: {
   incentiveKind: 'REWARD' | 'POLL' | 'GOAL';
   incentiveId: string;
+  eventId: string;
   channelId: string | null;
   title: string;
   changedFields: string[];
@@ -455,6 +510,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'REWARD' as const,
         incentive_id: opts.incentiveId,
+        event_id: opts.eventId,
         channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
@@ -471,6 +527,7 @@ export function buildIncentiveValueChangedPayload(opts: {
       data: {
         incentive_kind: 'POLL' as const,
         incentive_id: opts.incentiveId,
+        event_id: opts.eventId,
         channel_id: opts.channelId,
         title: opts.title,
         changed_fields: opts.changedFields,
@@ -486,6 +543,7 @@ export function buildIncentiveValueChangedPayload(opts: {
     data: {
       incentive_kind: 'GOAL' as const,
       incentive_id: opts.incentiveId,
+      event_id: opts.eventId,
       channel_id: opts.channelId,
       title: opts.title,
       changed_fields: opts.changedFields,

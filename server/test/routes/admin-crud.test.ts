@@ -1,11 +1,21 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
+import {
+  createLegacyPledge as createPledge,
+  DEFAULT_EVENT_ID,
+  ensureDefaultEvent,
+} from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+import { createTestChannel } from '../helpers/fixtures.js';
+
+const prisma = createDatabaseClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 
 function createApp() {
@@ -54,7 +64,7 @@ describe('Admin CRUD routes', () => {
     expect(res.body).toHaveProperty('donors');
   });
 
-  it('GET /stats includes unallocated_credits_cents summed across all donors (#59)', async () => {
+  it('GET /stats includes available Wallet credit summed across all donors', async () => {
     const a = await prisma.donor.create({
       data: { email: `stats-a-${crypto.randomUUID()}@example.com`, balance_remaining: 1500 },
     });
@@ -66,8 +76,9 @@ describe('Admin CRUD routes', () => {
     const before = await request(createApp()).get('/api/admin/stats').set(AUTH);
     const after = await prisma.donor.aggregate({ _sum: { balance_remaining: true } });
 
-    expect(before.body.unallocated_credits_cents).toBe(after._sum.balance_remaining);
-    expect(before.body.unallocated_credits_cents).toBeGreaterThanOrEqual(4000);
+    expect(before.body.wallet_credit_cents.available).toBe(after._sum.balance_remaining);
+    expect(before.body.wallet_credit_cents.available).toBeGreaterThanOrEqual(4000);
+    expect(before.body).not.toHaveProperty('unallocated_credits_cents');
   });
 
   it('POST /donors/sweep-credits previews without writing when confirm is omitted (#60)', async () => {
@@ -176,6 +187,81 @@ describe('Admin CRUD routes', () => {
   });
 
   describe('donation status (#63)', () => {
+    it('previews without mutation and acknowledges a shipped chargeback flag through admin-only adapters', async () => {
+      const donor = await prisma.donor.create({
+        data: { email: `preview-${crypto.randomUUID()}@example.com` },
+      });
+      donorIds.push(donor.id);
+      const donation = await prisma.donation.create({
+        data: {
+          donor_id: donor.id,
+          external_id: crypto.randomUUID(),
+          amount_cents: 800,
+          pledge_amount_cents: 1000,
+          wallet_applied_cents: 200,
+        },
+      });
+      const reward = await prisma.reward.create({
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Shipped',
+          type: 'PHYSICAL',
+          cost_cents: 9000,
+          quantity_claimed: 1,
+        },
+      });
+      rewardIds.push(reward.id);
+      const claim = await prisma.rewardClaim.create({
+        data: {
+          donor_id: donor.id,
+          donation_id: donation.id,
+          reward_id: reward.id,
+          amount_cents: 400,
+          status: 'FULFILLED',
+        },
+      });
+      const path = `/api/admin/donations/${donation.id}/reversal-preview`;
+      expect((await request(createApp()).get(path).query({ status: 'REFUNDED' })).status).toBe(401);
+      const preview = await request(createApp()).get(path).query({ status: 'REFUNDED' }).set(AUTH);
+      expect(preview.status).toBe(200);
+      expect(preview.body).toMatchObject({
+        accounting: 'POOLED',
+        wallet_adjustment_cents: 600,
+        money_before_cents: 800,
+        money_after_cents: 800,
+        retained_claim_ids: [claim.id],
+      });
+      expect(JSON.stringify(preview.body)).not.toContain(donor.email);
+      expect(await prisma.donation.findUnique({ where: { id: donation.id } })).toMatchObject({
+        status: 'COMPLETED',
+      });
+      expect(await prisma.balanceAdjustment.count({ where: { donor_id: donor.id } })).toBe(0);
+      await request(createApp())
+        .patch(`/api/admin/donations/${donation.id}/status`)
+        .set(AUTH)
+        .send({ status: 'CHARGEBACK' })
+        .expect(200);
+      const acknowledgement = await request(createApp())
+        .post(`/api/admin/claims/${claim.id}/acknowledge-chargeback`)
+        .set(AUTH)
+        .send({ note: '  Already shipped  ' });
+      expect(acknowledgement.status).toBe(200);
+      expect(acknowledgement.body).toMatchObject({
+        status: 'FULFILLED',
+        chargeback_flagged_at: null,
+        chargeback_acknowledged_by: 'admin',
+        chargeback_acknowledgement_note: 'Already shipped',
+        chargeback_acknowledged_at: expect.any(String),
+      });
+      await request(createApp())
+        .patch(`/api/admin/claims/${claim.id}`)
+        .set(AUTH)
+        .send({ status: 'PENDING' })
+        .expect(409);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 1,
+      });
+    });
     it('defaults new donations to COMPLETED', async () => {
       const donor = await prisma.donor.create({
         data: { email: `status-default-${crypto.randomUUID()}@example.com` },
@@ -223,7 +309,7 @@ describe('Admin CRUD routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('PATCH /donations/:id/status refunds and claws back unspent balance, linking the adjustment', async () => {
+    it('PATCH /donations/:id/status leaves unspent legacy Wallet credit alone and links WALLET_REFUND', async () => {
       const donor = await prisma.donor.create({
         data: {
           email: `status-refund-${crypto.randomUUID()}@example.com`,
@@ -249,15 +335,15 @@ describe('Admin CRUD routes', () => {
       expect(res.body.refund_id).toBeTruthy();
 
       const donorAfter = await prisma.donor.findUnique({ where: { id: donor.id } });
-      expect(donorAfter!.balance_remaining).toBe(0);
+      expect(donorAfter!.balance_remaining).toBe(1000);
 
       const adjustment = await prisma.balanceAdjustment.findUnique({
         where: { id: res.body.refund_id },
       });
       expect(adjustment).toMatchObject({
-        type: 'REFUND',
-        amount_cents: -1000,
-        balance_after_cents: 0,
+        type: 'WALLET_REFUND',
+        amount_cents: 0,
+        balance_after_cents: 1000,
         reference_id: donation.id,
       });
     });
@@ -370,7 +456,12 @@ describe('Admin CRUD routes', () => {
     it('creates, lists, and updates a reward', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/rewards')
-        .send({ title: 'CRUD Reward', type: 'DIGITAL', cost_cents: 500 })
+        .send({
+          title: 'CRUD Reward',
+          type: 'DIGITAL',
+          cost_cents: 500,
+          event_id: DEFAULT_EVENT_ID,
+        })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       expect(createRes.body.is_active).toBe(true);
@@ -394,7 +485,11 @@ describe('Admin CRUD routes', () => {
     it('creates a poll with options and lists it', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/polls')
-        .send({ title: 'CRUD Poll', options: [{ label: 'A' }, { label: 'B' }] })
+        .send({
+          title: 'CRUD Poll',
+          options: [{ label: 'A' }, { label: 'B' }],
+          event_id: DEFAULT_EVENT_ID,
+        })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       expect(createRes.body.options).toHaveLength(2);
@@ -406,7 +501,9 @@ describe('Admin CRUD routes', () => {
     });
 
     it('adds, renames, and removes a poll option', async () => {
-      const poll = await prisma.poll.create({ data: { title: 'Option Poll' } });
+      const poll = await prisma.poll.create({
+        data: { event_id: DEFAULT_EVENT_ID, title: 'Option Poll' },
+      });
       pollIds.push(poll.id);
 
       const addRes = await request(createApp())
@@ -433,7 +530,7 @@ describe('Admin CRUD routes', () => {
     it('creates and lists a goal', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/goals')
-        .send({ title: 'CRUD Goal', target_cents: 10000 })
+        .send({ title: 'CRUD Goal', target_cents: 10000, event_id: DEFAULT_EVENT_ID })
         .set(AUTH);
       expect(createRes.status).toBe(200);
       goalIds.push(createRes.body.id);
@@ -451,7 +548,12 @@ describe('Admin CRUD routes', () => {
       });
       donorIds.push(donor.id);
       const reward = await prisma.reward.create({
-        data: { title: 'Claim Reward', type: 'DIGITAL', cost_cents: 100 },
+        data: {
+          event_id: DEFAULT_EVENT_ID,
+          title: 'Claim Reward',
+          type: 'DIGITAL',
+          cost_cents: 100,
+        },
       });
       rewardIds.push(reward.id);
       const claim = await prisma.rewardClaim.create({
@@ -484,6 +586,49 @@ describe('Admin CRUD routes', () => {
 
       const donor = await prisma.donor.findUnique({ where: { email } });
       donorIds.push(donor!.id);
+    });
+
+    it('preserves the staging pledge token, external id and complete intake response', async () => {
+      const email = `staging-${crypto.randomUUID()}@example.com`;
+      const externalId = `staging-${crypto.randomUUID()}`;
+      const channel = await createTestChannel(prisma);
+      const { pledge_token } = await createPledge({
+        email,
+        display_name: 'Staging Reader',
+        comment: 'Staging pledge',
+        items: [],
+        top_up_cents: 1000,
+        channel_id: channel.id,
+      });
+      try {
+        const res = await request(createApp())
+          .post('/api/admin/simulate-donation')
+          .set(AUTH)
+          .send({ email, amount_cents: 1000, external_id: externalId, pledge_token });
+        expect(res.status).toBe(200);
+        donorIds.push(res.body.donor.id);
+        expect(res.body).toEqual({
+          success: true,
+          token: expect.any(String),
+          donor: { id: expect.any(String), email, balance_remaining: 1000 },
+          pledge: { totalSpent: 0, skipped: 0, results: [] },
+          donation: { id: expect.any(String), channel_id: channel.id, event_id: channel.event_id },
+        });
+        expect(
+          await prisma.donation.findUnique({ where: { external_id: externalId } }),
+        ).toMatchObject({
+          id: res.body.donation.id,
+          donor_name: 'Staging Reader',
+          comment: 'Staging pledge',
+        });
+        expect(await prisma.pendingPledge.findUnique({ where: { pledge_token } })).toMatchObject({
+          status: 'FULFILLED',
+          fulfilled_by_donation_id: res.body.donation.id,
+        });
+      } finally {
+        await prisma.pendingPledge.delete({ where: { pledge_token } });
+        await prisma.channel.delete({ where: { id: channel.id } });
+      }
     });
 
     it('rejects a missing email', async () => {
@@ -538,6 +683,9 @@ describe('Admin CRUD routes', () => {
         .send({ email, amount_cents: 1000, external_id: externalRef })
         .set(AUTH);
       expect(second.status).toBe(409);
+      expect(second.body).toEqual({
+        error: `A donation with external_id "${externalRef}" already exists`,
+      });
     });
 
     it('rejects an invalid occurred_at', async () => {

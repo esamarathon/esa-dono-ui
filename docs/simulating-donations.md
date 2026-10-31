@@ -8,13 +8,20 @@ Visit `/admin/simulate` (nav label "add donation"), fill in donor email + amount
 
 ## Option B — curl (direct webhook POST)
 
-When `STRIPE_WEBHOOK_SECRET` is unset, HMAC verification is skipped:
+On a disposable local backend only, when `STRIPE_WEBHOOK_SECRET` is unset, HMAC
+verification is skipped. A completed notification still needs `status: complete` and
+`payment_status: paid`; the message type alone is not proof of payment:
 
 ```bash
 curl -X POST http://localhost:3001/api/webhooks/stripe \
   -H "Content-Type: application/json" \
-  -d '{"type":"checkout.session.completed","data":{"object":{"id":"cs_test_123","amount_total":1000,"customer_details":{"email":"test@example.com","name":"Test"}}}}'
+  -d '{"type":"checkout.session.completed","data":{"object":{"id":"cs_test_123","status":"complete","payment_status":"paid","amount_total":1000,"total_details":{"amount_shipping":0},"customer_details":{"email":"test@example.com","name":"Test"}}}}'
 ```
+
+This tokenless example creates a legacy donation without Pools. It does not exercise
+Stripe or pooled checkout: a pooled webhook must name the exact persisted Session and
+pledge token. Use the admin simulated-intake boundary below for pooled fixtures, not
+fabricated unbound Stripe Sessions.
 
 ## Option C — Admin API
 
@@ -34,6 +41,16 @@ curl -X POST http://localhost:3001/api/admin/simulate-donation \
   -H "Authorization: Bearer key_admin_change-me" \
   -d '{"email":"test@example.com","amount_cents":2500,"external_id":"hekathon-12345","occurred_at":"2026-01-15T12:00:00.000Z"}'
 ```
+
+Without a pledge token this is a **legacy/admin donation**: the amount is new money
+and becomes available Wallet credit; it does not create Pools. To fulfill a pooled
+pledge through this testing boundary, first confirm `/api/pledge` with
+`pledge_amount_cents`, `draft_id`, `plan` from `@dono/shared` `planPledge`, `channel_id`
+and `items`, then pass its token and **confirmed new money** to `simulate-donation`.
+A Stripe webhook receives gross `amount_total` plus `amount_shipping`; intake records
+the shipping separately. Wallet-only pooled pledges add $0 money, consume their held
+funding and create no new Wallet credit. Incentive allocations can exceed the money
+amount across independent categories; never sum them as money.
 
 Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet).
 
@@ -57,7 +74,23 @@ Key flags: `--seed` (int or string; the repro handle), `--events`/`--duration` (
 
 Each run writes `decisions.jsonl` (the reproducible intent log), `outcomes.jsonl` (observed server responses, keyed by `seq`), and `manifest.json` (seed, simVersion, args, git SHA) under `--out`.
 
-**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards remain excluded from pledges because the simulator does not complete Stripe payments. Wallet sufficiency is not guaranteed: underfunded carts and rejected spends remain useful outcomes.
+**V2 behavior:** donors have seeded activity levels, spend preferences, names, and preferred channels. Their first action is always a donation; subsequent visits have a `--repeat-donation-chance` (default `0.3`, range `0`–`1`). Amounts mix popular round values with cent-level variation. Pledges contain 1–4 channel-compatible items, with reward quantities of 1–3; comments vary in presence and length. Physical rewards are excluded from pledges and direct Wallet claims because they need a Stripe checkout. Wallet sufficiency is not guaranteed: rejected spends remain useful outcomes.
+
+**Pooled executor (#185):** it reads the actual `/api/donor` Wallet balance and live reward
+prices/types, computes the same pure shared plan as the server, and posts amount, plan
+and a stable run/donor/sequence draft id. An explicit `params.pledgeAmountCents` sets D;
+older logs without it use the smallest independent Pools that fit their selections,
+not the old cart sum. An empty selection set is a valid message-only pledge. Acceptance
+is checked by `GET /api/pledge/:token` (`POOLED` + `FULFILLED`), never by obsolete
+`total_cents`/discount fields or a zero-charge estimate. A 409 is logged for correction,
+not silently reconfirmed. A pledge that needs new money is paid like Option C: the
+executor posts its confirmed `new_money_cents` and pledge token to `simulate-donation`,
+so it becomes one donation with its incentive lines. It never completes a Stripe
+payment, but `/api/pledge` still creates a Checkout Session when Stripe is configured.
+It never releases Wallet holds.
+Run only against an explicitly owned test/demo target. The complete release, coordinated
+callers and consumer acceptance are separate gates in `docs/deployment.md`; a simulator
+run is not Stripe, browser or combined-consumer runtime proof.
 
 `--traffic phased` (default) adds seeded quiet/normal/busy periods; `--traffic steady` retains constant-rate exponential delays. The phases are normalized to preserve the expected mean waiting time specified by `--rate`. Execution remains serial, so HTTP latency adds to run duration. Changing traffic mode does not change the non-timing decisions.
 

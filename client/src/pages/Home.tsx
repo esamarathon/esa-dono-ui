@@ -37,14 +37,14 @@ export default function Home() {
         <img src={campaign.logo.src} alt="Campaign logo" className="w-48 mb-6 rounded-sm mx-auto" />
       )}
       <div className="btrl-panel p-6">
-        <div className="flex justify-between mb-2">
-          <span className="font-data font-bold text-sm text-off-white/55">raised</span>
-          <span className="font-data font-bold text-sm text-d-yellow">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-3">
+          <span className="font-data font-bold text-xl text-off-white/55">raised</span>
+          <span className="font-data font-bold text-2xl sm:text-3xl text-d-yellow">
             {fmt(raisedCents)} / {fmt(goalCents)}
           </span>
         </div>
         <ProgressBar value={raisedCents} max={goalCents} />
-        <p className="text-center font-data text-sm text-off-white/55 mt-2">
+        <p className="text-center font-data text-xl text-off-white/55 mt-3">
           {goalCents > 0 ? `${Math.round((raisedCents / goalCents) * 100)}% of goal` : ''}
         </p>
 
@@ -54,7 +54,7 @@ export default function Home() {
           className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
           style={{ background: 'var(--d-yellow)' }}
         >
-          contribute now
+          donate now
         </Link>
       </div>
     </div>

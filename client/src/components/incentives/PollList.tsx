@@ -5,7 +5,7 @@ import ProgressBar from '../ProgressBar';
 import AddRemoveButton from '../AddRemoveButton';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
-import { useCart } from '../../context/CartContext';
+import { useDraftPledge } from '../../context/DraftPledgeContext';
 import { sanitizeMoneyInput } from '../../utils/money';
 import {
   CART_SYNC_DEBOUNCE_MS,
@@ -23,13 +23,11 @@ export default function PollList() {
   const {
     polls,
     loading,
-    cart,
-    addToCart,
-    removeFromCart,
-    markVisited,
-    stalePollIds,
-    staleOptionIds,
-  } = useCart();
+    selections: cart,
+    addSelection: addToCart,
+    removeSelection: removeFromCart,
+    plan,
+  } = useDraftPledge();
 
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [writingIn, setWritingIn] = useState<Poll | null>(null);
@@ -37,10 +35,6 @@ export default function PollList() {
   const [writeInAmount, setWriteInAmount] = useState(DEFAULT_VOTE_AMOUNT);
   const [writeInError, setWriteInError] = useState('');
   const [flashKey, setFlashKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    markVisited('polls');
-  }, [markVisited]);
 
   // Debounce syncing an edited amount to an already-in-cart option: firing
   // addToCart on every keystroke caused the cart drawer to re-render on
@@ -58,7 +52,12 @@ export default function PollList() {
 
   const getAmount = (pollId: string, optionId: string) => {
     const key = `${pollId}-${optionId}`;
-    return amounts[key] ?? DEFAULT_VOTE_AMOUNT;
+    const selected = cart.find(
+      (i) => i.kind === 'POLL_VOTE' && i.target_id === optionId && i.poll_id === pollId,
+    );
+    return (
+      amounts[key] ?? (selected ? (selected.amount_cents / 100).toFixed(2) : DEFAULT_VOTE_AMOUNT)
+    );
   };
 
   const inCart = (pollId: string, optionId: string) =>
@@ -75,8 +74,28 @@ export default function PollList() {
       (i) => i.kind === 'POLL_VOTE' && i.target_id === opt.id && i.poll_id === poll.id,
     );
     if (!item) return undefined;
-    const newValue = opt.votes_cents + item.amount_cents;
-    const newMax = (poll.total_votes_cents || 1) + item.amount_cents;
+    const allocation = (id: string) => {
+      const index =
+        plan?.selections.findIndex(
+          (i) => i.kind === 'POLL_VOTE' && i.target_id === id && i.poll_id === poll.id,
+        ) ?? -1;
+      return index < 0
+        ? 0
+        : plan!.selections[index]!.amount_cents +
+            (plan!.top_up_rows.find((r) => r.selection_index === index)?.amount_cents ?? 0);
+    };
+    const newValue = opt.votes_cents + allocation(opt.id);
+    const newMax =
+      poll.total_votes_cents +
+      (plan?.selections.reduce((sum, s, index) => {
+        if (s.poll_id !== poll.id || (s.kind !== 'POLL_VOTE' && s.kind !== 'POLL_CUSTOM'))
+          return sum;
+        return (
+          sum +
+          s.amount_cents +
+          (plan.top_up_rows.find((r) => r.selection_index === index)?.amount_cents ?? 0)
+        );
+      }, 0) ?? 0);
     return (newValue / newMax) * 100;
   };
 
@@ -188,11 +207,14 @@ export default function PollList() {
     <div>
       <h2 className="font-display text-3xl uppercase text-off-white mb-2">vote in polls</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Add votes to your cart. $1 = 1 vote. Votes are cast when you check out.
+        Choose votes from your poll Pool. $1 = 1 vote. Unused amounts top up your selections in
+        proportion.
       </p>
       {polls.map((poll) => {
         const writeIn = writeInInCart(poll.id);
-        const pollUnavailable = stalePollIds.has(poll.id);
+        const pollUnavailable =
+          poll.is_active === false ||
+          !!(poll.ends_at && new Date(poll.ends_at).getTime() <= Date.now());
         return (
           <Card
             key={poll.id}
@@ -217,7 +239,7 @@ export default function PollList() {
             <div className="space-y-3">
               {poll.options.map((opt) => {
                 const added = inCart(poll.id, opt.id);
-                const optionUnavailable = staleOptionIds.has(opt.id);
+                const optionUnavailable = pollUnavailable || opt.status === 'REJECTED';
                 return (
                   <div key={opt.id} className="flex items-center gap-3">
                     <div className="flex-1">
@@ -259,7 +281,7 @@ export default function PollList() {
               })}
             </div>
 
-            {poll.allow_custom_entries && (
+            {poll.allow_custom_entries && !pollUnavailable && (
               <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                 {writeIn ? (
                   <div className="flex justify-between items-center text-sm">
@@ -312,9 +334,9 @@ export default function PollList() {
             Poll: <strong className="text-off-white">{writingIn.title}</strong>
           </p>
           <p className="font-body text-sm text-off-white/55 mb-3">
-            This option will be added to your cart and submitted with your donation.{' '}
+            This option will use your poll Pool and be submitted with your donation.{' '}
             {writingIn.auto_approve === false
-              ? 'A moderator reviews new options before they go live; if rejected, the amount is refunded to your wallet.'
+              ? 'A moderator reviews new options before they go live; if rejected, the amount becomes poll Pool credit.'
               : 'It goes live immediately once your donation completes (subject to moderator review afterward).'}
           </p>
           <div className="mb-3">
@@ -358,7 +380,7 @@ export default function PollList() {
               cancel
             </button>
             <button onClick={handleWriteIn} className="btrl-button">
-              {writeInInCart(writingIn.id) ? 'save changes' : 'add to cart'}
+              {writeInInCart(writingIn.id) ? 'save changes' : 'add selection'}
             </button>
           </div>
         </Modal>

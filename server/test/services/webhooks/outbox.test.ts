@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterAll, beforeEach } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../../lib/databaseClient.js';
 
 // Real database, real emit; only the dispatcher is replaced so we can see which
 // Destinations are woken without sending anything.
@@ -9,13 +9,14 @@ vi.mock('../../../services/webhooks/dispatcher.js', () => dispatcher);
 import { withWebhooks } from '../../../services/webhooks/outbox.js';
 import { buildIncentiveCreatedPayload } from '../../../services/webhooks/delivery.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const destinationIds: string[] = [];
 
 const build = () =>
   buildIncentiveCreatedPayload({
     incentiveKind: 'GOAL',
     incentiveId: 'goal-1',
+    eventId: 'event-1',
     channelId: null,
     title: 'Outbox test goal',
     isActive: true,
