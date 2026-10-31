@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
 import Modal from '../Modal';
 import LoadingSpinner from '../LoadingSpinner';
@@ -38,6 +38,16 @@ export default function RewardList() {
   const [claiming, setClaiming] = useState<Reward | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear a pending flash highlight on unmount: it would otherwise set state
+  // after the component is gone.
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   if (loading) return <LoadingSpinner />;
 
@@ -59,7 +69,8 @@ export default function RewardList() {
       data,
     });
     setFlashId(reward.id);
-    setTimeout(() => setFlashId((id) => (id === reward.id ? null : id)), 300);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId((id) => (id === reward.id ? null : id)), 300);
   };
 
   const handleAddClick = (reward: Reward) => {
