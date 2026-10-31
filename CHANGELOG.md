@@ -143,6 +143,8 @@ does not clear those gates or authorize deployment.
 
 - Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
   libvips dependencies.
+- Patch body-parser (CVE-2026-111181), follow-redirects (CVE-2026-111755,
+  CVE-2026-111756, CVE-2026-116689) and multer (CVE-2026-113872).
 
 ## [0.2.0] — 2026-09-29
 
