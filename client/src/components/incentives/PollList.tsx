@@ -35,6 +35,7 @@ export default function PollList() {
   const [writeInAmount, setWriteInAmount] = useState(DEFAULT_VOTE_AMOUNT);
   const [writeInError, setWriteInError] = useState('');
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounce syncing an edited amount to an already-in-cart option: firing
   // addToCart on every keystroke caused the cart drawer to re-render on
@@ -45,6 +46,7 @@ export default function PollList() {
     const timers = cartSyncTimers.current;
     return () => {
       Object.values(timers).forEach(clearTimeout);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
     };
   }, []);
 
@@ -114,7 +116,8 @@ export default function PollList() {
       label: option.label,
     });
     setFlashKey(key);
-    setTimeout(() => setFlashKey((k) => (k === key ? null : k)), 300);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashKey((k) => (k === key ? null : k)), 300);
   };
 
   const syncCartAmount = (poll: Poll, option: PollOption, value: string) => {
