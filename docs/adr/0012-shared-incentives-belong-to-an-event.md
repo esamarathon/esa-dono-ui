@@ -45,6 +45,11 @@ Consumers, read at kollekt `b955b6d` (same lines on `master`) and esa-layouts-v2
    3. Producer: Event lists include the Event's shared incentives (Decision 4). Current Kollekt never syncs an Event Campaign, so it is unaffected; the step 2 overlay removes the duplicates.
    4. Kollekt: file each incentive under its owner from the lookup, the Event's Campaign for a shared incentive (kollekt#44). Its sync job also syncs that Event Campaign and marks incentives missing from the Event's list inactive, so step 3 must be deployed first.
 
+   **Rollout status (2026-10-31).** Step 1 shipped in 0.3.0. Steps 3 (#204) and 4 (kollekt#44)
+   are deferred, so this release keeps the pre-ADR-0012 consumer shape: shared incentives stay
+   visible through Channel lists, Event lists stay empty, and a cold cross-Channel pooled-credit
+   reference stays unsupported. The deferral changes no producer contract.
+
 ## Migration
 
 - A Channel incentive gets the `event_id` of its Channel.

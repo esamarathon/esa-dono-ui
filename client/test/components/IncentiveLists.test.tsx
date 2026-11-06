@@ -87,6 +87,28 @@ function Wrapper({ children }: { children: React.ReactNode }) {
   return <CartProvider>{children}</CartProvider>;
 }
 
+// A flash highlight is cleared by a 300 ms timeout. If the list unmounts while
+// that timeout is pending, the callback fires afterwards and sets state on a
+// torn-down environment — in jsdom that throws `window is not defined` and
+// fails the whole run. Each list must clear its flash timeout on unmount.
+async function expectFlashTimerClearedOnUnmount(ui: React.ReactElement, text: string) {
+  const setSpy = vi.spyOn(globalThis, 'setTimeout');
+  const { unmount } = render(<Wrapper>{ui}</Wrapper>);
+  await screen.findByText(text);
+
+  fireEvent.click(screen.getByRole('button', { name: 'add' }));
+  const flashIndex = setSpy.mock.calls.findIndex((call) => call[1] === 300);
+  expect(flashIndex).toBeGreaterThanOrEqual(0);
+  const flashTimer = setSpy.mock.results[flashIndex]!.value;
+
+  const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+  unmount();
+
+  expect(clearSpy).toHaveBeenCalledWith(flashTimer);
+  setSpy.mockRestore();
+  clearSpy.mockRestore();
+}
+
 describe('PollList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,6 +133,10 @@ describe('PollList', () => {
     fireEvent.click(screen.getByRole('button', { name: 'add' }));
 
     expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+  });
+
+  it('clears the vote flash timeout on unmount', async () => {
+    await expectFlashTimerClearedOnUnmount(<PollList />, 'Best Runner');
   });
 
   it('shows the empty state when there are no polls', async () => {
@@ -324,6 +350,10 @@ describe('GoalList', () => {
     expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
   });
 
+  it('clears the contribution flash timeout on unmount', async () => {
+    await expectFlashTimerClearedOnUnmount(<GoalList />, 'Race entry');
+  });
+
   it('removes a goal contribution from the cart', async () => {
     render(
       <Wrapper>
@@ -431,6 +461,10 @@ describe('RewardList', () => {
     // in the cart, not a plain "remove" button (#50).
     expect(await screen.findByRole('button', { name: 'increase quantity' })).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it('clears the reward flash timeout on unmount', async () => {
+    await expectFlashTimerClearedOnUnmount(<RewardList />, 'T-shirt');
   });
 
   it("increases and decreases a fieldless reward's quantity, removing it at zero (#50)", async () => {

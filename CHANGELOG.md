@@ -5,17 +5,25 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, a minor version can contain
 breaking changes.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-31
 
-Planned version: **0.3.0** — amount-first donations with independent incentive Pools
-(#151, PRD-0003).
+Amount-first donations with independent incentive Pools (#151, PRD-0003). The same
+backend image now runs on SQLite or PostgreSQL, selected by `DATABASE_URL`.
 
-**Release preparation only.** Kollekt claim retirement and prompter rendering remain
-release blockers, and the corrected browser matrix must be rerun. This version bump
-does not clear those gates or authorize deployment.
+**Not in this release:** the Kollekt integration and the overlay prompter rendering are
+deferred to those repositories. Shared incentives stay visible through Channel lists, Event
+incentive lists stay empty (#204), and a cold cross-Channel pooled-credit reference stays
+unsupported until [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) lands. The
+corrected 0.3.0 browser matrix has not been rerun, and this entry does not by itself
+authorize deployment.
 
 ### Upgrade notes
 
+- **Database provider selection:** `DATABASE_URL` now chooses the Prisma client and the
+  migration history — an absolute `file:` URL for SQLite, `postgresql:` or `postgres:`
+  for PostgreSQL. The target database has its own data: changing the URL does not copy
+  data, and SQLite-to-PostgreSQL transfer is not included. PostgreSQL needs permission
+  to apply DDL migrations, including trigger functions. See `docs/database.md`.
 - **Breaking pledge API change:** `POST /api/pledge` requires
   `pledge_amount_cents`, a stable `draft_id`, and the reviewed `plan`. Old requests
   using `top_up_cents` are rejected. A changed plan returns 409 for confirmation;
@@ -33,9 +41,11 @@ does not clear those gates or authorize deployment.
 - Subscribe Stripe to checkout expiry, asynchronous payment success/failure and
   `refund.*`, in addition to completed checkout. Native `donation.updated`
   subscriptions are opt-in; existing Destinations are not changed automatically.
-- Coordinate the parent test/staging callers and
-  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44). Cold cross-Channel
-  credit references need its owner-aware lookup support. Ordinary Channel incentive
+- Coordinate the parent test/staging callers. The
+  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) owner-aware lookup is
+  deferred out of 0.3.0: until it lands, a cold cross-Channel credit reference stays
+  unsupported, while an unchanged Kollekt keeps reading and claiming through the same
+  endpoints. Ordinary Channel incentive
   lists, overlay scope, donation routing and stable IDs remain unchanged.
 - **Shared incentives now belong to one Event** (ADR-0012). A migration assigns
   every reward, poll, goal and auction an Event. With two or more Events, a shared
@@ -52,6 +62,10 @@ does not clear those gates or authorize deployment.
 
 ### Added
 
+- PostgreSQL support alongside SQLite from one image: `DATABASE_URL` selects the client
+  and the separate migration history, so moving to PostgreSQL needs no source edit or
+  rebuild.
+- Branded Wallet emails with the ESA emblem, a thank-you line and a plain-text fallback.
 - Staff can create a Channel with a fixed `id` (a lowercase UUID). The demo seed uses this,
   so a nightly reset keeps the same Channel ids and consumers such as Kollekt do not
   collect a stale Campaign per reset.
@@ -104,6 +118,12 @@ does not clear those gates or authorize deployment.
 
 ### Fixed
 
+- The donate review requires an email address before checkout, so a payment is not
+  started without one.
+- Staff donation lists load in batches below SQLite's bind-variable limit, so lists of
+  a thousand donations or more no longer crash the endpoint.
+- The donor Wallet hides auction sections while auctions are disabled, and the browser
+  tab icon is the ESA cube instead of a missing file.
 - The demo reset seeds a backend that is on several Docker networks. It used to join
   their names into one invalid network name, so the reset dropped the database and
   then failed to re-seed it.
@@ -141,8 +161,13 @@ does not clear those gates or authorize deployment.
 
 ### Security
 
+- Patch libexpat in the frontend image to 2.10.0 (CVE-2026-113351, CVE-2026-117610,
+  CVE-2026-118370).
+- Require patched libexpat in the frontend image (CVE-2026-77214).
 - Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
   libvips dependencies.
+- Patch body-parser (CVE-2026-111181), follow-redirects (CVE-2026-111755,
+  CVE-2026-111756, CVE-2026-116689) and multer (CVE-2026-113872).
 
 ## [0.2.0] — 2026-09-29
 
@@ -331,6 +356,7 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0
