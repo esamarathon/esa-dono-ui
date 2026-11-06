@@ -72,17 +72,24 @@ cross-Channel metadata. Donation source Channel routing, money and ids never cha
 
 Existing Channel lists remain own plus the shared incentives of the Channel's Event;
 Event incentive lists remain `[]`. ADR-0012 later also lists shared incentives under their
-Event, Tiltify team-campaign style, after the overlay removes duplicate polls; Kollekt#44
-must be deployed after that step.
+Event, Tiltify team-campaign style, after the overlay removes duplicate polls. That step
+(#204) and Kollekt#44 are both outside 0.3.0, and Kollekt#44 could only follow that step.
 Ordinary `polls/:poll_id` remains scoped to that Channel's own/shared polls (404 for an
-Event or another Channel's poll). Nothing changes overlay list scope. The focused
-[Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is a
-coordinated dependency for cold/stale cross-Channel hydration, not an optional operator
-briefing. It retains verified incentive ownership, consumes supplied per-target allocation
-values and preserves processed claim state on donation replacement. The original PRD's
-"no consumer change" assumption does not cover this case. Producer/unit/wire tests alone
-do not establish combined-consumer release readiness: cold and warm runtime checks must
-use pinned source/image revisions without prewarming, list widening or donation rerouting.
+Event or another Channel's poll). Nothing changes overlay list scope.
+
+**Deferred, not a 0.3.0 dependency (2026-10-31).** The focused
+[Kollekt PR44](https://github.com/esamarathon/kollekt/pull/44) transport/ingestion fix is
+not part of this release. Until it lands, a cold or stale Kollekt cache cannot resolve a
+cross-Channel pooled-credit reference to the true owner, and the overlay prompter keeps its
+current rendering. Claim state still lives in this API, so an unchanged Kollekt keeps
+reading and claiming through the same endpoints. The missing lookup support is a documented
+limitation, not a reason to hold the producer release, and it must not be reported as
+verified. The original PRD's "no consumer change" assumption does not cover this case.
+
+Before the deferred fix is accepted, verify cold and warm hydration, supplied allocation
+values and repeat-update claim preservation using pinned producer/consumer revisions
+without prewarming, list widening or donation rerouting. Producer, unit and wire tests
+alone do not establish combined-consumer readiness.
 
 ## Test and staging tooling (parent folder)
 
