@@ -141,6 +141,8 @@ does not clear those gates or authorize deployment.
 
 ### Security
 
+- Patch libexpat in the frontend image to 2.10.0 (CVE-2026-113351, CVE-2026-117610,
+  CVE-2026-118370).
 - Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
   libvips dependencies.
 - Patch body-parser (CVE-2026-111181), follow-redirects (CVE-2026-111755,
