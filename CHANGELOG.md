@@ -10,9 +10,12 @@ breaking changes.
 Amount-first donations with independent incentive Pools (#151, PRD-0003). The same
 backend image now runs on SQLite or PostgreSQL, selected by `DATABASE_URL`.
 
-**Not in this release:** Kollekt claim retirement and overlay prompter rendering are
-follow-up work in those repositories. The corrected 0.3.0 browser matrix has not been
-rerun, and this entry does not by itself authorize deployment.
+**Not in this release:** the Kollekt integration and the overlay prompter rendering are
+deferred to those repositories. Shared incentives stay visible through Channel lists, Event
+incentive lists stay empty (#204), and a cold cross-Channel pooled-credit reference stays
+unsupported until [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) lands. The
+corrected 0.3.0 browser matrix has not been rerun, and this entry does not by itself
+authorize deployment.
 
 ### Upgrade notes
 
@@ -38,9 +41,11 @@ rerun, and this entry does not by itself authorize deployment.
 - Subscribe Stripe to checkout expiry, asynchronous payment success/failure and
   `refund.*`, in addition to completed checkout. Native `donation.updated`
   subscriptions are opt-in; existing Destinations are not changed automatically.
-- Coordinate the parent test/staging callers and
-  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44). Cold cross-Channel
-  credit references need its owner-aware lookup support. Ordinary Channel incentive
+- Coordinate the parent test/staging callers. The
+  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) owner-aware lookup is
+  deferred out of 0.3.0: until it lands, a cold cross-Channel credit reference stays
+  unsupported, while an unchanged Kollekt keeps reading and claiming through the same
+  endpoints. Ordinary Channel incentive
   lists, overlay scope, donation routing and stable IDs remain unchanged.
 - **Shared incentives now belong to one Event** (ADR-0012). A migration assigns
   every reward, poll, goal and auction an Event. With two or more Events, a shared
