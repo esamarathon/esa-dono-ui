@@ -375,7 +375,18 @@ A Tiltify **campaign** is our **Channel** and the **team campaign** is our **Eve
 | esa-layouts-v2 | `tiltify.teamCampaign.{slug,id}`           | the Event's slug and uuid                                                                                |
 | esa-layouts-v2 | `tiltify.campaigns[].{slug,id,thisStream}` | each Channel's slug and uuid; `thisStream: true` on the one this layout instance shows                   |
 
-**Coordinated consumer dependency:** pooled credit can attach another Channel's incentive to a source-routed donation. Cold or stale Kollekt caches therefore require the focused Kollekt [PR44](https://github.com/esamarathon/kollekt/pull/44) lookup/ingestion fix, in addition to global shared-id handling (kollekt#36). The authorized fix uses the optional same-Event/shared owner lookup in `docs/api-consumers.md`; ordinary Channel lists and poll detail remain own/shared, Event lists remain empty, and overlays do not gain foreign incentives. The bare Tiltify payload is unchanged, but an unqualified "no consumer change" claim is false for this case. Verify cold and warm hydration, allocation values and repeat-update claim preservation using pinned producer/consumer revisions before release. Unit/wire tests or prewarmed caches are not combined runtime acceptance.
+**Deferred consumer dependency (2026-10-31):** pooled credit can attach another Channel's
+incentive to a source-routed donation. A cold or stale Kollekt cache cannot resolve that
+reference without the focused Kollekt
+[PR44](https://github.com/esamarathon/kollekt/pull/44) lookup/ingestion fix, in addition to
+global shared-id handling (kollekt#36). That fix is **not part of 0.3.0**; until it lands the
+case stays unsupported. The available producer side is the optional same-Event/shared owner
+lookup in `docs/api-consumers.md`: ordinary Channel lists and poll detail remain own/shared,
+Event lists remain empty, and overlays do not gain foreign incentives. The bare Tiltify
+payload is unchanged, but an unqualified "no consumer change" claim is false for this case.
+Before the deferred fix is accepted, verify cold and warm hydration, allocation values and
+repeat-update claim preservation using pinned producer/consumer revisions. Unit/wire tests or
+prewarmed caches are not combined runtime acceptance.
 
 ## Delivery guarantees
 

@@ -48,9 +48,10 @@ pledges add no money and pooled fulfillment creates no Wallet credit. To choose
 fallbacks, update `/api/admin/channels/:id` (or the moderator equivalent) with
 `default_goals: [goalId, …]`: own/shared ids only, in order; inactive/completed entries
 are preserved. See `docs/simulating-donations.md` for the simulator's real API boundaries.
-The amount-first donate UI and backend ship together. The coordinated parent callers
-and cold cross-Channel Kollekt dependency are described in `docs/api-consumers.md`;
-local tests or seeding do not establish the runtime release gates in `docs/deployment.md`.
+The amount-first donate UI and backend ship together. The coordinated parent callers are
+described in `docs/api-consumers.md`; the cold cross-Channel Kollekt dependency there is
+deferred out of 0.3.0. Local tests or seeding do not establish the runtime release gates in
+`docs/deployment.md`.
 
 The banner uses the keys from `MODERATOR_API_KEY` and `ADMIN_API_KEY` env vars (seed defaults:
 raw `dev-moderator-key` and `dev-admin-key`; configure matching backend keys explicitly).
