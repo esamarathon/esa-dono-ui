@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getDonor } from '../../api/donor';
-import { isSessionActive } from '../../utils/authToken';
-import { hasAdminAccess } from '../../types';
+import { useAdminKeyGate } from '../../hooks/useKeyGate';
 import SidebarLayout, { type SidebarNavItem } from '../../components/SidebarLayout';
 import {
   DashboardIcon,
@@ -39,46 +36,10 @@ const NAV: SidebarNavItem[] = [
   { to: '/admin/help', label: 'help', icon: InfoIcon },
 ];
 
-type AccessState = 'checking' | 'granted' | 'denied';
-
 export default function AdminLayout() {
-  const [access, setAccess] = useState<AccessState>('checking');
-  const [key, setKey] = useState(localStorage.getItem('admin_key') ?? '');
-  const [input, setInput] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    // A stored admin key is treated as a valid path (actual API calls will
-    // 401/403 if it's wrong). Otherwise, an ADMIN-role donor session grants
-    // access (ADR 0003).
-    if (key) {
-      setAccess('granted');
-      return;
-    }
-    if (!isSessionActive()) {
-      setAccess('denied');
-      return;
-    }
-    getDonor()
-      .then((donor) => setAccess(hasAdminAccess(donor.role) ? 'granted' : 'denied'))
-      .catch(() => setAccess('denied'));
-  }, [key]);
-
-  const login = () => {
-    if (!input.trim()) {
-      setError('Enter API key');
-      return;
-    }
-    localStorage.setItem('admin_key', input.trim());
-    setKey(input.trim());
-    setError('');
-  };
-
-  const logout = () => {
-    localStorage.removeItem('admin_key');
-    setKey('');
-    setAccess('checking');
-  };
+  // Key and session handling is shared with the moderator layout: a key is
+  // validated before it is persisted and before the dashboard renders (#136).
+  const { access, error, input, setInput, pending, login, logout } = useAdminKeyGate();
 
   if (access === 'checking') return null;
 
@@ -107,7 +68,7 @@ export default function AdminLayout() {
               {error}
             </p>
           )}
-          <button onClick={login} className="btrl-button w-full">
+          <button onClick={login} disabled={pending} className="btrl-button w-full">
             login
           </button>
         </div>

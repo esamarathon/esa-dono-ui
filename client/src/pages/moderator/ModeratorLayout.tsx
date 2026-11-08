@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getDonor } from '../../api/donor';
-import { isSessionActive } from '../../utils/authToken';
-import { hasModeratorAccess } from '../../types';
+import { useModeratorKeyGate } from '../../hooks/useKeyGate';
 import SidebarLayout, { type SidebarNavItem } from '../../components/SidebarLayout';
 import {
   DashboardIcon,
@@ -35,46 +32,10 @@ const NAV: SidebarNavItem[] = [
   { to: '/moderate/help', label: 'help', icon: InfoIcon },
 ];
 
-type AccessState = 'checking' | 'granted' | 'denied';
-
 export default function ModeratorLayout() {
-  const [access, setAccess] = useState<AccessState>('checking');
-  const [key, setKey] = useState(localStorage.getItem('moderator_key') ?? '');
-  const [input, setInput] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    // A stored moderator key is treated as a valid fallback (mirrors admin
-    // key behavior) — actual API calls will 401/403 if it's wrong.
-    if (key) {
-      setAccess('granted');
-      return;
-    }
-    const donorSession = isSessionActive();
-    if (!donorSession) {
-      setAccess('denied');
-      return;
-    }
-    getDonor()
-      .then((donor) => setAccess(hasModeratorAccess(donor.role) ? 'granted' : 'denied'))
-      .catch(() => setAccess('denied'));
-  }, [key]);
-
-  const login = () => {
-    if (!input.trim()) {
-      setError('Enter moderator key');
-      return;
-    }
-    localStorage.setItem('moderator_key', input.trim());
-    setKey(input.trim());
-    setError('');
-  };
-
-  const logout = () => {
-    localStorage.removeItem('moderator_key');
-    setKey('');
-    setAccess('checking');
-  };
+  // Key and session handling is shared with the admin layout: a key is
+  // validated before it is persisted and before the dashboard renders (#136).
+  const { access, error, input, setInput, pending, key, login, logout } = useModeratorKeyGate();
 
   if (access === 'checking') return null;
 
@@ -100,7 +61,7 @@ export default function ModeratorLayout() {
               {error}
             </p>
           )}
-          <button onClick={login} className="btrl-button w-full">
+          <button onClick={login} disabled={pending} className="btrl-button w-full">
             login
           </button>
         </div>

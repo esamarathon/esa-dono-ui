@@ -3,9 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn() }));
 vi.mock('../../src/api/admin', () => ({ default: api }));
+vi.mock('../../src/api/staffKeys');
 import AdminDonationDetail from '../../src/pages/admin/AdminDonationDetail';
 import AdminLayout from '../../src/pages/admin/AdminLayout';
 import PaymentRefunds from '../../src/pages/admin/PaymentRefunds';
+import { validateAdminKey } from '../../src/api/staffKeys';
 import type { PaymentRefundRecord } from '../../src/types';
 const detail = {
   id: 'd',
@@ -30,7 +32,11 @@ const detail = {
     CHARGEBACK: 'Cannot record a chargeback for zero money',
   },
 };
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // The stored admin key is accepted by the layout's validation probe.
+  vi.mocked(validateAdminKey).mockResolvedValue('valid');
+});
 it('routed detail shows source rows, server-disabled cash0 action and confirms a server preview', async () => {
   api.get.mockImplementation((path: string) =>
     Promise.resolve({
