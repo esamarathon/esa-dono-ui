@@ -90,3 +90,67 @@ describe('POST /api/auth/request-token', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /api/auth/session', () => {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  it('answers 200 with authenticated:false when there is no session', async () => {
+    const res = await request(createApp()).get('/api/auth/session');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ authenticated: false });
+  });
+
+  it('answers 200 with the donor identity for a valid session cookie', async () => {
+    const email = `probe-${Date.now()}-${Math.random()}@example.com`;
+    const token = crypto.randomBytes(16).toString('hex');
+    const donor = await prisma.donor.create({
+      data: {
+        email,
+        magic_token: token,
+        token_expires_at: new Date(Date.now() + 60_000),
+        balance_remaining: 750,
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/auth/session')
+      .set('Cookie', `dono_session=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      authenticated: true,
+      donor: {
+        id: donor.id,
+        email,
+        role: 'USER',
+        balance_remaining: 750,
+      },
+    });
+
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('answers 200 with authenticated:false for an expired token', async () => {
+    const email = `stale-${Date.now()}-${Math.random()}@example.com`;
+    const token = crypto.randomBytes(16).toString('hex');
+    const donor = await prisma.donor.create({
+      data: {
+        email,
+        magic_token: token,
+        token_expires_at: new Date(Date.now() - 60_000),
+      },
+    });
+
+    const res = await request(createApp())
+      .get('/api/auth/session')
+      .set('Cookie', `dono_session=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ authenticated: false });
+
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+});

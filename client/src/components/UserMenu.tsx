@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { UsersIcon, ChevronDownIcon } from './icons';
-import { hasAdminAccess, hasModeratorAccess, type DonorWallet } from '../types';
+import { hasAdminAccess, hasModeratorAccess, type SessionDonor } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -14,7 +14,9 @@ export default function UserMenu({
   donor,
   onLogout,
 }: {
-  donor: DonorWallet;
+  // Only the identity fields rendered here (email, balance, role) — Navbar
+  // fills them from the session probe, not the full wallet (issue #135).
+  donor: SessionDonor;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);

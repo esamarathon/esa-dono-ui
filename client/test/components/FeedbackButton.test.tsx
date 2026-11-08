@@ -7,7 +7,7 @@ vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn().mockResolvedValue(
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn().mockResolvedValue([]) }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn().mockResolvedValue([]) }));
 vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn().mockResolvedValue([]) }));
-vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
+vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn(), getSession: vi.fn() }));
 vi.mock('../../src/api/featureFlags', () => ({ getFeatureFlags: vi.fn() }));
 vi.mock('../../src/api/feedback', () => ({ sendFeedback: vi.fn() }));
 vi.mock('html2canvas', () => ({
@@ -20,6 +20,7 @@ vi.mock('html2canvas', () => ({
 
 import { getFeatureFlags } from '../../src/api/featureFlags';
 import { sendFeedback } from '../../src/api/feedback';
+import { getSession } from '../../src/api/donor';
 import html2canvas from 'html2canvas';
 
 function renderButton() {
@@ -32,6 +33,7 @@ function renderButton() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   sessionStorage.clear();
 });
 
@@ -97,5 +99,30 @@ describe('FeedbackButton', () => {
 
     expect(await screen.findByText('Thanks — feedback sent!')).toBeInTheDocument();
     expect(sendFeedback).toHaveBeenCalledWith(expect.objectContaining({ text: 'Great site!' }));
+  });
+
+  it('sends feedback without a donor when the session probe reports no session', async () => {
+    // Stale local session marker: the probe answers 200 {authenticated:false}
+    // (issue #135) — the logged-out state is expected, not an error.
+    localStorage.setItem('donor_session_active', '1');
+    vi.mocked(getSession).mockResolvedValue({ authenticated: false });
+    vi.mocked(getFeatureFlags).mockResolvedValue({ feedback: true });
+    vi.mocked(sendFeedback).mockResolvedValue({ success: true });
+
+    renderButton();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send feedback' }));
+
+    const textarea = await screen.findByPlaceholderText("What's going on?");
+    fireEvent.change(textarea, { target: { value: 'Anon report' } });
+    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+
+    expect(await screen.findByText('Thanks — feedback sent!')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to send feedback')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'retry' })).not.toBeInTheDocument();
+    expect(sendFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ donorId: null }),
+      }),
+    );
   });
 });

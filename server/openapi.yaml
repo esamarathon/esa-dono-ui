@@ -327,6 +327,33 @@ paths:
           description: Rate limit exceeded
 
   /auth/session:
+    get:
+      tags: [Auth]
+      summary: Read-only session probe
+      description: |
+        Anonymous-tolerant login check for the SPA. ALWAYS answers 200 — "no
+        session" is an expected outcome, not an error. An anonymous visitor
+        gets `{ authenticated: false }`; a signed-in donor gets a small
+        identity payload. Never mutates state.
+      responses:
+        '200':
+          description: Session state (200 even without a session)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+                  donor:
+                    type: object
+                    description: Present only when authenticated
+                    required: [id, email, role, balance_remaining]
+                    properties:
+                      id: { type: string, format: uuid }
+                      email: { type: string, format: email }
+                      role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+                      balance_remaining: { type: integer }
     post:
       tags: [Auth]
       summary: Exchange a magic token for an httpOnly session cookie

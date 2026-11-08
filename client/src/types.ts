@@ -35,6 +35,15 @@ export interface Donor {
   is_frozen?: boolean;
 }
 
+/** Donor identity returned by the GET /api/auth/session probe (issue #135). */
+export type SessionDonor = Pick<Donor, 'id' | 'email' | 'balance_remaining' | 'role'>;
+
+/**
+ * GET /api/auth/session response. The probe always answers 200 — a missing
+ * session is the expected logged-out answer, never an error (issue #135).
+ */
+export type SessionInfo = { authenticated: false } | { authenticated: true; donor: SessionDonor };
+
 export interface DonationRecord {
   id: string;
   amount_cents: number;

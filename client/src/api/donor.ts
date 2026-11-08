@@ -1,5 +1,5 @@
 import client from './client';
-import type { DonorWallet } from '../types';
+import type { DonorWallet, SessionInfo } from '../types';
 import type {
   CreditApplyRequest,
   CreditApplyResult,
@@ -7,6 +7,16 @@ import type {
   CreditEventSummary,
 } from '@dono/shared';
 export const getDonor = (): Promise<DonorWallet> => client.get('/donor').then((r) => r.data);
+
+/**
+ * Anonymous-tolerant session probe (issue #135): GET /api/auth/session always
+ * resolves 200, so a logged-out visit never logs a failed request in the
+ * browser console. Use this wherever the UI only needs "logged in or not" (or
+ * the small donor identity); use getDonor() only when the full wallet is
+ * required.
+ */
+export const getSession = (): Promise<SessionInfo> =>
+  client.get('/auth/session').then((r) => r.data);
 
 export const getPoolCredits = (): Promise<{
   wallet_credit_cents: number;
