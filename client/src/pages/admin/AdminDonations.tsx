@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import adminClient, { assignDonationChannel } from '../../api/admin';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import PaymentRefunds from './PaymentRefunds';
+import { NotMoneyNote } from '../../components/StaffAmounts';
 import {
   apiErrorMessage,
   type AdminDonation,
@@ -27,7 +29,11 @@ export default function AdminDonations() {
   const [claims, setClaims] = useState<AdminClaim[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('donations');
+  const [tab, setTab] = useState(() =>
+    new URLSearchParams(window.location.search).get('tab') === 'payment-refunds'
+      ? 'payment refunds'
+      : 'donations',
+  );
   const [statusFilter, setStatusFilter] = useState<DonationStatus[]>([]);
   const [unassignedOnly, setUnassignedOnly] = useState(false);
   const [assignChoice, setAssignChoice] = useState<Record<string, string>>({});
@@ -56,20 +62,15 @@ export default function AdminDonations() {
     await reloadDonations(next);
   };
 
-  const setDonationStatus = async (donation: AdminDonation, status: DonationStatus) => {
-    setError('');
-    try {
-      await adminClient.patch(`/donations/${donation.id}/status`, { status });
-      await reloadDonations();
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Failed to update donation status'));
-    }
-  };
-
   const toggleFulfilled = async (claim: AdminClaim) => {
     const status = claim.status === 'FULFILLED' ? 'PENDING' : 'FULFILLED';
-    await adminClient.patch(`/claims/${claim.id}`, { status });
-    await reloadClaims();
+    setError('');
+    try {
+      await adminClient.patch(`/claims/${claim.id}`, { status });
+      await reloadClaims();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Claim status change failed'));
+    }
   };
 
   /** A donation that named no event and no channel — it is not published until
@@ -98,7 +99,7 @@ export default function AdminDonations() {
     <div>
       <h1 className="font-display text-4xl uppercase mb-4">donations & claims</h1>
       <div className="flex gap-2 mb-4">
-        {['donations', 'claims'].map((t) => (
+        {['donations', 'claims', 'payment refunds'].map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -118,6 +119,8 @@ export default function AdminDonations() {
         ))}
       </div>
 
+      <NotMoneyNote />
+      {tab === 'payment refunds' && <PaymentRefunds />}
       {tab === 'donations' && (
         <div>
           {error && (
@@ -164,7 +167,9 @@ export default function AdminDonations() {
                   {[
                     'donor',
                     'email',
-                    'amount',
+                    'money',
+                    'pledge amount',
+                    'flags / attention',
                     'channel',
                     'status',
                     'comment',
@@ -183,32 +188,32 @@ export default function AdminDonations() {
               <tbody>
                 {visibleDonations.map((d) => (
                   <tr key={d.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
-                    <td className="px-4 py-2 font-data text-off-white">{d.donor_name ?? '-'}</td>
+                    <td className="px-4 py-2 font-data text-off-white">
+                      <a href={`/admin/donations/${d.id}`} className="underline">
+                        {d.donor_name ?? 'Anonymous'}
+                      </a>
+                    </td>
                     <td className="px-4 py-2 font-data text-off-white/55">
                       {d.donor?.email ?? '-'}
                     </td>
-                    <td className="px-4 py-2 font-data font-bold text-off-white">
+                    <td className="px-4 py-2 font-data font-bold text-d-yellow">
                       {fmt(d.amount_cents)}
+                    </td>
+                    <td className="px-4 py-2 font-data">
+                      {d.pledge_amount_cents == null ? '—' : fmt(d.pledge_amount_cents)}
+                    </td>
+                    <td className="px-4 py-2 font-data">
+                      {d.needs_attention && <strong>Needs attention · </strong>}
+                      {d.flags?.join(' · ')}
                     </td>
                     <td className="px-4 py-2 font-data text-off-white/55">{channelName(d)}</td>
                     <td className="px-4 py-2">
-                      <select
-                        value={d.status}
-                        disabled={!!d.refund_id}
-                        onChange={(e) => setDonationStatus(d, e.target.value as DonationStatus)}
-                        className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold tracking-wider uppercase"
-                        style={{
-                          background: `${STATUS_COLORS[d.status]}29`,
-                          color: STATUS_COLORS[d.status],
-                          border: 'none',
-                        }}
+                      <span
+                        className="font-mono text-sm font-bold"
+                        style={{ color: STATUS_COLORS[d.status] }}
                       >
-                        {DONATION_STATUSES.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
+                        {d.status}
+                      </span>
                     </td>
                     <td className="px-4 py-2 font-body text-sm text-off-white/55 max-w-xs break-words">
                       {d.comment ?? '-'}
@@ -254,24 +259,39 @@ export default function AdminDonations() {
 
       {tab === 'claims' && (
         <div className="overflow-x-auto">
+          {error && <p role="alert">{error}</p>}
           <table className="w-full text-sm">
             <thead>
               <tr style={{ background: 'rgba(239,238,236,.03)' }}>
-                {['donor', 'reward', 'status', 'data', 'date', 'action'].map((h) => (
-                  <th
-                    key={h}
-                    className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
-                  >
-                    {h}
-                  </th>
-                ))}
+                {['donor', 'reward / recorded allocation', 'status', 'data', 'date', 'action'].map(
+                  (h) => (
+                    <th
+                      key={h}
+                      className="text-left px-4 py-2 font-mono text-sm tracking-wider uppercase text-off-white/55"
+                    >
+                      {h}
+                    </th>
+                  ),
+                )}
               </tr>
             </thead>
             <tbody>
               {claims.map((c) => (
                 <tr key={c.id} style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                   <td className="px-4 py-2 font-data text-off-white">{c.donor?.email ?? '-'}</td>
-                  <td className="px-4 py-2 font-data text-off-white">{c.reward?.title ?? '-'}</td>
+                  <td className="px-4 py-2 font-data text-off-white">
+                    {c.reward?.title ?? '-'}
+                    <p>
+                      {fmt(c.amount_cents)} recorded (price now {fmt(c.reward?.cost_cents ?? 0)})
+                    </p>
+                    {(c.funding_donation_ids ?? (c.donation_id ? [c.donation_id] : [])).map(
+                      (id) => (
+                        <a key={id} href={`/admin/donations/${id}`} className="underline block">
+                          Donation {id}
+                        </a>
+                      ),
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     <span
                       className="font-mono text-sm px-2 py-0.5 rounded-sm font-bold"
@@ -295,6 +315,10 @@ export default function AdminDonations() {
                   <td className="px-4 py-2">
                     <button
                       onClick={() => toggleFulfilled(c)}
+                      disabled={
+                        !!c.toggle_disabled_reason || !['PENDING', 'FULFILLED'].includes(c.status)
+                      }
+                      title={c.toggle_disabled_reason ?? undefined}
                       className="font-mono text-sm tracking-wider uppercase"
                       style={{
                         color: c.status === 'FULFILLED' ? 'var(--d-yellow)' : 'var(--green)',
@@ -302,6 +326,8 @@ export default function AdminDonations() {
                     >
                       {c.status === 'FULFILLED' ? 'mark pending' : 'mark fulfilled'}
                     </button>
+                    {c.toggle_disabled_reason && <p>{c.toggle_disabled_reason}</p>}
+                    {c.chargeback_flagged_at && <span>Shipped claim after chargeback</span>}
                   </td>
                 </tr>
               ))}

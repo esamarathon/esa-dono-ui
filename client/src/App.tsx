@@ -2,14 +2,13 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import Navbar from './components/Navbar';
 import GlobalProgressBar from './components/GlobalProgressBar';
-import CartDrawer from './components/CartDrawer';
 import FeedbackButton from './components/FeedbackButton';
 import BroadcastBanner from './components/BroadcastBanner';
-import { CartProvider } from './context/CartContext';
+import { DraftPledgeProvider } from './context/DraftPledgeContext';
 import { CampaignProvider } from './context/CampaignContext';
 import { track } from './lib/tracing';
 import Home from './pages/Home';
-import DonateFlow from './pages/DonateFlow';
+import DonateFlow, { LegacyIncentiveRedirect } from './pages/DonateFlow';
 import PledgeReturn from './pages/PledgeReturn';
 import MyWallet from './pages/MyWallet';
 import Help from './pages/Help';
@@ -22,6 +21,7 @@ import AdminRewards from './pages/admin/AdminRewards';
 import AdminPolls from './pages/admin/AdminPolls';
 import AdminGoals from './pages/admin/AdminGoals';
 import AdminDonations from './pages/admin/AdminDonations';
+import AdminDonationDetail from './pages/admin/AdminDonationDetail';
 import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
@@ -40,6 +40,7 @@ import ModeratorPolls from './pages/moderator/ModeratorPolls';
 import ModeratorRewards from './pages/moderator/ModeratorRewards';
 import ModeratorGoals from './pages/moderator/ModeratorGoals';
 import ModeratorClaims from './pages/moderator/ModeratorClaims';
+import ModeratorUnusedPoolMoney from './pages/moderator/ModeratorUnusedPoolMoney';
 import ModeratorDonations from './pages/moderator/ModeratorDonations';
 import ModeratorAuctions from './pages/moderator/ModeratorAuctions';
 /** Fires a `page_view` span on every client-side route change. */
@@ -64,6 +65,7 @@ export default function App() {
           <Route path="polls" element={<AdminPolls />} />
           <Route path="goals" element={<AdminGoals />} />
           <Route path="donations" element={<AdminDonations />} />
+          <Route path="donations/:id" element={<AdminDonationDetail />} />
           <Route path="simulate" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
@@ -81,6 +83,7 @@ export default function App() {
           <Route path="rewards" element={<ModeratorRewards />} />
           <Route path="goals" element={<ModeratorGoals />} />
           <Route path="claims" element={<ModeratorClaims />} />
+          <Route path="unused-pool-money" element={<ModeratorUnusedPoolMoney />} />
           <Route path="donations" element={<ModeratorDonations />} />
           <Route path="auctions" element={<ModeratorAuctions />} />
           <Route path="help" element={<ModeratorHelp />} />
@@ -91,11 +94,10 @@ export default function App() {
             <div className="min-h-screen flex flex-col">
               <BroadcastBanner />
               <CampaignProvider>
-                <CartProvider>
+                <DraftPledgeProvider>
                   <PageViewTracker />
                   <Navbar />
                   <GlobalProgressBar />
-                  <CartDrawer />
                   <FeedbackButton />
                   <div className="flex-1">
                     <Routes>
@@ -106,13 +108,13 @@ export default function App() {
                       <Route path="/pledge/:token" element={<PledgeReturn />} />
                       <Route path="/wallet" element={<MyWallet />} />
                       <Route path="/help" element={<Help />} />
-                      <Route path="/rewards" element={<DonateFlow />} />
-                      <Route path="/polls" element={<DonateFlow />} />
-                      <Route path="/goals" element={<DonateFlow />} />
+                      <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
+                      <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
+                      <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
                       <Route path="/auctions" element={<Auctions />} />
                     </Routes>
                   </div>
-                </CartProvider>
+                </DraftPledgeProvider>
               </CampaignProvider>
             </div>
           }

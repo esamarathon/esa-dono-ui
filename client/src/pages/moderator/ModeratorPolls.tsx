@@ -5,8 +5,17 @@ import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
 import ChannelPill from '../../components/ChannelPill';
+import { AllocationSources } from '../../components/StaffAmounts';
 import { useModeratorChannelFilter } from '../../context/ModeratorChannelFilterContext';
 import { apiErrorMessage, type Poll, type CustomEntry } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import {
+  availableOnSelected,
+  defaultOwner,
+  ownerLabel,
+  ownerPayload,
+  useStaffEvents,
+} from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -22,6 +31,7 @@ interface PollForm {
   max_entry_chars: number | string;
   auto_approve: boolean;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -33,6 +43,7 @@ const EMPTY: PollForm = {
   max_entry_chars: '',
   auto_approve: true,
   channel_id: null,
+  event_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
@@ -42,7 +53,8 @@ export default function ModeratorPolls() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
-  const [newOption, setNewOption] = useState('');
+  // Keyed by poll id: each poll's 'add option' input keeps its own text (#149).
+  const [newOptions, setNewOptions] = useState<Record<string, string>>({});
   const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
   const [optionDraft, setOptionDraft] = useState('');
   const [error, setError] = useState('');
@@ -50,21 +62,17 @@ export default function ModeratorPolls() {
   const [entries, setEntries] = useState<CustomEntry[]>([]);
   const [entriesError, setEntriesError] = useState('');
   const { channels, selectedChannelId } = useModeratorChannelFilter();
+  const events = useStaffEvents(moderatorClient);
 
   const reload = () => moderatorClient.get('/polls').then((r) => setPolls(r.data));
   useEffect(() => {
     reload().finally(() => setLoading(false));
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
-  const filteredPolls = polls.filter(
-    (p) => !selectedChannelId || p.channel_id === selectedChannelId || p.channel_id == null,
-  );
+  const filteredPolls = polls.filter((p) => availableOnSelected(p, channels, selectedChannelId));
 
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
   };
@@ -74,6 +82,7 @@ export default function ModeratorPolls() {
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
       channel_id: p.channel_id ?? null,
+      event_id: p.event_id,
     } as PollForm);
     setModal(p);
     setError('');
@@ -84,6 +93,7 @@ export default function ModeratorPolls() {
     try {
       const data = {
         ...form,
+        ...ownerPayload(form),
         ends_at: form.ends_at || null,
         max_entry_chars: form.max_entry_chars ? parseInt(String(form.max_entry_chars)) : null,
         allow_custom_entries: form.allow_custom_entries || false,
@@ -111,10 +121,11 @@ export default function ModeratorPolls() {
   };
 
   const addOption = async (pollId: string) => {
-    if (!newOption.trim()) return;
+    const label = newOptions[pollId]?.trim();
+    if (!label) return;
     try {
-      await moderatorClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
-      setNewOption('');
+      await moderatorClient.post(`/polls/${pollId}/options`, { label });
+      setNewOptions((prev) => ({ ...prev, [pollId]: '' }));
       await reload();
     } catch (e) {
       setError(apiErrorMessage(e, 'Failed to add option'));
@@ -198,16 +209,17 @@ export default function ModeratorPolls() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="font-data font-bold text-lg text-off-white">{poll.title}</h2>
-                  <ChannelPill label={channelName(poll.channel_id)} />
+                  <ChannelPill label={ownerLabel(poll, channels, events)} />
                 </div>
                 {poll.description && (
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/55">
-                  total votes: {fmt(poll.total_votes_cents)}
+                  allocated: {fmt(poll.allocated_cents ?? poll.total_votes_cents)}
                   {poll.allow_custom_entries &&
                     ` · custom entries ${poll.auto_approve === false ? '(needs approval)' : '(auto-approved)'}`}
                 </p>
+                <AllocationSources row={poll} />
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
                 </div>
@@ -291,8 +303,10 @@ export default function ModeratorPolls() {
                 <input
                   className="flex-1 px-2 py-1 text-sm"
                   placeholder="New option..."
-                  value={newOption}
-                  onChange={(e) => setNewOption(e.target.value)}
+                  value={newOptions[poll.id] ?? ''}
+                  onChange={(e) =>
+                    setNewOptions((prev) => ({ ...prev, [poll.id]: e.target.value }))
+                  }
                   onKeyDown={(e) => e.key === 'Enter' && addOption(poll.id)}
                 />
                 <button
@@ -319,7 +333,7 @@ export default function ModeratorPolls() {
               <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
                 <div className="flex items-center gap-2 mb-2">
                   <h4 className="font-data font-bold text-sm text-off-white">custom entries</h4>
-                  <ChannelPill label={channelName(poll.channel_id)} />
+                  <ChannelPill label={ownerLabel(poll, channels, events)} />
                 </div>
                 {entriesError && (
                   <p className="font-body text-sm mb-2" style={{ color: 'var(--red)' }}>
@@ -350,7 +364,7 @@ export default function ModeratorPolls() {
                             {e.label}
                           </span>
                           {e.option?.votes?.[0] && (
-                            <span className="font-data text-xs text-d-yellow ml-2">
+                            <span className="font-data text-xs text-off-white ml-2">
                               {fmt(e.option.votes[0].amount_cents)}
                             </span>
                           )}
@@ -433,21 +447,13 @@ export default function ModeratorPolls() {
               onChange={(e) => setForm((d) => ({ ...d, ends_at: e.target.value }))}
             />
           </div>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

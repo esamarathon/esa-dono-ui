@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getPledge } from '../api/pledge';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { getPledge, cancelPledge, reconcilePledge } from '../api/pledge';
 import { isSessionActive } from '../utils/authToken';
 import { track } from '../lib/tracing';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Card from '../components/Card';
+import PledgeReview from '../components/PledgeReview';
+import { useOptionalDraftPledge } from '../context/DraftPledgeContext';
 import type { Pledge } from '../types';
 
 function fmt(cents: number) {
@@ -16,7 +18,11 @@ const POLL_MAX_ATTEMPTS = 15;
 
 export default function PledgeReturn() {
   const { token } = useParams();
+  const draftFlow = useOptionalDraftPledge();
+  const paymentObserver = draftFlow?.paymentObserver;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const isCancelReturn = searchParams.get('cancelled') === '1';
   const [pledge, setPledge] = useState<Pledge | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [timedOut, setTimedOut] = useState(false);
@@ -28,19 +34,42 @@ export default function PledgeReturn() {
       return;
     }
     track('pledge_return', { 'pledge.token': token });
+    const observe = paymentObserver?.(token);
 
     let cancelled = false;
+    let first = true;
+    attempts.current = 0;
     let timer: ReturnType<typeof setTimeout>;
 
     const poll = async () => {
       if (cancelled) return;
       attempts.current += 1;
       try {
-        const data = await getPledge(token);
+        let data: Pledge;
+        if (first && isCancelReturn) {
+          first = false;
+          try {
+            data = await cancelPledge(token);
+          } catch {
+            data = await getPledge(token);
+          }
+        } else data = await getPledge(token);
+        if (
+          !['FULFILLED', 'LEGACY_PAID', 'PAYMENT_REVIEW', 'NON_PAYMENT'].includes(
+            data.payment_state,
+          )
+        ) {
+          try {
+            data = await reconcilePledge(token);
+          } catch {
+            data = await getPledge(token);
+          }
+        }
         if (cancelled) return;
         setPledge(data);
+        observe?.(data);
 
-        if (data.status === 'FULFILLED') {
+        if (data.payment_state === 'FULFILLED') {
           // Never auto-authenticate from a pledge return — that would let
           // anyone gain a session by paying to someone else's email (#48).
           // The magic link (emailed on every donation) is the only way to
@@ -53,7 +82,10 @@ export default function PledgeReturn() {
           }
           return;
         }
-        if (data.status === 'EXPIRED' || new Date(data.expires_at) < new Date()) {
+        if (
+          ['NON_PAYMENT', 'LEGACY_PAID', 'PAYMENT_REVIEW'].includes(data.payment_state) ||
+          (data.format === 'LEGACY' && !data.has_checkout)
+        ) {
           return;
         }
       } catch {
@@ -75,7 +107,7 @@ export default function PledgeReturn() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [token, navigate]);
+  }, [token, navigate, isCancelReturn, paymentObserver]);
 
   if (error) {
     return (
@@ -95,8 +127,10 @@ export default function PledgeReturn() {
 
   if (!pledge) return <LoadingSpinner />;
 
-  const isFulfilled = pledge.status === 'FULFILLED';
-  const isExpired = pledge.status === 'EXPIRED' || new Date(pledge.expires_at) < new Date();
+  const isFulfilled = pledge.payment_state === 'FULFILLED';
+  const isExpired = pledge.payment_state === 'NON_PAYMENT';
+  const creditOnly =
+    pledge.payment_state === 'PAYMENT_REVIEW' || pledge.payment_state === 'LEGACY_PAID';
 
   return (
     <div className="max-w-xl mx-auto p-8">
@@ -109,34 +143,54 @@ export default function PledgeReturn() {
               Your pledge has been fulfilled! Check your email for the magic link.
             </p>
           </div>
+        ) : creditOnly ? (
+          <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(208,152,70,.16)' }}>
+            <p className="font-data text-sm" style={{ color: 'var(--d-yellow)' }}>
+              Payment received as Wallet credit. The original incentives were not fulfilled.
+              {pledge.payment_state === 'PAYMENT_REVIEW'
+                ? ' This payment needs admin review.'
+                : ' This was an old-shape pledge paid after the transition.'}
+            </p>
+          </div>
         ) : isExpired ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(208,152,70,.16)' }}>
             <p className="font-data text-sm" style={{ color: 'var(--d-yellow)' }}>
-              This pledge has expired. Pledges without a matching payment are credited to your
-              wallet balance.
+              {pledge.status === 'EXPIRED' ? 'This pledge has expired. ' : ''}
+              Non-payment confirmed. Any held Wallet credit has been released.
             </p>
           </div>
         ) : timedOut ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(208,152,70,.16)' }}>
             <p className="font-data text-sm" style={{ color: 'var(--d-yellow)' }}>
-              Still processing your donation. Check your email for the magic link — it may take a
-              moment to arrive.
+              Payment status is not confirmed. This review stays read-only. Check again later.
             </p>
           </div>
         ) : (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(115,78,158,.3)' }}>
             <p className="font-data text-sm text-off-white">
-              Processing your pledge... this usually takes a few seconds.
+              Processing your pledge... this review stays read-only until payment is confirmed.
             </p>
           </div>
         )}
 
         <div className="btrl-panel p-4 mb-4">
           <p className="font-data text-sm text-off-white/55 mb-1">pledge total</p>
-          <p className="font-display text-3xl text-d-yellow">{fmt(pledge.total_cents)}</p>
+          <p className="font-display text-3xl text-d-yellow">
+            {pledge.format === 'POOLED' ? fmt(pledge.pledge_amount_cents) : '—'}
+          </p>
         </div>
 
-        {pledge.items.length > 0 && (
+        {pledge.format === 'POOLED' && (
+          <>
+            <PledgeReview plan={pledge.plan} previewError />
+            <p className="font-data text-sm mb-2">
+              Display name: {pledge.display_name || 'Anonymous'}
+            </p>
+            <p className="font-body text-sm mb-4">Message: {pledge.comment || '(none)'}</p>
+          </>
+        )}
+
+        {pledge.format === 'LEGACY' && pledge.items.length > 0 && (
           <div className="mb-4">
             <h3 className="font-data font-bold text-sm text-off-white mb-2 uppercase tracking-wider">
               items
@@ -165,6 +219,11 @@ export default function PledgeReturn() {
           <Link to="/wallet" className="btrl-button btrl-button-outline">
             my wallet
           </Link>
+          {!isFulfilled && !creditOnly && draftFlow?.draft && (
+            <Link to={draftFlow.draft.path} className="btrl-button btrl-button-outline">
+              resume donation
+            </Link>
+          )}
         </div>
       </Card>
     </div>

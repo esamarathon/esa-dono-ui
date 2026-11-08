@@ -35,14 +35,14 @@
 #                (default http://localhost:3001)
 #     CLIENT     frontend base URL for magic links
 #                (default http://localhost:5173, only used in echoed output)
-#     ADMIN_KEY  admin API key (default $ADMIN_API_KEY or "change-me")
+#     ADMIN_KEY  admin API key (default $ADMIN_API_KEY; required)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 BASE=${1:-http://localhost:3001}
 CLIENT=${2:-http://localhost:5173}
-KEY=${3:-${ADMIN_API_KEY:-change-me}}
+KEY=${3:-${ADMIN_API_KEY:-}}
 COMPOSE="docker compose"
 SEED_HELPER_IMAGE="debian:12-slim" # has bash; curl+jq installed on the fly
 
@@ -52,6 +52,33 @@ if [ "${DEMO_RESET_ALLOWED:-}" != "1" ]; then
   echo "This script runs 'docker compose down -v' (destroys the DB volume)." >&2
   echo "Set DEMO_RESET_ALLOWED=1 only on the demo host." >&2
   exit 1
+fi
+
+# A manual invocation does not inherit systemd's EnvironmentFile. Never wipe
+# the database and then discover that the seed used a guessed admin key.
+if [ -z "$KEY" ]; then
+  echo "REFUSING to reset: ADMIN_API_KEY (or the third argument) is required." >&2
+  echo "For the configured staging environment, run: sudo systemctl start demo-reset.service" >&2
+  exit 1
+fi
+
+# Validate the supplied credential against the running backend before teardown.
+# Run inside it so this also works when no backend port is published to the host.
+if [ -n "$($COMPOSE ps -q dono-backend)" ]; then
+  echo "==> Checking admin authentication before reset"
+  if ! ADMIN_API_KEY="$KEY" $COMPOSE exec -T -e ADMIN_API_KEY dono-backend node --input-type=module -e '
+    const response = await fetch("http://127.0.0.1:3001/api/admin/events", {
+      headers: { Authorization: `Bearer key_admin_${process.env.ADMIN_API_KEY}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      console.error(`Admin API preflight failed (HTTP ${response.status})`);
+      process.exit(1);
+    }
+  '; then
+    echo "REFUSING to reset: admin API authentication check failed; no data was deleted." >&2
+    exit 1
+  fi
 fi
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -88,18 +115,29 @@ if [ -z "$ready" ]; then
     echo "FAIL: could not find the dono-backend container" >&2
     exit 1
   fi
-  NETWORK=$(docker inspect "$BACKEND_CID" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' | awk '{print $1}')
-  if [ -z "$NETWORK" ]; then
+  # One name per line: a backend on several networks must not produce one
+  # concatenated name. Seed through the first network that reaches it. Skip
+  # internal networks: the seed helper downloads curl and jq.
+  NETWORKS=""
+  for candidate in $(docker inspect "$BACKEND_CID" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}'); do
+    if [ "$(docker network inspect --format '{{.Internal}}' "$candidate")" != true ]; then
+      NETWORKS="$NETWORKS $candidate"
+    fi
+  done
+  if [ -z "$NETWORKS" ]; then
     echo "FAIL: could not determine dono-backend's Docker network" >&2
     exit 1
   fi
   SEED_BASE="http://dono-backend:3001"
-  echo -n "==> Waiting for backend health (via network $NETWORK, $SEED_BASE)"
+  echo -n "==> Waiting for backend health (via networks$NETWORKS, $SEED_BASE)"
   for _ in $(seq 1 30); do
-    if docker run --rm --network "$NETWORK" curlimages/curl:8.10.1 -sf "$SEED_BASE/api/health" >/dev/null 2>&1; then
-      ready=1
-      break
-    fi
+    for candidate in $NETWORKS; do
+      if docker run --rm --network "$candidate" curlimages/curl:8.10.1 -sf "$SEED_BASE/api/health" >/dev/null 2>&1; then
+        NETWORK="$candidate"
+        ready=1
+        break 2
+      fi
+    done
     echo -n "."
     sleep 1
   done

@@ -1,116 +1,144 @@
 import { Router, type Request, type Response } from 'express';
-import { createPledge, createCheckoutForPledge, type WalletDonor } from '../services/pledge.js';
+import {
+  createPledge,
+  createCheckoutForPledge,
+  pledgeResponse,
+  type WalletDonor,
+} from '../services/pledge.js';
+import { cancelPledge, getPledge, reconcilePledge } from '../services/checkout.js';
+import { defaultGoalPreview } from '../services/defaultGoal.js';
 import { resolveDonorToken } from '../middleware/donorAuth.js';
+import { httpError } from '../lib/httpError.js';
+import prisma from '../lib/prisma.js';
+import type { PledgePlan } from '@dono/shared';
 
 const router = Router();
 
-/**
- * POST /api/pledge
- * Create a pending pledge from cart items.
- * Body: { email?, comment?, display_name?, items: [{ kind, target_id, amount_cents?, poll_id?, data? }] }
- * Donor session (cookie or Bearer, resolveDonorToken) — when a valid one is present, the donor's
- *         wallet balance is applied as a discount on the Stripe checkout amount.
- * Returns: { pledge_token, total_cents, expires_at, donate_url, has_checkout, wallet_discount_cents }
- */
+async function walletDonor(req: Request): Promise<WalletDonor | null> {
+  const token = resolveDonorToken(req);
+  if (!token) return null;
+  const donor = await prisma.donor.findUnique({ where: { magic_token: token } });
+  return donor && donor.token_expires_at && new Date() <= donor.token_expires_at && !donor.is_frozen
+    ? donor
+    : null;
+}
+
+/** New drafts confirm a live plan; retrying a draft preserves its original funding. */
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { email, comment, display_name, items, top_up_cents, channel_id } = req.body;
+    const {
+      email,
+      comment,
+      display_name,
+      items,
+      pledge_amount_cents,
+      draft_id,
+      plan,
+      top_up_cents,
+      channel_id,
+    } = req.body;
+    // Authentication precedes planning. Email alone never authorizes Wallet credit.
+    const donor = await walletDonor(req);
     const pledge = await createPledge({
       email,
       comment,
       display_name,
       items,
+      pledge_amount_cents,
+      draft_id,
+      plan,
       top_up_cents,
       channel_id,
+      walletDonorId: donor?.id,
     });
-
-    // Resolve authenticated donor from magic token (wallet discount) — optional.
-    // Must be a valid, non-expired, non-frozen token. Wallet discount is only
-    // applied for authenticated donors, never by email alone.
-    let walletDonor: WalletDonor | null = null;
-    const token = resolveDonorToken(req);
-    if (token && typeof token === 'string') {
-      const { default: prisma } = await import('../lib/prisma.js');
-      const donor = await prisma.donor.findUnique({
-        where: { magic_token: token },
-        select: {
-          id: true,
-          email: true,
-          balance_remaining: true,
-          magic_token: true,
-          token_expires_at: true,
-          is_frozen: true,
-        },
-      });
-      if (
-        donor &&
-        donor.token_expires_at &&
-        new Date() <= donor.token_expires_at &&
-        !donor.is_frozen
-      ) {
-        walletDonor = {
-          id: donor.id,
-          email: donor.email,
-          balance_remaining: donor.balance_remaining,
-          magic_token: donor.magic_token,
-        };
-      }
-    }
-
-    // Create Stripe Checkout Session for deterministic linkage (graceful fallback)
-    let checkout: {
-      donate_url: string | null;
-      checkout_session_id: string | null;
-      wallet_discount_cents?: number;
-    } = {
-      donate_url: null,
-      checkout_session_id: null,
-    };
+    let checkoutError: string | null = null;
+    let donateUrl: string | null = null;
     try {
-      checkout = await createCheckoutForPledge(pledge.pledge_token, walletDonor, email);
-    } catch (checkoutErr) {
-      console.error('Checkout session creation failed (non-fatal):', checkoutErr);
+      const stored = await getPledge(pledge.pledge_token);
+      if (stored.checkout_session_id) await reconcilePledge(pledge.pledge_token);
+      const checkout = await createCheckoutForPledge(pledge.pledge_token, donor);
+      donateUrl = checkout.donate_url;
+    } catch (error) {
+      // The confirmed immutable pledge/hold survives an uncertain external call.
+      checkoutError = (error as Error).message;
     }
-
     res.json({
-      ...pledge,
-      donate_url: checkout.donate_url,
-      has_checkout: !!checkout.checkout_session_id,
-      wallet_discount_cents: checkout.wallet_discount_cents ?? 0,
+      ...pledgeResponse(await getPledge(pledge.pledge_token)),
+      ...(donateUrl ? { donate_url: donateUrl } : {}),
+      checkout_error: checkoutError,
     });
   } catch (err) {
-    const status = (err as { status?: number }).status || 500;
-    res.status(status).json({ error: (err as Error).message });
+    const error = err as Error & { status?: number; plan?: PledgePlan; items?: unknown };
+    res.status(error.status || 500).json({
+      error: error.message,
+      ...(error.plan ? { plan: error.plan, items: error.items } : {}),
+    });
   }
 });
 
-/**
- * GET /api/pledge/:token
- * Get pledge status (for the return/confirmation page).
- */
+/** Token possession permits reconciliation, never authentication or Wallet changes on a new plan. */
+router.post('/:token/reconcile', async (req, res) => {
+  try {
+    res.json(await reconcilePledge(req.params.token));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+router.post('/:token/cancel', async (req, res) => {
+  try {
+    res.json(await cancelPledge(req.params.token, await walletDonor(req)));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+router.post('/:token/continue', async (req, res) => {
+  try {
+    const donor = await walletDonor(req);
+    const pledge = await getPledge(req.params.token);
+    if (pledge.format !== 'POOLED') throw httpError(409, 'Legacy pledges are read-only');
+    if (pledge.wallet_donor_id && pledge.wallet_donor_id !== donor?.id)
+      throw httpError(403, 'This pledge belongs to another donor session');
+    if (pledge.checkout_session_id || pledge.checkout_requested_at)
+      await reconcilePledge(req.params.token);
+    const latest = await getPledge(req.params.token);
+    if (
+      latest.status === 'OPEN' &&
+      !latest.non_payment_confirmed_at &&
+      latest.checkout_session_status !== 'complete'
+    )
+      await createCheckoutForPledge(req.params.token, donor);
+    res.json(pledgeResponse(await getPledge(req.params.token)));
+  } catch (error) {
+    await actionError(req, res, error);
+  }
+});
+
+async function actionError(req: Request, res: Response, error: unknown) {
+  const status = (error as { status?: number }).status || 409;
+  // The UI can keep the confirmed review on uncertain payment, without leaking PII.
+  const pledge = status === 409 ? pledgeResponse(await getPledge(req.params.token!)) : undefined;
+  res.status(status).json({ error: (error as Error).message, ...(pledge ? { pledge } : {}) });
+}
+
+/** Live explanatory preview only; never reserves funding or creates a pledge. */
+router.get('/default-goal/:channelId', async (req, res) => {
+  try {
+    res.json(await defaultGoalPreview(req.params.channelId));
+  } catch (error) {
+    res
+      .status((error as { status?: number }).status || 500)
+      .json({ error: (error as Error).message });
+  }
+});
+
+/** Historical pledges are readable only, with an explicit LEGACY discriminant. */
 router.get('/:token', async (req: Request, res: Response) => {
   try {
-    const { default: prisma } = await import('../lib/prisma.js');
-    const pledge = await prisma.pendingPledge.findUnique({
-      where: { pledge_token: req.params.token },
-      include: { items: true },
-    });
-    if (!pledge) return res.status(404).json({ error: 'Pledge not found' });
-    res.json({
-      pledge_token: pledge.pledge_token,
-      total_cents: pledge.total_cents,
-      top_up_cents: pledge.top_up_cents,
-      status: pledge.status,
-      donor_email: pledge.donor_email,
-      expires_at: pledge.expires_at,
-      items: pledge.items.map((i) => ({
-        kind: i.kind,
-        target_id: i.target_id,
-        amount_cents: i.amount_cents,
-      })),
-    });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.json(pledgeResponse(await getPledge(req.params.token!)));
+  } catch (error) {
+    res
+      .status((error as { status?: number }).status || 500)
+      .json({ error: (error as Error).message });
   }
 });
 

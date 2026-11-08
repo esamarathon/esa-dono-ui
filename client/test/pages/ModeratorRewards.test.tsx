@@ -41,7 +41,7 @@ describe('ModeratorRewards', () => {
     );
 
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
-    expect(screen.getByText(/PHYSICAL · \$20\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/PHYSICAL · current price \$20\.00/)).toBeInTheDocument();
   });
 
   it('creates a reward', async () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 
 vi.mock('../../services/email.js', () => ({
@@ -14,7 +14,7 @@ vi.mock('../../middleware/rateLimit.js', () => ({
 
 import authRouter from '../../routes/auth.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

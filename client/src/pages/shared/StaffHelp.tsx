@@ -118,13 +118,47 @@ export default function StaffHelp({ role }: { role: Role }) {
         )}
       </Section>
 
+      <Section title="money, Pools and credits">
+        <p>
+          <Term>Pledge amount</Term> sets three independent Pools: rewards, polls and goals.{' '}
+          <Term>Money</Term> is new donation cash only, not shipping, Wallet funding, prices or
+          allocations. Incentive amounts are not money: one dollar can count once in rewards, once
+          in polls and once in goals. Never add the categories together.
+        </p>
+        <p>
+          <Term>Wallet credit</Term> is available or held. A Pending pledge holds Wallet credit
+          until payment or non-payment is verified. Signing out or passing the deadline does not
+          release it. <Term>Pool credit</Term> is category-specific credit in one Event after an
+          allocation is reversed. It can fund open items of that category across Channels in the
+          same Event or shared items, but cannot buy physical rewards.
+        </p>
+        <p>
+          <Term>Unused pool money</Term> is unallocated poll or goal Pool budget, not donor credit.
+          Staff assign the whole available category amount to an own-Channel or shared target, with
+          a server preview. Undo is available only while the target remains open; an admin can use
+          the ordinary reversal otherwise.
+        </p>
+        <p>
+          <Term>Default goal list</Term> is an ordered list of own-Channel or shared goals. The
+          first open entry receives goal-Pool money. With no eligible entry, automatic fallback
+          checks eligible primary-Channel list entries, then the closest own goal, then the closest
+          shared goal. The Channel editor names the current recipient; fulfillment checks again.
+        </p>
+        <p>
+          <Term>Event end</Term> is distinct from deactivation. Only admins can End an inactive
+          Event or Undo end, after preview and slug confirmation. End makes poll/goal credit Unused
+          and expires reward credit. Undo is blocked by consuming moderator assignments. An ended
+          Event cannot be reactivated before Undo.
+        </p>
+      </Section>
+
       {/* ── DASHBOARD ──────────────────────────────────────────── */}
       <Section title="dashboard">
         <p>
           The dashboard gives a live count of key objects.{' '}
           {isAdmin
-            ? "Admin dashboard shows total raised, donors, donations, claims, pledges, and a per-channel raised/count breakdown. Totals count completed and refunded donations (refunds go to the donor's wallet), not chargebacks."
-            : 'Moderator dashboard shows pending custom poll entries, active polls, active rewards, and active goals.'}
+            ? 'Admin dashboard separates Money, Needs attention and Credits, with independent money and incentive tables by Channel. Money totals count COMPLETED and REFUNDED donations, not CHARGEBACK. Payment refund recovery also lists failed shipping after item resolution.'
+            : 'Moderator dashboard shows pending custom entries, active incentives and Unused pool money, with separate poll and goal amounts.'}
         </p>
         <p>
           Use the dashboard as a quick health check at the start of each session. A non-zero{' '}
@@ -199,8 +233,8 @@ export default function StaffHelp({ role }: { role: Role }) {
       {/* ── REWARDS ────────────────────────────────────────────── */}
       <Section title="rewards">
         <p>
-          <Term>Rewards</Term> are fixed-cost items donors add to their cart. Each reward has one of
-          four types:
+          <Term>Rewards</Term> are fixed-price items selected within the reward Pool. Each reward
+          has one of four types:
         </p>
         <Table
           headers={['type', 'notes']}
@@ -224,7 +258,7 @@ export default function StaffHelp({ role }: { role: Role }) {
           </li>
           <li>
             <Term>quantity</Term> — leave blank for unlimited. Once stock reaches zero, donors
-            cannot add it to the cart.
+            cannot select it for a new pledge.
           </li>
           <li>
             <Term>is_active</Term> — inactive rewards are hidden from donors but not deleted.
@@ -248,8 +282,9 @@ export default function StaffHelp({ role }: { role: Role }) {
       {/* ── POLLS ──────────────────────────────────────────────── */}
       <Section title="polls">
         <p>
-          <Term>Polls</Term> allow donors to fund a vote toward an option. Votes have a minimum of
-          $1.00. A poll can optionally allow <Term>custom write-ins</Term>.
+          <Term>Polls</Term> receive allocations toward options, including donor, auto and moderator
+          sources. Pool allocations may be positive cents below $1. A poll can optionally allow{' '}
+          <Term>custom write-ins</Term>.
         </p>
         <p>Managing poll options:</p>
         <ul className="list-disc pl-5 space-y-1">
@@ -260,13 +295,16 @@ export default function StaffHelp({ role }: { role: Role }) {
             <Term>Rename option</Term> — edit the option label. Existing votes are unaffected.
           </li>
           <li>
-            <Term>Delete option</Term> — removes the option and <Term>refunds</Term> all vote
-            balances to donors.
+            <Term>Remove option</Term> — moderators can remove only unused setup records; any live
+            or reversed allocation history is protected. Admin removal reverses allocations and
+            deactivates the option, preserving history.
           </li>
           {isAdmin && (
             <li>
-              <Term>Refund option (without delete)</Term> — returns all votes on an option to donor
-              balances while leaving the option visible.
+              <Term>Reverse votes</Term> — preview each credit destination before confirming.
+              Donor/auto Pool funding returns category Pool credit, moderator funding returns Unused
+              pool money, legacy funding returns recorded Wallet credit. Credit redemptions restore
+              their original grants. Ended-Event reward credit is expired.
             </li>
           )}
         </ul>
@@ -280,7 +318,8 @@ export default function StaffHelp({ role }: { role: Role }) {
             tally.
           </li>
           <li>
-            <Term>Reject</Term> — refunds the donor's balance and removes the entry.
+            <Term>Reject</Term> — reverses each funding row through its original credit policy; it
+            does not promise Wallet credit.
           </li>
         </ul>
         <p>
@@ -292,8 +331,10 @@ export default function StaffHelp({ role }: { role: Role }) {
       {/* ── FUND GOALS ─────────────────────────────────────────── */}
       <Section title="fund goals">
         <p>
-          <Term>Fund goals</Term> are pooled funding targets. Donors contribute any amount (minimum
-          $1.00). A goal completes once the target is reached.
+          <Term>Fund goals</Term> show allocated progress, not money raised. A goal completes when
+          allocated progress reaches its target. Completion is derived; deactivate to close early.
+          Ordinary reversals and Wallet refunds recompute completion. Chargebacks and Payment-refund
+          shrink preserve completed flags.
         </p>
         <p>Fields when creating/editing a goal:</p>
         <ul className="list-disc pl-5 space-y-1">
@@ -301,7 +342,7 @@ export default function StaffHelp({ role }: { role: Role }) {
             <Term>name</Term> / <Term>description</Term>.
           </li>
           <li>
-            <Term>goal_cents</Term> — target amount in integer cents.
+            <Term>target_cents</Term> — target amount in integer cents.
           </li>
           <li>
             <Term>is_active</Term> — inactive goals are hidden from donors.
@@ -312,15 +353,18 @@ export default function StaffHelp({ role }: { role: Role }) {
         </ul>
         {isAdmin && (
           <p>
-            <Term>Admin delete</Term> deactivates the goal <em>and refunds all contributions</em> to
-            donor balances. <Term>Moderator delete</Term> is a hard-delete with no refund logic —
-            only use it on goals with no contributions.
+            <Term>Admin remove</Term> reverses contributions and deactivates, preserving history and
+            using the server's destination preview. <Term>Moderator delete</Term> removes only
+            records without allocation history (including reversed history). Goals referenced by a
+            Default goal list must first be removed from the list.
           </p>
         )}
         {isAdmin && (
           <p>
-            <Term>Refund goal (without delete)</Term> — returns all contributions to donor balances
-            while the goal record remains.
+            <Term>Reverse contributions</Term> uses recorded amounts and funding sources, not a
+            generic Wallet grant. Titles and option labels are trimmed and nonempty. Prices and
+            targets are positive representable integer cents; stock is nonnegative or unlimited.
+            Channel/reward-type changes are blocked by any allocation history.
           </p>
         )}
       </Section>
@@ -385,12 +429,14 @@ export default function StaffHelp({ role }: { role: Role }) {
           rows={[
             ['PENDING', 'Reward has been claimed; not yet shipped/delivered.'],
             ['FULFILLED', 'Reward has been delivered or shipped.'],
+            ['CANCELLING', 'A Payment refund is requested; mutations are locked.'],
+            ['REVERSED', 'Historical claim; cannot be resurrected.'],
           ]}
         />
         <p>
           {isAdmin
-            ? "Toggle a claim's status using the status button on the claims page. For physical rewards, mark FULFILLED once the item has been dispatched. For digital rewards, mark fulfilled once the code or file has been sent."
-            : 'The moderator claims view is read-only; an admin updates fulfillment status.'}
+            ? 'Only live PENDING ↔ FULFILLED transitions are allowed. A chargeback or REQUESTED Payment refund in any funding source blocks both directions. Shipped claims retained by chargeback have an acknowledgement action, not a reversal. Claims show recorded allocation and current catalog price separately.'
+            : 'The moderator claims view is read-only and live-only. Names come from the claim’s own donation, even if that name is empty; only unlinked claims fall back to the donor’s newest donation.'}
         </p>
         {isAdmin && (
           <p>
@@ -422,17 +468,18 @@ export default function StaffHelp({ role }: { role: Role }) {
         </p>
         {isAdmin && (
           <p>
-            <Term>Status</Term> — set with the status control on a donation row. A{' '}
-            <Code>REFUNDED</Code> donation goes back to the donor's wallet: it still counts toward
-            totals and nothing is sent to overlays. A <Code>CHARGEBACK</Code> lowers the totals and
-            the overlays get the new totals. Both claw back what is left of the donation in the
-            donor's balance, and are final.
+            <Term>Wallet refund</Term> and <Term>Record chargeback</Term> are whole-donation actions
+            on the detail page, with server previews. REFUNDED and CHARGEBACK are terminal;
+            REQUESTED Payment refunds block them. Zero-money donations cannot be charged back. There
+            are no manual PENDING/COMPLETED transitions. Wallet refunds keep charity money;
+            chargebacks remove it from counted totals. Fulfilled claims stay allocated. Never sum
+            overlapping Pools to calculate a Wallet grant.
           </p>
         )}
         {isAdmin && (
           <p>
-            The admin donations list is the only place in the UI where donor emails appear alongside
-            donation records. Do not share this view with moderator-level staff.
+            Admin donation and donor views contain private donor email alongside donation history.
+            Do not share these views with moderator-level staff.
           </p>
         )}
       </Section>
@@ -441,23 +488,35 @@ export default function StaffHelp({ role }: { role: Role }) {
       {isAdmin && (
         <Section title="pledges">
           <p>
-            A <Term>pledge</Term> is a cart a donor built before paying. It records the selected
-            incentive items, total cost, and any comment. Pledges are created by{' '}
-            <Code>POST /api/pledge</Code> and fulfilled automatically when Stripe reports a
-            successful payment.
+            A <Term>Pending pledge</Term> is an immutable confirmed pledge sent to checkout. Draft
+            pledges stay in the browser. It records the pledge amount, held Wallet funding, new cash
+            due and confirmed item prices. Pledges are created by <Code>POST /api/pledge</Code> and
+            fulfilled automatically when Stripe reports a successful payment.
           </p>
-          <p>The pledges list shows the last 100 pledges with their status and items. Statuses:</p>
+          <p>
+            The paginated pledges list defaults OPEN, with status and overdue filters. Shipping is
+            separate and may be unknown before Stripe completes checkout. Statuses:
+          </p>
           <Table
             headers={['status', 'meaning']}
             rows={[
               ['OPEN', 'Awaiting payment or fulfillment.'],
               ['FULFILLED', 'Payment received and all items processed.'],
-              ['EXPIRED', 'Checkout session expired without payment.'],
+              ['EXPIRED / CANCELLED', 'Local state, not proof of non-payment. Check Stripe.'],
+              [
+                'LEGACY_PAID (payment state; status EXPIRED)',
+                'Paid after transition: not fulfilled. Cash-only legacy Wallet receipt. Original historical FULFILLED pledges stay fulfilled.',
+              ],
+              [
+                'PAYMENT_REVIEW',
+                'Cash-only recovery requiring admin review, not original fulfillment.',
+              ],
             ]}
           />
           <p>
-            If a pledge is OPEN long after expected fulfillment, check whether the Stripe webhook
-            was received. A manual donation simulation can re-trigger fulfillment if needed.
+            Use Check Stripe to reconcile the original Session. PROCESSING or UNKNOWN keeps funding
+            held. Only authoritative non-payment releases holds. Do not simulate money or manually
+            release funding to repair checkout.
           </p>
         </Section>
       )}
@@ -487,12 +546,12 @@ export default function StaffHelp({ role }: { role: Role }) {
                 'Blocks the donor from spending or signing in. Use during dispute processing.',
               ],
               [
-                'Adjust balance',
-                'Manually add or subtract balance with an audit reason (REFUND, FREEZE_ZERO, MANUAL, CHARGEBACK).',
+                'Adjust Wallet credit',
+                'Adjust available Wallet credit with an audit reason. Held Wallet and per-category Pool credit are not manual adjustment targets. REFUND (old) is historical item-reversal vocabulary.',
               ],
               [
                 'Reverse spend',
-                "Undo a specific claim, vote, or contribution; atomically restores the donor's balance.",
+                'Preview the recorded allocation’s actual destination: category Pool credit, original grants, Unused pool money or legacy Wallet credit. Fulfilled/terminal/REQUESTED locks apply.',
               ],
             ]}
           />
@@ -615,7 +674,10 @@ export default function StaffHelp({ role }: { role: Role }) {
           <li>
             Review the submitted text against the blocked-words policy and content guidelines.
           </li>
-          <li>Click Approve to activate the option, or Reject to refund the donor.</li>
+          <li>
+            Click Approve to activate the option, or Reject to reverse its funding. Pooled funding
+            returns poll Pool credit; legacy funding returns Wallet credit, not a Payment refund.
+          </li>
         </ol>
 
         <p className="pt-2">
@@ -631,17 +693,34 @@ export default function StaffHelp({ role }: { role: Role }) {
         {isAdmin && (
           <>
             <p className="pt-2">
-              <Term>Issuing a refund to a donor</Term>
+              <Term>Payment refunds for physical cancellations</Term>
             </p>
             <ol className="list-decimal pl-5 space-y-1">
-              <li>Navigate to Donors → search by email → open donor detail.</li>
               <li>
-                Use <Term>Reverse spend</Term> to undo a specific claim/vote/contribution (restores
-                balance), or <Term>Adjust balance</Term> for a manual credit.
+                Open the donation detail → rewards Pool rows. Cancel with Payment refund is
+                available only for eligible direct PENDING physical claims on a COMPLETED pooled
+                Stripe donation before its Event ends.
               </li>
               <li>
-                If a card refund is needed, process it in the Stripe dashboard separately; this
-                platform does not issue card refunds directly.
+                Review the server item/shipping return, cash and pledge amount before/after, all
+                category shrink and affected ended/completed targets. Physical credit-funded or
+                already-shipped claims are ineligible. Wallet funding is unchanged.
+              </li>
+              <li>
+                Confirm once. REQUESTED locks mutations; Retry / Check Stripe discovers an existing
+                refund before any same-key retry. PENDING / REQUIRES_ACTION is accepted but not
+                settled.
+              </li>
+              <li>
+                A later FAILED refund needs explicit item recovery: returned outside the app, Wallet
+                credit (COMPLETED/REFUNDED only), or dispute (CHARGEBACK only). Allocations stay
+                shrunk. Shipping is resolved independently as returned outside the app or kept by
+                agreement; it never becomes Wallet credit or donation money.
+              </li>
+              <li>
+                The default open Payment refunds list keeps unresolved failed shipping visible after
+                item resolution. Sweep credits on the donor page affects available Wallet credit
+                only, never holds or Pool credit.
               </li>
             </ol>
 
@@ -688,8 +767,8 @@ export default function StaffHelp({ role }: { role: Role }) {
           </li>
           {isAdmin && (
             <li>
-              The admin donations list (<Code>/admin/donations</Code>) is the only place in the
-              system where donor email appears alongside donation records. Treat it as sensitive.
+              Admin donation and donor views contain private email. Treat them as sensitive; shared
+              services and moderator responses never add donor email.
             </li>
           )}
         </ul>

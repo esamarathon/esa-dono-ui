@@ -1,10 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import { assertCanActivateEvent } from '../../services/events.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function rand() {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 8);

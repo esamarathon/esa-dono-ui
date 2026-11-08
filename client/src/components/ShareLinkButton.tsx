@@ -21,7 +21,7 @@ export default function ShareLinkButton({ path }: { path: string }) {
     <button
       onClick={handleCopy}
       className="p-1 text-gray-400 hover:bg-gray-700 hover:text-off-white transition-colors rounded flex items-center gap-1 cursor-pointer"
-      title="Copy a link that pre-fills this item into a donor's cart"
+      title="Copy a link that pre-fills this item into a Draft pledge"
       aria-label="Share"
     >
       <ShareIcon className="w-4 h-4" />

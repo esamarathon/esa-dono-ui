@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import donorRouter from '../../routes/donor.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

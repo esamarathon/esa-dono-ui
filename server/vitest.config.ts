@@ -1,5 +1,7 @@
-import { defineConfig } from 'vitest/config';
-import path from 'path';
+import { configDefaults, defineConfig } from 'vitest/config';
+import { databaseProvider } from './lib/database.js';
+
+const postgresql = databaseProvider(process.env.TEST_DATABASE_URL) === 'postgresql';
 
 export default defineConfig({
   // vite-node (the vitest runner) does not honor `resolve.extensionAlias`, so
@@ -17,18 +19,27 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    env: {
-      DATABASE_URL: `file:${path.resolve(__dirname, 'prisma/dev.db')}`,
-    },
+    // Creates a migrated temp SQLite file or unique PostgreSQL test schema.
+    // Only TEST_DATABASE_URL opts into PostgreSQL; DATABASE_URL is ignored.
+    // Do not set DATABASE_URL in `test.env`: it would override that value.
+    globalSetup: ['./test/global-setup.ts'],
     setupFiles: ['./test/setup.ts'],
-    // Several test files hit the real SQLite dev.db directly (each opening
-    // its own PrismaClient) for integration-style coverage of tx-based money
-    // movement. SQLite serializes writers at the file level, so running
-    // those files' tests concurrently across worker threads causes
-    // SQLITE_BUSY / "Operations timed out" flakiness. Fully sequential
-    // execution trades a bit of speed for a suite that doesn't flake.
+    exclude: [
+      ...configDefaults.exclude,
+      // These replay historical SQLite databases, not the current schema.
+      ...(postgresql
+        ? [
+            'test/scripts/pooled-migration.test.ts',
+            'test/scripts/payment-refund-migration.test.ts',
+            'test/scripts/shared-incentive-migration.test.ts',
+            'test/scripts/transition.test.ts',
+          ]
+        : []),
+    ],
+    // Both providers share fixtures across files. Serialize them to avoid
+    // cross-file cleanup races (and SQLite's single-writer lock contention).
     fileParallelism: false,
-    // Integration tests share one SQLite file and run under v8 coverage in the
+    // Integration tests share one database and run under v8 coverage in the
     // pre-commit hook (alongside lint-staged). On small CI/dev hosts the 5s
     // default was hit intermittently by unrelated DB-backed route tests, so
     // allow more headroom. This only bounds how long a hung test may take.

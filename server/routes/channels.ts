@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
+import { channelResponse } from '../services/channels.js';
 
 const router = Router();
 
@@ -11,8 +12,9 @@ router.get('/', async (_req: Request, res: Response) => {
   const channels = await prisma.channel.findMany({
     where: { is_active: true },
     orderBy: { created_at: 'asc' },
+    include: { default_goals: { orderBy: { position: 'asc' } } },
   });
-  res.json(channels);
+  res.json(channels.map(channelResponse));
 });
 
 export default router;

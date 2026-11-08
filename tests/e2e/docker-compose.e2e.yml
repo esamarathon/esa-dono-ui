@@ -1,0 +1,204 @@
+services:
+  # RabbitMQ message broker for donation event delivery
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: esa-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    ports:
+      - '${RABBITMQ_PORT:-5672}:5672' # AMQP
+      - '${RABBITMQ_MGMT_PORT:-15672}:15672' # Management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - esa-e2e
+    restart: unless-stopped
+
+  # esa-dono-ui backend (donation platform API)
+  dono-backend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.backend
+      target: runtime
+    image: ghcr.io/esamarathon/esa-dono-ui/backend:${BACKEND_IMAGE_TAG:-latest}
+    container_name: esa-dono-backend
+    environment:
+      # Core API config
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=file:/data/dono.db
+      - UPLOADS_DIR=/data/uploads
+
+      # Stripe integration
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_CURRENCY=${STRIPE_CURRENCY:-usd}
+      - STRIPE_SHIPPING_RATE_ID=${STRIPE_SHIPPING_RATE_ID:-}
+      - STRIPE_SHIPPING_ALLOWED_COUNTRIES=${STRIPE_SHIPPING_ALLOWED_COUNTRIES:-US}
+      - CAMPAIGN_GOAL_CENTS=${CAMPAIGN_GOAL_CENTS:-500000}
+
+      # Auth
+      - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      - MODERATOR_API_KEY=${MODERATOR_API_KEY:-}
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
+      - MODERATOR_EMAILS=${MODERATOR_EMAILS:-}
+
+      # Metrics (Prometheus)
+      - METRICS_API_KEY=${METRICS_API_KEY:-}
+      - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+
+      # OAuth sign-in
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID:-}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET:-}
+
+      # Email (magic links)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
+      - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
+
+      # Feedback widget
+      - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}
+      - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL:-}
+
+      # OpenTelemetry (optional tracing)
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otelcol:4318}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-esa-dono-backend}
+      - OTEL_TRACES_SAMPLER_ARG=${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      - OTEL_TRACES_ENABLED=${OTEL_TRACES_ENABLED:-false}
+
+    volumes:
+      - dono-data:/data
+    ports:
+      - '${BACKEND_PORT:-3001}:3001'
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - esa-e2e
+    restart: unless-stopped
+
+  # esa-dono-ui frontend (React SPA)
+  dono-frontend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_OTEL_ENDPOINT: ${VITE_OTEL_ENDPOINT:-/traces}
+        VITE_OTEL_SERVICE_NAME: ${VITE_OTEL_SERVICE_NAME:-esa-dono-frontend}
+        VITE_OTEL_SAMPLE_RATE: ${VITE_OTEL_SAMPLE_RATE:-1.0}
+        VITE_OTEL_ENABLED: ${VITE_OTEL_ENABLED:-false}
+    image: ghcr.io/esamarathon/esa-dono-ui/frontend:${FRONTEND_IMAGE_TAG:-latest}
+    container_name: esa-dono-frontend
+    ports:
+      - '${FRONTEND_PORT:-8080}:8080'
+    depends_on:
+      - dono-backend
+    networks:
+      - esa-e2e
+    restart: unless-stopped
+
+  # Kollekt - .NET donation reader service
+  # Consumes donation events from RabbitMQ and processes them
+  #
+  # UNVERIFIED: esamarathon/kollekt returns 404 over the public GitHub API
+  # (checked 2026-09-29) -- it is private or does not exist at that path, so
+  # none of the build context, Dockerfile location, port, or AMQP_*/API_BASE_URL
+  # env var names below have been confirmed against real source. They are
+  # inferred from ADR-0009/0010 prose only. Get repo access and correct this
+  # block (env var names, exposed port, health check) before relying on it.
+  kollekt:
+    build:
+      context: ${KOLLEKT_BUILD_CONTEXT:-../../../kollekt}
+      dockerfile: ${KOLLEKT_DOCKERFILE:-Dockerfile}
+    image: esamarathon/kollekt:${KOLLEKT_TAG:-latest}
+    container_name: esa-kollekt
+    environment:
+      # RabbitMQ connection
+      - AMQP_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - AMQP_PORT=${RABBITMQ_PORT:-5672}
+      - AMQP_USER=${RABBITMQ_USER:-guest}
+      - AMQP_PASS=${RABBITMQ_PASS:-guest}
+      - AMQP_VHOST=${RABBITMQ_VHOST:-/}
+
+      # API connection (backend provides Tiltify-compatible REST API)
+      - API_BASE_URL=${API_BASE_URL:-http://dono-backend:3001/api}
+
+      # Logging
+      - LOG_LEVEL=${KOLLEKT_LOG_LEVEL:-Information}
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      dono-backend:
+        condition: service_started
+    networks:
+      - esa-e2e
+    restart: unless-stopped
+    # Note: requires KOLLEKT_BUILD_CONTEXT to be set to the path of the kollekt repo
+    profiles:
+      - with-kollekt
+
+  # esa-layouts-v2 - Stream overlay service
+  # Consumes donation events from RabbitMQ and fetches campaign data from the API
+  #
+  # UNVERIFIED: esamarathon/esa-layouts-v2 also returns 404 over the public
+  # GitHub API (checked 2026-09-29) -- same caveat as kollekt above applies to
+  # every env var, port, and Dockerfile path in this block.
+  overlay:
+    build:
+      context: ${OVERLAY_BUILD_CONTEXT:-../../../esa-layouts-v2}
+      dockerfile: ${OVERLAY_DOCKERFILE:-Dockerfile}
+      args:
+        # Frontend build-time env vars, if needed
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080/api}
+    image: esamarathon/esa-layouts-v2:${OVERLAY_TAG:-latest}
+    container_name: esa-layouts-v2
+    environment:
+      # RabbitMQ connection
+      - AMQP_URL=${AMQP_URL:-amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@${RABBITMQ_HOST:-rabbitmq}:${RABBITMQ_PORT:-5672}/${RABBITMQ_VHOST:-}}
+
+      # API connection (backend provides Tiltify-compatible REST API)
+      - API_BASE_URL=${API_BASE_URL:-http://dono-backend:3001/api}
+
+      # Logging
+      - LOG_LEVEL=${OVERLAY_LOG_LEVEL:-info}
+
+      # Server config
+      - PORT=${OVERLAY_PORT:-3002}
+
+    ports:
+      - '${OVERLAY_PORT:-3002}:3002'
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      dono-backend:
+        condition: service_started
+    networks:
+      - esa-e2e
+    restart: unless-stopped
+    # Note: requires OVERLAY_BUILD_CONTEXT to be set to the path of the overlay repo
+    profiles:
+      - with-overlay
+
+volumes:
+  dono-data:
+  rabbitmq-data:
+
+networks:
+  esa-e2e:
+    driver: bridge

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.27
 # Backend image for esa-dono-ui (Express + Prisma API server).
 #
 # Targets:
@@ -61,23 +61,27 @@ RUN --mount=type=cache,target=/root/.npm,id=npm \
 # ---------- Test target (distributed testing / CI) ----------
 FROM deps AS test
 
+# Shell-seed integration tests run the real scripts, which require curl and jq.
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends curl jq \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=test \
-    DATABASE_URL="file:/app/server/prisma/dev.db" \
     PATH="/app/node_modules/.bin:${PATH}"
+
+# Generate the Prisma clients before copying the tree. The generator only
+# reads the schema and the script's single local import, so this layer stays
+# cached across test-source-only changes.
+COPY --chown=dono:dono server/prisma ./server/prisma
+COPY --chown=dono:dono server/scripts/database.ts ./server/scripts/
+COPY --chown=dono:dono server/lib/database.ts ./server/lib/
+RUN npm run db:generate --workspace server
 
 COPY --chown=dono:dono . .
 
-# NOTE: DATABASE_URL must point at the exact path server/vitest.config.ts
-# forces at test-run time (file:<server>/prisma/dev.db). The prisma CLI
-# resolves a *relative* sqlite URL against the schema file's directory, but
-# a generated PrismaClient (as used by vitest) resolves it against
-# process.cwd() instead — an absolute path here sidesteps that mismatch by
-# being unambiguous for both. If this ever drifts from vitest.config.ts's
-# DATABASE_URL again, every test hits "table does not exist" (P2021)
-# because db push wrote the schema to a different file than tests open.
-RUN DATABASE_URL="file:/app/server/prisma/dev.db" npx prisma generate --schema=./server/prisma/schema.prisma \
-  && DATABASE_URL="file:/app/server/prisma/dev.db" npx prisma db push --accept-data-loss --schema=./server/prisma/schema.prisma \
-  && chown -R dono:dono /app
+# Tests provision a temp SQLite file or a unique PostgreSQL schema per run
+# (server/test/global-setup.ts), so no database is prepared here.
+RUN chown -R dono:dono /app
 
 USER dono
 ENTRYPOINT ["node_modules/.bin/tsx", "scripts/run-tests.ts"]
@@ -89,6 +93,18 @@ ENV NODE_ENV=production \
     PORT=3001 \
     DATABASE_URL="file:/data/dono.db"
 
+# Prisma client generation depends only on the schema, the generator script
+# and the script's single local import (lib/database.ts) — not on server
+# source. Copying them separately keeps the generate layer cached across
+# code-only changes; migrations ride in with the full server copy below.
+COPY --chown=dono:dono server/prisma ./server/prisma
+COPY --chown=dono:dono server/scripts/database.ts ./server/scripts/
+COPY --chown=dono:dono server/lib/database.ts ./server/lib/
+
+# Generate both connectors from the same models. The same image selects its
+# client and migrations from DATABASE_URL; startup needs no npm or dev toolchain.
+RUN npm run db:generate --workspace server
+
 # Only the server, prisma schema, shared package, and shared root files are needed at runtime.
 COPY --chown=dono:dono server ./server
 COPY --chown=dono:dono packages ./packages
@@ -96,10 +112,7 @@ COPY --chown=dono:dono tsconfig.base.json ./
 COPY --chown=dono:dono package.json package-lock.json ./
 COPY --chown=dono:dono docker-entrypoint.backend.sh /usr/local/bin/docker-entrypoint.sh
 
-# The Prisma CLI is a production dependency (needed at startup for
-# `prisma migrate deploy`), so no dev toolchain is shipped.
-RUN DATABASE_URL="file:./dev.db" npx prisma generate --schema=./server/prisma/schema.prisma \
- && chmod +x /usr/local/bin/docker-entrypoint.sh \
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && mkdir -p /data/uploads && chown dono:dono /data /data/uploads
 
 # Strip the npm CLI + corepack bundled into the Node base image. Nothing at

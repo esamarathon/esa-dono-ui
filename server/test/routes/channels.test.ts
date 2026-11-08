@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import channelsRouter from '../../routes/channels.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
 import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -80,6 +80,84 @@ describe('Channels', () => {
     });
   });
 
+  it.each(['admin', 'moderator'])(
+    '%s sets an ordered own/shared Default goal list and preserves ineligible entries',
+    async (role) => {
+      const own = await createTestChannel(prisma);
+      createdChannelIds.push(own.id);
+      const other = await createTestChannel(prisma);
+      createdChannelIds.push(other.id);
+      const inactive = await prisma.fundGoal.create({
+        data: {
+          event_id: own.event_id,
+          title: 'Inactive own',
+          target_cents: 100,
+          channel_id: own.id,
+          is_active: false,
+        },
+      });
+      const shared = await prisma.fundGoal.create({
+        data: {
+          event_id: own.event_id,
+          title: 'Completed shared',
+          target_cents: 100,
+          is_complete: true,
+        },
+      });
+      const foreign = await prisma.fundGoal.create({
+        data: {
+          event_id: other.event_id,
+          title: 'Foreign',
+          target_cents: 100,
+          channel_id: other.id,
+        },
+      });
+      const path = `/api/${role}/channels/${own.id}`;
+      const auth = { Authorization: 'Bearer key_admin_test-admin-key' };
+      try {
+        const updated = await request(createApp())
+          .put(path)
+          .set(auth)
+          .send({ default_goals: [shared.id, inactive.id] });
+        expect(updated.status).toBe(200);
+        expect(updated.body.default_goals).toEqual([shared.id, inactive.id]);
+        const listed = await request(createApp()).get(`/api/${role}/channels`).set(auth);
+        expect(
+          listed.body.find((entry: { id: string }) => entry.id === own.id).default_goals,
+        ).toEqual([shared.id, inactive.id]);
+        const rejected = await request(createApp())
+          .put(path)
+          .set(auth)
+          .send({ name: 'Must roll back', default_goals: [foreign.id] });
+        expect(rejected.status).toBe(400);
+        expect(await prisma.channel.findUnique({ where: { id: own.id } })).toMatchObject({
+          name: own.name,
+        });
+        expect(
+          (await request(createApp()).put(path).set(auth).send({ name: own.name })).body
+            .default_goals,
+        ).toEqual([shared.id, inactive.id]);
+        expect(
+          (
+            await request(createApp())
+              .put(path)
+              .set(auth)
+              .send({ default_goals: [shared.id, shared.id] })
+          ).status,
+        ).toBe(400);
+        expect(
+          (await request(createApp()).put(path).set(auth).send({ default_goals: [] })).body
+            .default_goals,
+        ).toEqual([]);
+      } finally {
+        await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: own.id } });
+        await prisma.fundGoal.deleteMany({
+          where: { id: { in: [inactive.id, shared.id, foreign.id] } },
+        });
+      }
+    },
+  );
+
   describe('Admin channels CRUD', () => {
     const auth = { Authorization: 'Bearer key_admin_test-admin-key' };
 
@@ -114,6 +192,36 @@ describe('Channels', () => {
       const listRes = await request(createApp()).get('/api/admin/channels').set(auth);
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
+
+    it('creates a channel with a caller-chosen id, once', async () => {
+      const id = crypto.randomUUID();
+      const created = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ id, name: `Fixed Id ${id}` })
+        .set(auth);
+      expect(created.status).toBe(200);
+      expect(created.body.id).toBe(id);
+      createdChannelIds.push(id);
+
+      const again = await request(createApp())
+        .post('/api/admin/channels')
+        .send({ id, name: `Fixed Id again ${id}` })
+        .set(auth);
+      expect(again.status).toBe(409);
+      expect(again.body.error).toMatch(/id/);
+    });
+
+    it.each(['not-a-uuid', crypto.randomUUID().toUpperCase(), 42])(
+      'rejects channel id %s',
+      async (id) => {
+        const res = await request(createApp())
+          .post('/api/admin/channels')
+          .send({ id, name: `Bad Id ${crypto.randomUUID()}` })
+          .set(auth);
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/id must be a lowercase UUID/);
+      },
+    );
 
     it('rejects duplicate channel names', async () => {
       const name = `Dup Event ${crypto.randomUUID()}`;

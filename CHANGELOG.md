@@ -5,7 +5,169 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, a minor version can contain
 breaking changes.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-31
+
+Amount-first donations with independent incentive Pools (#151, PRD-0003). The same
+backend image now runs on SQLite or PostgreSQL, selected by `DATABASE_URL`.
+
+**Not in this release:** the Kollekt integration and the overlay prompter rendering are
+deferred to those repositories. Shared incentives stay visible through Channel lists, Event
+incentive lists stay empty (#204), and a cold cross-Channel pooled-credit reference stays
+unsupported until [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) lands. The
+corrected 0.3.0 browser matrix has not been rerun, and this entry does not by itself
+authorize deployment.
+
+### Upgrade notes
+
+- **Database provider selection:** `DATABASE_URL` now chooses the Prisma client and the
+  migration history — an absolute `file:` URL for SQLite, `postgresql:` or `postgres:`
+  for PostgreSQL. The target database has its own data: changing the URL does not copy
+  data, and SQLite-to-PostgreSQL transfer is not included. PostgreSQL needs permission
+  to apply DDL migrations, including trigger functions. See `docs/database.md`.
+- **Breaking pledge API change:** `POST /api/pledge` requires
+  `pledge_amount_cents`, a stable `draft_id`, and the reviewed `plan`. Old requests
+  using `top_up_cents` are rejected. A changed plan returns 409 for confirmation;
+  retries with an existing Pending pledge retain its confirmed funding.
+- **Ship the complete release between Events.** Follow the write barrier, checkout
+  drain, database backup, populated migrations, money checks and correction-publication
+  procedure in `docs/deployment.md`. Restore the backup only when the rollback
+  checkpoint proves no later writes; otherwise fix forward.
+- Old OPEN pledges become EXPIRED. A late payment for an old-shape pledge records
+  cash and Wallet credit without fulfilling old incentives; staff see
+  `LEGACY_PAID` while the stored status remains EXPIRED.
+- Historical `wallet-<uuid>` receipts are corrected to zero money. Shipping is
+  extracted only from verified receipt history, outside donation totals; ambiguous
+  history remains manual review. Historical refund/chargeback repairs are not automatic.
+- Subscribe Stripe to checkout expiry, asynchronous payment success/failure and
+  `refund.*`, in addition to completed checkout. Native `donation.updated`
+  subscriptions are opt-in; existing Destinations are not changed automatically.
+- Coordinate the parent test/staging callers. The
+  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) owner-aware lookup is
+  deferred out of 0.3.0: until it lands, a cold cross-Channel credit reference stays
+  unsupported, while an unchanged Kollekt keeps reading and claiming through the same
+  endpoints. Ordinary Channel incentive
+  lists, overlay scope, donation routing and stable IDs remain unchanged.
+- **Shared incentives now belong to one Event** (ADR-0012). A migration assigns
+  every reward, poll, goal and auction an Event. With two or more Events, a shared
+  incentive needs allocations in exactly one of them, or the migration stops and
+  changes nothing; `docs/deployment.md` § Migrations lists the query and the fix.
+  Staff API creates of shared incentives need `event_id` when two or more Events
+  exist. A Channel that owns incentives can no longer move to another Event.
+- **Breaking direct Wallet spend API change:** `POST /api/rewards/:id/claim`,
+  `/api/polls/:id/vote`, `/api/polls/:id/custom-entry` and `/api/goals/:id/contribute`
+  require `channel_id`, like a pledge. Without it they return 400; an unknown or
+  inactive Channel returns 404; an incentive not available on that Channel returns 400
+  with no Wallet debit. Update callers, including the parent test caller patch.
+  Simulator decision logs recorded before this change send no `channel_id`; regenerate them.
+
+### Added
+
+- PostgreSQL support alongside SQLite from one image: `DATABASE_URL` selects the client
+  and the separate migration history, so moving to PostgreSQL needs no source edit or
+  rebuild.
+- Branded Wallet emails with the ESA emblem, a thank-you line and a plain-text fallback.
+- Staff can create a Channel with a fixed `id` (a lowercase UUID). The demo seed uses this,
+  so a nightly reset keeps the same Channel ids and consumers such as Kollekt do not
+  collect a stale Campaign per reset.
+- Amount-first donate flow with independent reward, poll and goal Pools, category
+  meters, explicit overage correction and a message-only path.
+- Browser-local resumable drafts, cross-tab reconciliation and one payable checkout
+  per draft. Wallet funding is held until payment or confirmed non-payment.
+- Proportional poll/goal auto-allocation and ordered own/shared Default goal lists.
+  Unused poll/goal money remains reserved for moderator assignment.
+- Per-Event/category Pool credit, with partial cross-Channel or shared-incentive
+  spending. Several source donations can fund one whole nonphysical reward claim.
+- Admin Payment refunds for eligible unshipped physical claims, with separate
+  shipping, proportional Pool shrink and explicit failed-refund recovery.
+- Moderator Unused-pool assignment/undo and explicit Event End/Undo, with derived
+  credit conversion and reward-credit expiry.
+- Staff donation detail, financial previews, refund worklists, pledge reconciliation,
+  credit history and source-labelled allocations.
+- Separate money, allocation, Wallet, Pool-credit, Unused and refund metrics/stats;
+  full-state opt-in native donation updates and scoped ESA incentive lookups.
+- `RATE_LIMIT_EXEMPT_IPS`: IPs or CIDRs that skip the global API limit
+  (`RATE_LIMIT_API`), for kollekt and the overlay polling the backend directly on the
+  private Docker network. Empty by default. See `docs/deployment.md` § Client IP and
+  `TRUST_PROXY`.
+
+### Changed
+
+- The seeded simulator pays a pledge that needs new money through admin intake, so it
+  becomes a donation with its incentive lines instead of staying open. It no longer
+  attempts direct Wallet claims of physical rewards, which always fail.
+- Donation money is new cash only. Shipping and incentive allocations are excluded;
+  Wallet-only pledges add no money and pooled fulfillment creates no Wallet credit.
+- Pooled reversals return category Pool credit or moderator Unused pool money.
+  Wallet refunds use the max-rule difference rather than summed category allocations;
+  donations without a pledge retain their legacy accounting.
+- Claims retain confirmed prices. Payment refunds lower money and pledge amounts
+  in place; totals are published whenever counted money changes, not only on status
+  transitions.
+- Allocation changes republish Tiltify donations under the same ID only when their
+  content changes. Multi-source rewards publish one whole entitlement under a stable
+  source carrier.
+- Incentive titles, prices, targets, Channel IDs and stock are validated. Allocation
+  history protects deletion, Channel moves and reward-type changes. Goal completion
+  is derived, not manually toggled.
+- The homepage fundraising summary uses larger text and wraps totals. Donation links
+  say "donate" and "donate now".
+- The navbar uses the dark-background ESA emblem instead of "ESA DONO", retaining
+  an accessible homepage link.
+- Pledge review shows availability notices only for selected poll/goal incentives
+  and simplifies unused-Pool explanations.
+
+### Fixed
+
+- The donate review requires an email address before checkout, so a payment is not
+  started without one.
+- Staff donation lists load in batches below SQLite's bind-variable limit, so lists of
+  a thousand donations or more no longer crash the endpoint.
+- The donor Wallet hides auction sections while auctions are disabled, and the browser
+  tab icon is the ESA cube instead of a missing file.
+- The demo reset seeds a backend that is on several Docker networks. It used to join
+  their names into one invalid network name, so the reset dropped the database and
+  then failed to re-seed it.
+- A shared incentive of one Event no longer appears on, or takes money from, another
+  Event's Channels: pledges, fulfillment, Pool spend and credit, Unused pool targets,
+  Default goals, Tiltify lists/lookups, the donate page and direct Wallet spends apply
+  the Event (ADR-0012).
+- Downstream consumers get an owner for shared incentives: native `incentive.*`
+  messages add `event_id`, and ESA lookups return the Event as `campaign_id` instead
+  of `null`.
+- Confirmed anonymous display names no longer fall back to private payment-provider
+  names in stored donations or outbound messages.
+- Wallet refunds return credit instead of taking it away; Wallet-funded receipts no
+  longer count the same money twice.
+- Direct physical Wallet claims are rejected before credit, stock or claim changes.
+  The demo seed uses a cash-funded pledge through simulated settled intake instead.
+- Write-in moderation handles all donor/auto funding rows atomically, and paid
+  fulfillment safely redistributes selections invalidated by live text policy.
+- Staff immediately see definite Stripe refund rejection reasons. Moderator/shared
+  responses retain the donor-email privacy boundary.
+- Published OpenAPI response/schema descriptions parse correctly, distinguish
+  pooled remedies from legacy Wallet credit and support nullable enum values.
+  The API document version matches the server package version.
+- Rejected async route and middleware handlers no longer crash the backend (#175).
+  Failing requests return an error status, unexpected 500s use a generic message,
+  and the server continues serving requests. Deletes with allocation history return
+  409 with guidance to deactivate instead.
+- Demo seeding creates or reuses the Default Event, attaches both Channels and
+  activates routing before donations. Failed bootstrap requests stop the script.
+- Demo reset requires an explicit admin credential and checks it before deleting
+  data when a backend container already exists.
+- Backend test images include curl and jq for shell-seed integration tests; these
+  tools are not added to the runtime image.
+- On the staff poll pages, each poll's "add option" input keeps its own text (#149).
+
+### Security
+
+- Patch libexpat in the frontend image to 2.10.0 (CVE-2026-113351, CVE-2026-117610,
+  CVE-2026-118370).
+- Require patched libexpat in the frontend image (CVE-2026-77214).
+- Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
+  libvips dependencies.
+- Patch body-parser (CVE-2026-111181), follow-redirects (CVE-2026-111755,
+  CVE-2026-111756, CVE-2026-116689) and multer (CVE-2026-113872).
 
 ## [0.2.0] — 2026-09-29
 
@@ -194,6 +356,7 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0

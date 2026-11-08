@@ -30,6 +30,7 @@ const NAV: SidebarNavItem[] = [
   { to: '/moderate/goals', label: 'goals', icon: GoalIcon },
   { to: '/moderate/auctions', label: 'auctions', icon: GiftIcon },
   { to: '/moderate/claims', label: 'claims', icon: CheckBadgeIcon },
+  { to: '/moderate/unused-pool-money', label: 'unused pool money', icon: GoalIcon },
   { to: '/moderate/donations', label: 'donations', icon: ReceiptIcon },
   { to: '/moderate/help', label: 'help', icon: InfoIcon },
 ];

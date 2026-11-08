@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 /**
@@ -15,8 +16,45 @@ import { fileURLToPath } from 'url';
  * not weaken this test to make a change pass.
  */
 describe('moderator routes never select/include donor.email', () => {
-  it('has no donor.select.email pattern anywhere in moderator.ts code (comments excluded)', () => {
-    const path = fileURLToPath(new URL('../../routes/moderator.ts', import.meta.url));
+  it('traces every service imported by the shared identity routes, including transitive imports', () => {
+    const visited = new Set<string>();
+    const services = new Set<string>();
+    const visit = (file: string) => {
+      if (visited.has(file) || !existsSync(file)) return;
+      visited.add(file);
+      const source = readFileSync(file, 'utf-8');
+      if (file.includes('/services/')) services.add(file);
+      for (const match of source.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+        if (match[1]?.startsWith('.'))
+          visit(resolve(dirname(file), match[1]).replace(/\.js$/, '.ts'));
+      }
+    };
+    visit(fileURLToPath(new URL('../../routes/identityRoutes.ts', import.meta.url)));
+    expect([...services].some((file) => file.endsWith('/defaultGoal.ts'))).toBe(true);
+    for (const file of services) {
+      const code = readFileSync(file, 'utf-8')
+        .split('\n')
+        .map((line) => line.replace(/\/\/.*$/, ''))
+        .join('\n');
+      expect(code, file).not.toMatch(/donor:\s*{\s*select:\s*{\s*email\b/);
+    }
+  });
+  it.each([
+    '../../routes/moderator.ts',
+    '../../routes/identityRoutes.ts',
+    '../../services/reversal.ts',
+    '../../services/poolAccounting.ts',
+    '../../services/accountingStats.ts',
+    '../../services/unusedPool.ts',
+    '../../services/eventEnd.ts',
+    '../../services/incentiveLifecycle.ts',
+    '../../services/channels.ts',
+    '../../services/events.ts',
+    '../../services/staffRead.ts',
+    '../../services/rewardFunding.ts',
+    '../../services/defaultGoal.ts',
+  ])('has no donor.select.email pattern in %s code (comments excluded)', (file) => {
+    const path = fileURLToPath(new URL(file, import.meta.url));
     const source = readFileSync(path, 'utf-8');
 
     // Strip `//` line comments so this test can document the forbidden

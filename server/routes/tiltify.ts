@@ -7,6 +7,9 @@ import {
   listPolls,
   listRewards,
   listTargets,
+  lookupPoll,
+  lookupReward,
+  lookupTarget,
 } from '../services/tiltifyApi.js';
 
 /**
@@ -27,8 +30,20 @@ function serve(read: (campaignId: string, req: Request) => Promise<unknown>) {
 
 router.get('/campaigns/:id', serve(getCampaign));
 router.get('/campaign/:id/rewards', serve(listRewards));
+router.get(
+  '/campaign/:id/lookup/rewards/:reward_id',
+  serve((campaignId, req) => lookupReward(campaignId, String(req.params.reward_id))),
+);
 router.get('/campaign/:id/targets', serve(listTargets));
+router.get(
+  '/campaign/:id/lookup/targets/:target_id',
+  serve((campaignId, req) => lookupTarget(campaignId, String(req.params.target_id))),
+);
 router.get('/campaign/:id/polls', serve(listPolls));
+router.get(
+  '/campaign/:id/lookup/polls/:poll_id',
+  serve((campaignId, req) => lookupPoll(campaignId, String(req.params.poll_id))),
+);
 router.get(
   '/campaign/:id/polls/:poll_id',
   serve((campaignId, req) => getPoll(campaignId, String(req.params.poll_id))),

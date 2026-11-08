@@ -11,6 +11,7 @@ import { getAuctions, placeBid } from '../../src/api/auctions';
 import type { Auction } from '../../src/types';
 
 const openAuction: Auction = {
+  event_id: 'e1',
   id: 'a1',
   title: 'Signed Guitar',
   description: 'A rare find',

@@ -1,6 +1,6 @@
 import client from 'prom-client';
 import prisma from '../lib/prisma.js';
-import { countedDonation } from '../lib/donationTotals.js';
+import { readAccountingStatsTx } from './accountingStats.js';
 import { register } from '../lib/metrics.js';
 import { METRICS_REFRESH_MS } from '../config.js';
 
@@ -65,7 +65,7 @@ const donationsByChannel = new client.Gauge({
 
 const rewardClaimsByChannel = new client.Gauge({
   name: 'dono_reward_claims_by_channel',
-  help: "Reward claims, by the slug of the reward's Event and Channel",
+  help: "Live reward claims, by the slug of the reward's Event and Channel",
   labelNames: BY_CHANNEL_LABELS,
   registers: [register],
 });
@@ -99,7 +99,7 @@ const channelsActive = new client.Gauge({
 
 const rewardClaimsTotal = new client.Gauge({
   name: 'dono_reward_claims_total',
-  help: 'Total number of reward claims',
+  help: 'Number of live reward claims (including CANCELLING)',
   registers: [register],
 });
 
@@ -193,25 +193,65 @@ const webhookDestinationLastSuccessTimestampSeconds = new client.Gauge({
   registers: [register],
 });
 
-const ADJUSTMENT_TYPES = ['REFUND', 'FREEZE_ZERO', 'MANUAL', 'CHARGEBACK'] as const;
+const incentiveAllocatedCents = new client.Gauge({
+  name: 'dono_incentive_allocated_cents_by_channel',
+  help: 'Live incentive allocation cents, not money, scoped to the incentive',
+  labelNames: ['event', 'channel', 'category', 'source'] as const,
+  registers: [register],
+});
+const poolUnusedCents = new client.Gauge({
+  name: 'dono_pool_unused_cents_by_channel',
+  help: 'Unused poll/goal Pool cents, not money, scoped to the donation',
+  labelNames: ['event', 'channel', 'category'] as const,
+  registers: [register],
+});
+const poolCreditCents = new client.Gauge({
+  name: 'dono_pool_credit_cents_by_channel',
+  help: 'Effective category Pool credit obligation cents, not additional money, scoped to the donation',
+  labelNames: ['event', 'channel', 'category'] as const,
+  registers: [register],
+});
+const walletCreditCents = new client.Gauge({
+  name: 'dono_wallet_credit_cents',
+  help: 'Wallet credit cents by available or held state',
+  labelNames: ['state'] as const,
+  registers: [register],
+});
+const pledgesOverdue = new client.Gauge({
+  name: 'dono_pledges_overdue',
+  help: 'OPEN pledges past their deadline whose Checkout Session is not complete',
+  registers: [register],
+});
+const paymentRefunds = new client.Gauge({
+  name: 'dono_payment_refunds',
+  help: 'Payment refund record counts by status, including rejected attempts as resolved',
+  labelNames: ['status'] as const,
+  registers: [register],
+});
+const paymentRefundsOldestRequestedAge = new client.Gauge({
+  name: 'dono_payment_refunds_oldest_requested_age_seconds',
+  help: 'Age in seconds of the oldest REQUESTED Payment refund, zero if none',
+  registers: [register],
+});
+
+const ADJUSTMENT_TYPES = [
+  'REFUND',
+  'FREEZE_ZERO',
+  'MANUAL',
+  'CHARGEBACK',
+  'WALLET_REFUND',
+  'FAILED_PAYMENT_REFUND',
+] as const;
 
 /**
- * Runs the bounded set of aggregate queries backing the business/custom
- * gauges and updates them in place. Individual query failures are logged and
- * skipped rather than throwing, so one bad query doesn't blank out the whole
- * metrics snapshot.
+ * Refreshes the bulk accounting snapshot and existing operational aggregates.
+ * A query failure is logged without throwing or replacing the previous cache;
+ * the success timestamp stays unchanged so operators can detect staleness.
  */
 export async function refreshBusinessMetrics(): Promise<void> {
   try {
     const [
-      donorCount,
-      donationAgg,
-      donationCount,
-      pledgeCount,
-      activeEventCount,
-      activeChannelCount,
-      claimCount,
-      pollVoteCount,
+      stats,
       adjustmentCounts,
       openAuctions,
       awaitingPaymentAuctions,
@@ -220,24 +260,8 @@ export async function refreshBusinessMetrics(): Promise<void> {
       unsoldAuctions,
       webhookDestinations,
       webhookDeliveryGroups,
-      unassignedDonationCount,
-      donationByChannel,
-      completedCentsByChannel,
-      claimGroups,
-      rewards,
-      voteGroups,
-      polls,
-      eventRows,
-      channelRows,
     ] = await Promise.all([
-      prisma.donor.count(),
-      prisma.donation.aggregate({ where: countedDonation, _sum: { amount_cents: true } }),
-      prisma.donation.count(),
-      prisma.pendingPledge.count({ where: { status: 'OPEN' } }),
-      prisma.event.count({ where: { is_active: true } }),
-      prisma.channel.count({ where: { is_active: true } }),
-      prisma.rewardClaim.count(),
-      prisma.pollVote.count({ where: { reversed_at: null } }),
+      prisma.$transaction((tx) => readAccountingStatsTx(tx)),
       Promise.all(
         ADJUSTMENT_TYPES.map((type) =>
           prisma.balanceAdjustment
@@ -259,99 +283,45 @@ export async function refreshBusinessMetrics(): Promise<void> {
         _min: { created_at: true },
         _max: { updated_at: true },
       }),
-      prisma.donation.count({ where: { channel_id: null, event_id: null } }),
-      prisma.donation.groupBy({ by: ['event_id', 'channel_id'], _count: { _all: true } }),
-      // Money totals count COMPLETED and REFUNDED (wallet refunds), not chargebacks (lib/donationTotals.ts).
-      prisma.donation.groupBy({
-        by: ['event_id', 'channel_id'],
-        where: countedDonation,
-        _sum: { amount_cents: true },
-      }),
-      prisma.rewardClaim.groupBy({ by: ['reward_id'], _count: { _all: true } }),
-      prisma.reward.findMany({ select: { id: true, channel_id: true } }),
-      prisma.pollVote.groupBy({
-        by: ['poll_id'],
-        where: { reversed_at: null },
-        _count: { _all: true },
-      }),
-      prisma.poll.findMany({ select: { id: true, channel_id: true } }),
-      prisma.event.findMany({ select: { id: true, slug: true } }),
-      prisma.channel.findMany({ select: { id: true, slug: true, event_id: true } }),
     ]);
 
-    donorsTotal.set(donorCount);
-    donatedCentsTotal.set(donationAgg._sum.amount_cents ?? 0);
-    donationsTotal.set(donationCount);
-    pledgesOpen.set(pledgeCount);
-    eventsActive.set(activeEventCount);
-    channelsActive.set(activeChannelCount);
-    rewardClaimsTotal.set(claimCount);
-    pollVotesTotal.set(pollVoteCount);
-    donationsUnassigned.set(unassignedDonationCount);
+    donorsTotal.set(stats.admin.donors);
+    donatedCentsTotal.set(stats.admin.total_raised_cents);
+    donationsTotal.set(stats.admin.donations);
+    pledgesOpen.set(stats.admin.pledges.open);
+    pledgesOverdue.set(stats.admin.pledges.overdue);
+    eventsActive.set(stats.active_events);
+    channelsActive.set(stats.active_channels);
+    rewardClaimsTotal.set(stats.admin.claims);
+    pollVotesTotal.set(stats.poll_votes);
+    donationsUnassigned.set(stats.unassigned_donations);
+    walletCreditCents.set({ state: 'available' }, stats.admin.wallet_credit_cents.available);
+    walletCreditCents.set({ state: 'held' }, stats.admin.wallet_credit_cents.held);
+    for (const [status, count] of Object.entries(stats.payment_refunds))
+      paymentRefunds.set({ status }, count);
+    paymentRefundsOldestRequestedAge.set(stats.oldest_requested_age_seconds);
 
-    // Slug lookups for the labelled breakdowns: one query each, then resolve in
-    // memory. Unknown or null ids fall back to '' so a stale reference never
-    // creates a bogus slug series.
-    const eventSlug = new Map(eventRows.map((e) => [e.id, e.slug]));
-    const channelSlug = new Map(channelRows.map((c) => [c.id, c.slug]));
-    const channelEvent = new Map(channelRows.map((c) => [c.id, c.event_id]));
-    const labelsFor = (eventId: string | null, channelId: string | null) => ({
-      event: (eventId && eventSlug.get(eventId)) || '',
-      channel: (channelId && channelSlug.get(channelId)) || '',
-    });
-
-    // Several rows can resolve to the same label pair (e.g. an unknown and a null
-    // Event both give ''), so values are summed per pair, never overwritten.
-    const setBySlugPair = <T>(
-      gauge: client.Gauge<'event' | 'channel'>,
-      rows: T[],
-      labelsOf: (row: T) => { event: string; channel: string },
-      valueOf: (row: T) => number,
-    ) => {
-      const totals = new Map<
-        string,
-        { labels: { event: string; channel: string }; value: number }
-      >();
-      for (const row of rows) {
-        const labels = labelsOf(row);
-        const key = `${labels.event}\u0000${labels.channel}`;
-        const entry = totals.get(key) ?? { labels, value: 0 };
-        entry.value += valueOf(row);
-        totals.set(key, entry);
-      }
-      gauge.reset();
-      for (const { labels, value } of totals.values()) gauge.set(labels, value);
-    };
-    // Claims and votes take their incentive's Channel (null = shared).
-    const incentiveLabels = (channelId: string | null) =>
-      labelsFor(channelId ? (channelEvent.get(channelId) ?? null) : null, channelId);
-    const rewardChannel = new Map(rewards.map((r) => [r.id, r.channel_id]));
-    const pollChannel = new Map(polls.map((p) => [p.id, p.channel_id]));
-
-    setBySlugPair(
-      donatedCentsByChannel,
-      completedCentsByChannel,
-      (g) => labelsFor(g.event_id, g.channel_id),
-      (g) => g._sum.amount_cents ?? 0,
-    );
-    setBySlugPair(
-      donationsByChannel,
-      donationByChannel,
-      (g) => labelsFor(g.event_id, g.channel_id),
-      (g) => g._count._all,
-    );
-    setBySlugPair(
-      rewardClaimsByChannel,
-      claimGroups,
-      (g) => incentiveLabels(rewardChannel.get(g.reward_id) ?? null),
-      (g) => g._count._all,
-    );
-    setBySlugPair(
-      pollVotesByChannel,
-      voteGroups,
-      (g) => incentiveLabels(pollChannel.get(g.poll_id) ?? null),
-      (g) => g._count._all,
-    );
+    donatedCentsByChannel.reset();
+    donationsByChannel.reset();
+    poolUnusedCents.reset();
+    poolCreditCents.reset();
+    for (const row of stats.donation_channels) {
+      const labels = { event: row.event, channel: row.channel };
+      donatedCentsByChannel.set(labels, row.money_cents);
+      donationsByChannel.set(labels, row.donations);
+      for (const category of ['poll', 'goal'] as const)
+        poolUnusedCents.set({ ...labels, category }, row.unused_cents[category]);
+      for (const category of ['reward', 'poll', 'goal'] as const)
+        poolCreditCents.set({ ...labels, category }, row.credit_cents[category]);
+    }
+    incentiveAllocatedCents.reset();
+    for (const { cents, ...labels } of stats.allocations)
+      incentiveAllocatedCents.set(labels, cents);
+    rewardClaimsByChannel.reset();
+    for (const { count, ...labels } of stats.claim_channels)
+      rewardClaimsByChannel.set(labels, count);
+    pollVotesByChannel.reset();
+    for (const { count, ...labels } of stats.vote_channels) pollVotesByChannel.set(labels, count);
     for (const { type, count } of adjustmentCounts) {
       balanceAdjustmentsTotal.set({ type }, count);
     }

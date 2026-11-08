@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   toggleDonorFreeze: vi.fn(),
   adjustDonorBalance: vi.fn(),
   reverseDonorSpend: vi.fn(),
+  getReversalPreview: vi.fn(),
   setDonorRole: vi.fn(),
   sweepCredits: vi.fn(),
 }));
@@ -172,7 +173,7 @@ describe('AdminDonors', () => {
     render(<AdminDonors />);
 
     fireEvent.click(await screen.findByText('alice@example.com'));
-    fireEvent.click(await screen.findByRole('button', { name: 'adjust balance' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'adjust Wallet credit' }));
 
     const amountInput = screen.getByPlaceholderText('e.g. 10.00');
     fireEvent.change(amountInput, { target: { value: '5.00' } });
@@ -207,6 +208,77 @@ describe('AdminDonors', () => {
     expect(screen.getAllByText('$5.00').length).toBeGreaterThan(0);
     expect(screen.getByText(/go team!/)).toBeInTheDocument();
     expect(screen.queryByText('No donation history.')).not.toBeInTheDocument();
+  });
+
+  it('confirms the server-recorded reversal destination, not a generic Wallet promise', async () => {
+    mocks.getDonors.mockResolvedValue({
+      donors: [{ id: 'd1', email: 'alice@example.com' }],
+      total: 1,
+    });
+    mocks.getDonorWallet.mockResolvedValue({
+      ...wallet,
+      poll_votes: [{ id: 'v1', donation_id: 'don1', amount_cents: 250, source: 'auto' }],
+    });
+    mocks.getReversalPreview.mockResolvedValue({
+      destinations: [
+        {
+          destination: 'Pool credit',
+          category: 'poll',
+          donation_id: 'don1',
+          credit_id: null,
+          amount_cents: 250,
+        },
+      ],
+    });
+    mocks.reverseDonorSpend.mockResolvedValue({ success: true });
+    render(<AdminDonors />);
+    fireEvent.click(await screen.findByText('alice@example.com'));
+    fireEvent.click(await screen.findByRole('button', { name: 'reverse' }));
+    await waitFor(() =>
+      expect(window.confirm).toHaveBeenCalledWith(
+        expect.stringContaining('+$2.50 poll Pool credit of donation don1'),
+      ),
+    );
+    expect(mocks.reverseDonorSpend).toHaveBeenCalledWith('d1', 'vote', 'v1');
+  });
+
+  it('separates available/held Wallet from read-only per-Event category credit without adding categories', async () => {
+    mocks.getDonors.mockResolvedValue({
+      donors: [
+        { id: 'd1', email: 'alice@example.com', total_donated: 500, balance_remaining: 100 },
+      ],
+      total: 1,
+    });
+    mocks.getDonorWallet.mockResolvedValue({
+      ...wallet,
+      balance_held_cents: 900,
+      pool_credits: {
+        wallet_credit_cents: 100,
+        events: [
+          {
+            event: { id: 'e1', name: 'Summer', ended_at: null },
+            available_cents: { reward: 100, poll: 200, goal: 300 },
+            outstanding_cents: { reward: 100, poll: 200, goal: 300 },
+            reasons: { reward: null, poll: null, goal: null },
+          },
+        ],
+      },
+    });
+    render(<AdminDonors />);
+    fireEvent.click(await screen.findByText('alice@example.com'));
+    expect(await screen.findByText('Wallet credit held')).toBeInTheDocument();
+    expect(screen.getByText('$9.00')).not.toHaveClass('text-d-yellow');
+    expect(screen.getByText('Summer')).toBeInTheDocument();
+    expect(
+      screen.getByText('reward: available $1.00 · recorded outstanding $1.00'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('poll: available $2.00 · recorded outstanding $2.00'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('goal: available $3.00 · recorded outstanding $3.00'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('$6.00')).not.toBeInTheDocument();
   });
 
   it('shows poll votes and fund contributions in the spend history', async () => {
@@ -257,7 +329,8 @@ describe('AdminDonors', () => {
 
     fireEvent.click(await screen.findByText('alice@example.com'));
 
-    expect(await screen.findByText('balance adjustments')).toBeInTheDocument();
+    expect(await screen.findByText('Wallet credit adjustments')).toBeInTheDocument();
+    expect(screen.getByText('Wallet credit change: +$5.00')).toHaveClass('text-off-white');
     expect(screen.getByText('MANUAL')).toBeInTheDocument();
     expect(screen.getByText(/test reason/)).toBeInTheDocument();
   });
@@ -274,7 +347,7 @@ describe('AdminDonors', () => {
     render(<AdminDonors />);
 
     fireEvent.click(await screen.findByText('alice@example.com'));
-    fireEvent.click(await screen.findByRole('button', { name: 'adjust balance' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'adjust Wallet credit' }));
 
     // Submit with amount 0 (the input is pre-filled with empty; just click save directly)
     fireEvent.click(screen.getAllByRole('button', { name: 'save' })[0]!);
@@ -363,7 +436,7 @@ describe('AdminDonors', () => {
 
     fireEvent.click(screen.getByText('alice@example.com'));
 
-    const detailColumn = (await screen.findByText('adjust balance')).closest(
+    const detailColumn = (await screen.findByText('adjust Wallet credit')).closest(
       'div.lg\\:col-span-2',
     ) as HTMLElement;
     expect(detailColumn).not.toBeNull();

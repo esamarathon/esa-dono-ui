@@ -1,11 +1,16 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import pollsRouter from '../../routes/polls.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent, createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -29,14 +34,23 @@ async function makeDonor(balanceCents: number) {
 }
 
 describe('Polls routes', () => {
+  // Wallet spends target one Channel (ADR-0012); the fixtures are shared incentives of its Event.
+  let channelId = '';
+  beforeAll(async () => {
+    channelId = (await createTestChannel(prisma)).id;
+  });
+
   afterAll(async () => {
+    await prisma.channel.delete({ where: { id: channelId } });
     await prisma.$disconnect();
   });
 
   it('GET / returns only active polls', async () => {
-    const active = await prisma.poll.create({ data: { title: 'Active Poll', is_active: true } });
+    const active = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Active Poll', is_active: true },
+    });
     const inactive = await prisma.poll.create({
-      data: { title: 'Inactive Poll', is_active: false },
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Inactive Poll', is_active: false },
     });
 
     const res = await request(createApp()).get('/api/polls');
@@ -51,7 +65,9 @@ describe('Polls routes', () => {
 
   it('POST /:id/vote votes on an option', async () => {
     const { donor, token } = await makeDonor(5000);
-    const poll = await prisma.poll.create({ data: { title: 'Vote Poll', is_active: true } });
+    const poll = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Vote Poll', is_active: true },
+    });
     const option = await prisma.pollOption.create({
       data: { poll_id: poll.id, label: 'Runner A', status: 'ACTIVE' },
     });
@@ -59,7 +75,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/vote`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ poll_option_id: option.id, amount_cents: 100 });
+      .send({ channel_id: channelId, poll_option_id: option.id, amount_cents: 100 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -72,7 +88,9 @@ describe('Polls routes', () => {
 
   it('POST /:id/vote returns 400 on insufficient balance', async () => {
     const { donor, token } = await makeDonor(0);
-    const poll = await prisma.poll.create({ data: { title: 'Poor Poll', is_active: true } });
+    const poll = await prisma.poll.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Poor Poll', is_active: true },
+    });
     const option = await prisma.pollOption.create({
       data: { poll_id: poll.id, label: 'Runner A', status: 'ACTIVE' },
     });
@@ -80,7 +98,7 @@ describe('Polls routes', () => {
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/vote`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ poll_option_id: option.id, amount_cents: 100 });
+      .send({ channel_id: channelId, poll_option_id: option.id, amount_cents: 100 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Insufficient balance');
@@ -93,13 +111,18 @@ describe('Polls routes', () => {
   it('POST /:id/custom-entry proposes a funded write-in', async () => {
     const { donor, token } = await makeDonor(5000);
     const poll = await prisma.poll.create({
-      data: { title: 'Writein Poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Writein Poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
 
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/custom-entry`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ label: 'My idea', amount_cents: 100 });
+      .send({ channel_id: channelId, label: 'My idea', amount_cents: 100 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -116,14 +139,19 @@ describe('Polls routes', () => {
   it('POST /:id/custom-entry rejects a blocked word', async () => {
     const { donor, token } = await makeDonor(5000);
     const poll = await prisma.poll.create({
-      data: { title: 'Blocked Poll', is_active: true, allow_custom_entries: true },
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Blocked Poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
     });
     const blocked = await prisma.blockedWord.create({ data: { word: 'spamword' } });
 
     const res = await request(createApp())
       .post(`/api/polls/${poll.id}/custom-entry`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ label: 'spamword', amount_cents: 100 });
+      .send({ channel_id: channelId, label: 'spamword', amount_cents: 100 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('blocked word');

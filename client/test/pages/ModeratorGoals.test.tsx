@@ -41,7 +41,7 @@ describe('ModeratorGoals', () => {
     );
 
     expect(await screen.findByText('Race entry')).toBeInTheDocument();
-    expect(screen.getByText('$7.50 / $20.00')).toBeInTheDocument();
+    expect(screen.getByText('$7.50 allocated / target $20.00')).toBeInTheDocument();
   });
 
   it('creates a goal', async () => {

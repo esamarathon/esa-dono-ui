@@ -35,14 +35,19 @@ describe('Home page', () => {
     vi.mocked(getCampaign).mockResolvedValue({
       name: 'Test Campaign',
       description: 'A test campaign',
-      amount_raised: { value: '1500.00' },
-      goal: { value: '5000.00' },
+      amount_raised: { value: '15602.67' },
+      goal: { value: '60000.00' },
     });
 
     renderHome();
 
     expect(await screen.findByText('Test Campaign')).toBeDefined();
     expect(screen.getByText('A test campaign')).toBeDefined();
+    expect(screen.getByText('raised')).toHaveClass('text-xl');
+    const total = screen.getByText('$15,602.67 / $60,000.00');
+    expect(total).toHaveClass('text-2xl', 'sm:text-3xl');
+    expect(total.parentElement).toHaveClass('flex-wrap', 'gap-x-4', 'gap-y-1');
+    expect(screen.getByText('26% of goal')).toHaveClass('text-xl');
   });
 
   it('shows error on failure', async () => {

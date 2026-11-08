@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { planPledge } from '@dono/shared';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -89,14 +90,20 @@ describe('public API helpers', () => {
     expect(mocks.get).toHaveBeenCalledWith('/rewards');
   });
 
-  it('createPledge posts the cart items', async () => {
-    mocks.post.mockResolvedValue({ data: { pledge_token: 'tok', total_cents: 1000 } });
+  it('createPledge posts the confirmed pooled plan and stable draft id', async () => {
+    mocks.post.mockResolvedValue({ data: { pledge_token: 'tok', pledge_amount_cents: 1000 } });
     const input = {
       email: 'a@b.com',
       channel_id: 'c1',
-      items: [{ kind: 'REWARD' as const, target_id: 'r1', amount_cents: 1000 }],
+      draft_id: 'stable',
+      pledge_amount_cents: 1000,
+      plan: planPledge({ pledge_amount_cents: 1000, selections: [], available_wallet_cents: null }),
+      items: [],
     };
-    await expect(createPledge(input)).resolves.toEqual({ pledge_token: 'tok', total_cents: 1000 });
+    await expect(createPledge(input)).resolves.toEqual({
+      pledge_token: 'tok',
+      pledge_amount_cents: 1000,
+    });
     expect(mocks.post).toHaveBeenCalledWith('/pledge', input);
   });
 

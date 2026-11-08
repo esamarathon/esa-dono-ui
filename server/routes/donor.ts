@@ -1,6 +1,14 @@
 import { Router, type Request, type Response } from 'express';
 import { donorAuth } from '../middleware/donorAuth.js';
 import prisma from '../lib/prisma.js';
+import { handle } from '../lib/httpError.js';
+import { spendLimit } from '../middleware/rateLimit.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
+import {
+  applyPoolCreditTx,
+  readPoolCreditSummaryTx,
+  readPoolCreditEventTx,
+} from '../services/poolCredit.js';
 
 const router = Router();
 
@@ -48,5 +56,36 @@ router.get('/', donorAuth, async (req: Request, res: Response) => {
   // allowlists), not the raw persisted role from this fresh DB fetch.
   res.json({ ...donor, role: req.donor!.role });
 });
+
+router.get(
+  '/pool-credits',
+  donorAuth,
+  handle('[pool-credit]', async (req, res) => {
+    res.json(await prisma.$transaction((tx) => readPoolCreditSummaryTx(tx, req.donor!.id)));
+  }),
+);
+router.get(
+  '/pool-credits/:eventId',
+  donorAuth,
+  handle('[pool-credit]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        readPoolCreditEventTx(tx, req.donor!.id, String(req.params.eventId)),
+      ),
+    );
+  }),
+);
+router.post(
+  '/pool-credits/:eventId/apply',
+  spendLimit,
+  donorAuth,
+  handle('[pool-credit]', async (req, res) => {
+    res.json(
+      await withWebhooks((tx, _emit, publisher) =>
+        applyPoolCreditTx(tx, req.donor!.id, String(req.params.eventId), req.body, publisher),
+      ),
+    );
+  }),
+);
 
 export default router;

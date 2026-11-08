@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import tiltifyRouter from '../../routes/tiltify.js';
 import { buildTiltifyTotals } from '../../services/webhooks/tiltifyPayload.js';
@@ -18,7 +18,7 @@ import { buildTiltifyTotals } from '../../services/webhooks/tiltifyPayload.js';
  *   `id`, `name`, `options[]`; milestones and matches arrays.
  */
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const rand = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** kollekt `decimal.Parse(..., InvariantCulture)` and layouts `parseFloat` both accept this. */
@@ -77,7 +77,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
 
     const reward = async (title: string, channel_id: string | null, extra = {}) => {
       const r = await prisma.reward.create({
-        data: { title, type: 'DIGITAL', cost_cents: 500, channel_id, ...extra },
+        data: { title, type: 'DIGITAL', cost_cents: 500, channel_id, event_id: eventId, ...extra },
       });
       ids.rewards.push(r.id);
       return r.id;
@@ -90,12 +90,19 @@ describe('Tiltify-compatible REST API (#117)', () => {
     ownRewardB = await reward('B only', channelB);
 
     const goal = await prisma.fundGoal.create({
-      data: { title: 'Shared goal', target_cents: 100_000, current_cents: 2_550, channel_id: null },
+      data: {
+        event_id: eventId,
+        title: 'Shared goal',
+        target_cents: 100_000,
+        current_cents: 2_550,
+        channel_id: null,
+      },
     });
     ids.goals.push(goal.id);
 
     const poll = await prisma.poll.create({
       data: {
+        event_id: eventId,
         title: 'Shared poll',
         channel_id: null,
         total_votes_cents: 1_500,
@@ -113,7 +120,12 @@ describe('Tiltify-compatible REST API (#117)', () => {
     approvedOption = poll.options.find((o) => o.label === 'Approved')!.id;
     ids.polls.push(poll.id);
     const ended = await prisma.poll.create({
-      data: { title: 'B ended', channel_id: channelB, ends_at: new Date(Date.now() - 60_000) },
+      data: {
+        title: 'B ended',
+        channel_id: channelB,
+        event_id: eventId,
+        ends_at: new Date(Date.now() - 60_000),
+      },
     });
     ownPollB = ended.id;
     ids.polls.push(ended.id);

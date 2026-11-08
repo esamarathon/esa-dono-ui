@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import feedbackRouter from '../../routes/feedback.js';
 import { invalidateFlagCache } from '../../services/featureFlags.js';
 import sharedPrisma from '../../lib/prisma.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

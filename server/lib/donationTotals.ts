@@ -5,8 +5,10 @@ import type { Prisma } from '@prisma/client';
  * `dono_donated_cents_*`). PRD-0002 §E7, as decided for #115:
  *
  * - COMPLETED counts.
- * - REFUNDED counts: ESA never refunds to the original payment method, only to
- *   the donor's wallet, so the charity still has the money.
+ * - REFUNDED counts: a Wallet refund keeps the money at the charity.
+ * - A Payment refund returns money to the original payment method and lowers
+ *   amount_cents in place, without changing COMPLETED. A failed Payment refund
+ *   resolved as Wallet credit restores that amount. Shipping is always excluded.
  * - CHARGEBACK does not count: the bank took the money back.
  * - PENDING does not count: not paid yet.
  *

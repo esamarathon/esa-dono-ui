@@ -1,6 +1,35 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import prisma from '../lib/prisma.js';
+import { readAccountingStatsTx } from '../services/accountingStats.js';
+import {
+  readStaffDonationsTx,
+  readStaffClaimsTx,
+  incentiveAllocationTx,
+} from '../services/staffRead.js';
+import { handle, httpError, sendError } from '../lib/httpError.js';
+import {
+  assignUnusedTx,
+  listUnusedTx,
+  unusedCategory,
+  unusedTargetsTx,
+  undoUnusedTx,
+} from '../services/unusedPool.js';
+import { moderateCustomEntryTx } from '../services/reversal.js';
+import {
+  createReward,
+  updateReward,
+  createPoll,
+  updatePoll,
+  createPollOption,
+  updatePollOption,
+  createGoal,
+  updateGoal,
+  removeIncentive,
+  incentiveEventId,
+  keepEvent,
+} from '../services/incentiveLifecycle.js';
+import { withWebhooks } from '../services/webhooks/outbox.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { moderatorAuth } from '../middleware/moderatorAuth.js';
 import { upload, processAndStore, publicUrlFor, deleteUploadByUrl } from '../lib/uploads.js';
@@ -32,31 +61,80 @@ const router = Router();
 router.use(moderatorAuth);
 
 // Dashboard stats
-router.get('/stats', async (req, res) => {
-  const [pendingEntries, activePolls, totalRewards, totalGoals] = await Promise.all([
-    prisma.pollCustomEntry.count({ where: { status: 'PENDING' } }),
-    prisma.poll.count({ where: { is_active: true } }),
-    prisma.reward.count({ where: { is_active: true } }),
-    prisma.fundGoal.count({ where: { is_active: true } }),
-  ]);
-  res.json({
-    pending_entries: pendingEntries,
-    active_polls: activePolls,
-    total_rewards: totalRewards,
-    total_goals: totalGoals,
-  });
+router.get('/stats', async (_req, res) => {
+  const stats = await prisma.$transaction((tx) => readAccountingStatsTx(tx));
+  res.json(stats.moderator);
 });
 
 // Channels and Events (routes/identityRoutes.ts)
 mountIdentityRoutes(router);
 
+router.get(
+  '/unused-pool-money',
+  handle('[moderator/unused]', async (req, res) => {
+    res.json(
+      await prisma.$transaction((tx) =>
+        listUnusedTx(tx, {
+          comments_only: req.query.comments_only !== 'false',
+          show_ended: req.query.show_ended === 'true',
+          channel_id: typeof req.query.channel_id === 'string' ? req.query.channel_id : undefined,
+        }),
+      ),
+    );
+  }),
+);
+router.get(
+  '/donations/:id/unused-pool-money/targets',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.query.category);
+    res.json(await prisma.$transaction((tx) => unusedTargetsTx(tx, req.params.id!, category)));
+  }),
+);
+router.post(
+  '/donations/:id/unused-pool-money',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.body?.category);
+    if (typeof req.body?.target_id !== 'string') throw httpError(400, 'target_id required');
+    res.json(
+      await withWebhooks((tx, _emit, publisher) =>
+        assignUnusedTx(
+          tx,
+          req.params.id!,
+          category,
+          req.body.target_id,
+          req.body.expected_amount_cents,
+          req.donor?.email || 'moderator',
+          publisher,
+        ),
+      ),
+    );
+  }),
+);
+router.post(
+  '/unused-pool-money/:category/:id/undo',
+  handle('[moderator/unused]', async (req, res) => {
+    const category = unusedCategory(req.params.category);
+    res.json(
+      await withWebhooks((tx, _emit, publisher) =>
+        undoUnusedTx(tx, category, req.params.id!, req.donor?.email || 'moderator', publisher),
+      ),
+    );
+  }),
+);
+
 // Polls CRUD
 router.get('/polls', async (req, res) => {
   res.json(
-    await prisma.poll.findMany({
-      include: { options: true, custom_entries: true },
-      orderBy: { created_at: 'desc' },
-    }),
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (
+          await tx.poll.findMany({
+            include: { options: true, custom_entries: true },
+            orderBy: { created_at: 'desc' },
+          })
+        ).map(async (row) => ({ ...row, ...(await incentiveAllocationTx(tx, 'poll', row.id)) })),
+      ),
+    ),
   );
 });
 
@@ -71,22 +149,21 @@ router.post('/polls', async (req, res) => {
     max_entry_chars,
     auto_approve,
     channel_id,
+    event_id,
   } = req.body;
-  const poll = await prisma.poll.create({
-    data: {
-      title,
-      description,
-      is_active: is_active ?? true,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-      options: options?.length
-        ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
-        : undefined,
-    },
-    include: { options: true },
+  const poll = await createPoll({
+    title,
+    description,
+    is_active: is_active ?? true,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id: channel_id ?? null,
+    event_id,
+    options: options?.length
+      ? { create: options.map((o: { label: string }) => ({ label: o.label })) }
+      : undefined,
   });
   res.json(poll);
 });
@@ -101,51 +178,49 @@ router.put('/polls/:id', async (req, res) => {
     max_entry_chars,
     auto_approve,
     channel_id,
+    event_id,
   } = req.body;
-  const poll = await prisma.poll.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      is_active,
-      ends_at: ends_at ? new Date(ends_at) : null,
-      allow_custom_entries: allow_custom_entries ?? false,
-      max_entry_chars: max_entry_chars ?? null,
-      auto_approve: auto_approve ?? true,
-      channel_id: channel_id || null,
-    },
-    include: { options: true },
+  const poll = await updatePoll(req.params.id, {
+    title,
+    description,
+    is_active,
+    ends_at: ends_at ? new Date(ends_at) : null,
+    allow_custom_entries: allow_custom_entries ?? false,
+    max_entry_chars: max_entry_chars ?? null,
+    auto_approve: auto_approve ?? true,
+    channel_id,
+    event_id,
   });
   res.json(poll);
 });
 
 router.delete('/polls/:id', async (req, res) => {
-  await prisma.poll.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('POLL', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/polls]');
+  }
 });
 
 router.post('/polls/:id/options', async (req, res) => {
-  const option = await prisma.pollOption.create({
-    data: { poll_id: req.params.id, label: req.body.label },
-  });
+  const option = await createPollOption(req.params.id, req.body.label);
   res.json(option);
 });
 
 router.patch('/polls/options/:id', async (req, res) => {
   const { label } = req.body;
-  if (!label || !String(label).trim()) {
-    return res.status(400).json({ error: 'label is required' });
-  }
-  const option = await prisma.pollOption.update({
-    where: { id: req.params.id },
-    data: { label: String(label).trim() },
-  });
+  const option = await updatePollOption(req.params.id, label);
   res.json(option);
 });
 
 router.delete('/polls/options/:id', async (req, res) => {
-  await prisma.pollOption.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('POLL_OPTION', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/polls/options]');
+  }
 });
 
 // Custom entries
@@ -166,77 +241,14 @@ router.patch('/polls/custom-entries/:id', async (req, res) => {
     return res.status(400).json({ error: 'Status must be APPROVED or REJECTED' });
   }
 
-  const entry = await prisma.pollCustomEntry.findUnique({ where: { id: req.params.id } });
-  if (!entry) return res.status(404).json({ error: 'Entry not found' });
-  if (entry.status !== 'PENDING') {
-    return res.status(400).json({ error: 'Only pending entries can be moderated' });
+  try {
+    const updated = await withWebhooks((tx, _emit, publisher) =>
+      moderateCustomEntryTx(tx, req.params.id, status, req.donor?.email || 'moderator', publisher),
+    );
+    res.json(updated);
+  } catch (e) {
+    sendError(res, e, '[moderator/custom-entries]');
   }
-
-  const option = await prisma.pollOption.findUnique({ where: { custom_entry_id: entry.id } });
-  if (!option) return res.status(404).json({ error: 'Associated poll option not found' });
-
-  const vote = await prisma.pollVote.findFirst({
-    where: { poll_option_id: option.id, reversed_at: null },
-    orderBy: { created_at: 'desc' },
-  });
-  if (!vote) return res.status(404).json({ error: 'Associated funding vote not found' });
-
-  const moderatorEmail = req.donor?.email || 'moderator';
-
-  if (status === 'APPROVED') {
-    await prisma.$transaction([
-      prisma.pollOption.update({
-        where: { id: option.id },
-        data: { status: 'ACTIVE', votes_cents: { increment: vote.amount_cents } },
-      }),
-      prisma.poll.update({
-        where: { id: entry.poll_id },
-        data: { total_votes_cents: { increment: vote.amount_cents } },
-      }),
-      prisma.pollCustomEntry.update({
-        where: { id: entry.id },
-        data: { status: 'APPROVED' },
-      }),
-    ]);
-  } else {
-    const donor = await prisma.donor.findUnique({ where: { id: vote.donor_id } });
-    if (!donor) return res.status(404).json({ error: 'Donor not found' });
-
-    await prisma.$transaction([
-      prisma.donor.update({
-        where: { id: donor.id },
-        data: { balance_remaining: { increment: vote.amount_cents } },
-      }),
-      prisma.pollVote.update({
-        where: { id: vote.id },
-        data: { reversed_at: new Date(), reversed_by: moderatorEmail },
-      }),
-      prisma.pollOption.update({
-        where: { id: option.id },
-        data: { status: 'REJECTED' },
-      }),
-      prisma.pollCustomEntry.update({
-        where: { id: entry.id },
-        data: { status: 'REJECTED' },
-      }),
-      prisma.balanceAdjustment.create({
-        data: {
-          donor_id: donor.id,
-          amount_cents: vote.amount_cents,
-          balance_after_cents: donor.balance_remaining + vote.amount_cents,
-          type: 'REFUND',
-          reason: 'Rejected custom poll entry',
-          reference_id: vote.id,
-          created_by: moderatorEmail,
-        },
-      }),
-    ]);
-  }
-
-  const updated = await prisma.pollCustomEntry.findUnique({
-    where: { id: req.params.id },
-  });
-  res.json(updated);
 });
 
 // Rewards CRUD
@@ -263,7 +275,16 @@ router.use('/uploads', (err: unknown, _req: Request, res: Response, _next: NextF
 });
 
 router.get('/rewards', async (req, res) => {
-  res.json(await prisma.reward.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.reward.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'reward', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/rewards', async (req, res) => {
@@ -277,19 +298,19 @@ router.post('/rewards', async (req, res) => {
     custom_type_label,
     image_url,
     channel_id,
+    event_id,
   } = req.body;
-  const reward = await prisma.reward.create({
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active: is_active ?? true,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await createReward({
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active: is_active ?? true,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id: channel_id ?? null,
+    event_id,
   });
   res.json(reward);
 });
@@ -305,56 +326,29 @@ router.put('/rewards/:id', async (req, res) => {
     custom_type_label,
     image_url,
     channel_id,
+    event_id,
   } = req.body;
-  // Best-effort cleanup of old upload if the image is being replaced/removed
-  const existing = await prisma.reward.findUnique({
-    where: { id: req.params.id },
-    select: { image_url: true },
-  });
-  if (existing && existing.image_url !== (image_url || null)) {
-    await deleteUploadByUrl(existing.image_url);
-  }
-  const reward = await prisma.reward.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      type,
-      cost_cents,
-      quantity_total: quantity_total ?? null,
-      is_active,
-      custom_type_label,
-      image_url: image_url || null,
-      channel_id: channel_id || null,
-    },
+  const reward = await updateReward(req.params.id, {
+    title,
+    description,
+    type,
+    cost_cents,
+    quantity_total: quantity_total ?? null,
+    is_active,
+    custom_type_label,
+    image_url: image_url || null,
+    channel_id,
+    event_id,
   });
   res.json(reward);
 });
 
 router.delete('/rewards/:id', async (req, res) => {
   try {
-    const claims = await prisma.rewardClaim.count({ where: { reward_id: req.params.id } });
-    if (claims > 0) {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    const existing = await prisma.reward.findUnique({
-      where: { id: req.params.id },
-      select: { image_url: true },
-    });
-    await prisma.reward.delete({ where: { id: req.params.id } });
-    await deleteUploadByUrl(existing?.image_url);
+    await removeIncentive('REWARD', req.params.id);
     res.json({ success: true });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === 'P2025') return res.status(404).json({ error: 'Reward not found' });
-    if (code === 'P2003') {
-      return res.status(409).json({
-        error: 'Cannot delete a reward with existing claims; deactivate it instead',
-      });
-    }
-    throw err;
+    sendError(res, err, '[moderator/rewards]');
   }
 });
 
@@ -363,40 +357,7 @@ router.delete('/rewards/:id', async (req, res) => {
 // displayed/tracked here (admin retains its own status toggle at
 // admin.ts's PATCH /claims/:id, which is unrelated and untouched).
 router.get('/claims', async (req, res) => {
-  const claims = await prisma.rewardClaim.findMany({
-    include: {
-      reward: true,
-      // Human-readable donor identity without ever touching email (#57):
-      // donor_name is a plain column on Donation (self-reported at checkout),
-      // not on Donor — join to the donor's most recent donation for it.
-      donor: {
-        select: {
-          donations: {
-            orderBy: { created_at: 'desc' },
-            take: 1,
-            select: { donor_name: true },
-          },
-        },
-      },
-    },
-    orderBy: { created_at: 'desc' },
-  });
-  res.json(
-    claims.map((c) => {
-      let parsed = null;
-      try {
-        parsed = c.claim_data ? JSON.parse(c.claim_data) : null;
-      } catch {
-        /* ignore */
-      }
-      const { donor, ...rest } = c;
-      return {
-        ...rest,
-        claim_data: parsed,
-        donor_name: donor?.donations[0]?.donor_name ?? null,
-      };
-    }),
-  );
+  res.json(await prisma.$transaction((tx) => readStaffClaimsTx(tx, true)));
 });
 
 // Donations — read-only list + moderation flag. Downstream tools (exports,
@@ -498,11 +459,20 @@ router.get('/donations', async (req, res) => {
     return 'Unknown item';
   };
 
+  const staff = await prisma.$transaction((tx) =>
+    readStaffDonationsTx(
+      tx,
+      donations.map((d) => d.id),
+    ),
+  );
   res.json(
-    donations.map((d) => {
+    donations.map((d, index) => {
       const { pledge, ...rest } = d;
+      const { pools: _privateCredits, ...current } = staff[index]!;
+      void _privateCredits; // Deliberately omit the Pool-credit panel from moderator responses.
       return {
         ...rest,
+        ...current,
         pledge_items: (pledge?.items ?? []).map((i) => ({
           kind: i.kind,
           label: labelForItem(i),
@@ -541,21 +511,15 @@ router.patch('/donations/:id', async (req, res) => {
   }
   const moderatorEmail = req.donor?.email || 'moderator';
 
-  const { buildDonationModeratedPayload, buildDonationVisibilityPayload } =
-    await import('../services/webhooks/delivery.js');
-  const { withWebhooks } = await import('../services/webhooks/outbox.js');
   const reviewFields = (value: boolean) =>
     value
       ? { moderated: true, moderated_at: new Date(), moderated_by: moderatorEmail }
       : { moderated: false, moderated_at: null, moderated_by: null };
 
-  const donation = await withWebhooks(async (tx, emit, tiltify) => {
-    // Read inside the transaction, so two concurrent hides publish once.
-    const existing = await tx.donation.findUnique({
-      where: { id: req.params.id },
-      select: { hidden_from_overlay: true },
-    });
-    if (!existing) return null;
+  const donation = await withWebhooks(async (tx, _emit, publisher) => {
+    // Snapshot inside the transaction, so two concurrent hides publish once.
+    const before = await publisher.snapshot(req.params.id);
+    if (!before.get(req.params.id)) return null;
     const updated = await tx.donation.update({
       where: { id: req.params.id },
       data: {
@@ -563,25 +527,7 @@ router.patch('/donations/:id', async (req, res) => {
         ...(hidden === undefined ? {} : { hidden_from_overlay: hidden }),
       },
     });
-    if (moderated !== undefined) {
-      await emit('donation.moderated', () =>
-        buildDonationModeratedPayload({
-          donationId: updated.id,
-          externalId: updated.external_id,
-          donorRef: updated.donor_id,
-          moderated,
-          moderatedAt: updated.moderated_at,
-        }),
-      );
-    }
-    // An unassigned donation was never published, so there is nothing to hide (§E6).
-    const published = updated.channel_id !== null || updated.event_id !== null;
-    if (hidden !== undefined && hidden !== existing.hidden_from_overlay && published) {
-      await emit(hidden ? 'donation.hidden' : 'donation.unhidden', () =>
-        buildDonationVisibilityPayload(updated),
-      );
-      await tiltify.donation(updated.id);
-    }
+    await publisher.publish(updated.id, before);
     return updated;
   });
 
@@ -591,42 +537,55 @@ router.patch('/donations/:id', async (req, res) => {
 
 // Goals CRUD
 router.get('/goals', async (req, res) => {
-  res.json(await prisma.fundGoal.findMany({ orderBy: { created_at: 'desc' } }));
+  res.json(
+    await prisma.$transaction(async (tx) =>
+      Promise.all(
+        (await tx.fundGoal.findMany({ orderBy: { created_at: 'desc' } })).map(async (row) => ({
+          ...row,
+          ...(await incentiveAllocationTx(tx, 'goal', row.id)),
+        })),
+      ),
+    ),
+  );
 });
 
 router.post('/goals', async (req, res) => {
-  const { title, description, target_cents, is_active, channel_id } = req.body;
-  const goal = await prisma.fundGoal.create({
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active: is_active ?? true,
-      channel_id: channel_id || null,
-    },
+  const { title, description, target_cents, is_active, channel_id, event_id, is_complete } =
+    req.body;
+  const goal = await createGoal({
+    is_complete,
+    title,
+    description,
+    target_cents,
+    is_active: is_active ?? true,
+    channel_id: channel_id ?? null,
+    event_id,
   });
   res.json(goal);
 });
 
 router.put('/goals/:id', async (req, res) => {
-  const { title, description, target_cents, is_active, is_complete, channel_id } = req.body;
-  const goal = await prisma.fundGoal.update({
-    where: { id: req.params.id },
-    data: {
-      title,
-      description,
-      target_cents,
-      is_active,
-      is_complete,
-      channel_id: channel_id || null,
-    },
+  const { title, description, target_cents, is_active, is_complete, channel_id, event_id } =
+    req.body;
+  const goal = await updateGoal(req.params.id, {
+    title,
+    description,
+    target_cents,
+    is_active,
+    is_complete,
+    channel_id,
+    event_id,
   });
   res.json(goal);
 });
 
 router.delete('/goals/:id', async (req, res) => {
-  await prisma.fundGoal.delete({ where: { id: req.params.id } });
-  res.json({ success: true });
+  try {
+    await removeIncentive('GOAL', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    sendError(res, err, '[moderator/goals]');
+  }
 });
 
 // Auctions CRUD — same shape as admin, but offer/cascade views never expose
@@ -653,6 +612,7 @@ router.post('/auctions', async (req, res) => {
     ends_at,
     is_active,
     channel_id,
+    event_id,
   } = req.body;
   if (!title || !type || !starting_price_cents || !min_increment_cents || !ends_at) {
     return res.status(400).json({
@@ -671,6 +631,7 @@ router.post('/auctions', async (req, res) => {
       ends_at: new Date(ends_at),
       is_active: is_active ?? true,
       channel_id: channel_id || null,
+      event_id: await incentiveEventId(prisma, { channel_id: channel_id || null, event_id }),
     },
   });
   res.json(auction);
@@ -688,12 +649,14 @@ router.put('/auctions/:id', async (req, res) => {
     ends_at,
     is_active,
     channel_id,
+    event_id,
   } = req.body;
   const existing = await prisma.auction.findUnique({
     where: { id: req.params.id },
-    select: { image_url: true, status: true },
+    select: { image_url: true, status: true, event_id: true },
   });
   if (!existing) return res.status(404).json({ error: 'Auction not found' });
+  await keepEvent(prisma, { channel_id: channel_id || null, event_id }, existing);
   if (existing.image_url !== (image_url || null)) {
     await deleteUploadByUrl(existing.image_url);
   }

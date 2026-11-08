@@ -4,7 +4,7 @@ import Card from './Card';
 import Modal from './Modal';
 import LoadingSpinner from './LoadingSpinner';
 import StatusBadge from './StatusBadge';
-import { apiErrorMessage, type Channel, type Event } from '../types';
+import { apiErrorMessage, type Channel, type Event, type EventEndPreview } from '../types';
 
 interface EventForm {
   id?: string;
@@ -22,16 +22,57 @@ type EventModal = 'create' | Event | null;
 
 /**
  * Events CRUD, shared by the admin and moderator pages (#115). Both surfaces
- * hit the same routes on their own axios client, so the only difference is
- * which client is passed in.
+ * hit the same identity routes. End/Undo end is an explicit admin capability;
+ * the server independently enforces that permission outside the shared routes.
  */
-export default function EventsManager({ client }: { client: AxiosInstance }) {
+export default function EventsManager({
+  client,
+  canEndEvents = false,
+}: {
+  client: AxiosInstance;
+  canEndEvents?: boolean;
+}) {
   const [events, setEvents] = useState<Event[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<EventModal>(null);
   const [form, setForm] = useState<EventForm>(EMPTY);
   const [error, setError] = useState('');
+  const [endPreview, setEndPreview] = useState<EventEndPreview | null>(null);
+  const [confirmation, setConfirmation] = useState('');
+  const [endBusy, setEndBusy] = useState(false);
+
+  const previewEnd = async (event: Event) => {
+    setError('');
+    setConfirmation('');
+    setEndBusy(true);
+    try {
+      const action = event.ended_at ? 'undo-end' : 'end';
+      const response = await client.get(`/events/${event.id}/${action}-preview`);
+      setEndPreview(response.data);
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Could not preview Event end'));
+    } finally {
+      setEndBusy(false);
+    }
+  };
+  const applyEnd = async () => {
+    if (!endPreview || endBusy) return;
+    setError('');
+    setEndBusy(true);
+    try {
+      await client.post(
+        `/events/${endPreview.event_id}/${endPreview.action === 'END' ? 'end' : 'undo-end'}`,
+        { slug: confirmation },
+      );
+      await reload();
+      setEndPreview(null);
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Event end action failed'));
+    } finally {
+      setEndBusy(false);
+    }
+  };
 
   const reload = () =>
     Promise.all([
@@ -113,7 +154,7 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
         needs an active primary channel before it can be activated.
       </p>
 
-      {error && !modal && (
+      {error && !modal && !endPreview && (
         <p className="font-body text-sm mb-3" style={{ color: 'var(--red)' }}>
           {error}
         </p>
@@ -133,16 +174,32 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
                 </p>
                 <div className="mt-2">
                   <StatusBadge active={s.is_active} />
+                  {s.ended_at && (
+                    <span className="font-data text-xs ml-2">
+                      ended {new Date(s.ended_at).toLocaleDateString()}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => toggleActive(s)}
-                  className="font-mono text-sm tracking-wider uppercase"
-                  style={{ color: s.is_active ? 'var(--red)' : 'var(--green)' }}
-                >
-                  {s.is_active ? 'deactivate' : 'activate'}
-                </button>
+                {!s.ended_at && (
+                  <button
+                    onClick={() => toggleActive(s)}
+                    className="font-mono text-sm tracking-wider uppercase"
+                    style={{ color: s.is_active ? 'var(--red)' : 'var(--green)' }}
+                  >
+                    {s.is_active ? 'deactivate' : 'activate'}
+                  </button>
+                )}
+                {canEndEvents && !s.is_active && (
+                  <button
+                    disabled={endBusy}
+                    onClick={() => previewEnd(s)}
+                    className="btrl-button btrl-button-outline"
+                  >
+                    {s.ended_at ? 'Undo end' : 'end Event'}
+                  </button>
+                )}
                 <button
                   onClick={() => openEdit(s)}
                   className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
@@ -158,6 +215,60 @@ export default function EventsManager({ client }: { client: AxiosInstance }) {
         )}
       </div>
 
+      {endPreview && (
+        <Modal
+          title={endPreview.action === 'END' ? 'end Event' : 'Undo end'}
+          onClose={() => {
+            if (!endBusy) setEndPreview(null);
+          }}
+        >
+          <p>
+            {endPreview.action === 'END'
+              ? 'Poll and goal Pool credit becomes Unused pool money; reward Pool credit expires.'
+              : 'Pool credit is restored. The Event stays inactive and the Payment refund window reopens.'}
+          </p>
+          {(['poll', 'goal', 'reward'] as const).map((category) => (
+            <p key={category}>
+              {category} Pool credit: ${(endPreview.pool_credit_cents[category] / 100).toFixed(2)}
+            </p>
+          ))}
+          <p>
+            {endPreview.unshipped_physical_donations} donations with unshipped physical rewards.{' '}
+            {endPreview.action === 'END'
+              ? 'Their Payment refund window closes.'
+              : 'Their Payment refund window reopens.'}
+          </p>
+          <p>{endPreview.open_pledges} open Pending pledges</p>
+          {endPreview.blockers.map((reason) => (
+            <p role="alert" key={reason}>
+              {reason}
+            </p>
+          ))}
+          {endPreview.consuming_assignments.map((row) => (
+            <p key={`${row.donation_id}-${row.category}`}>
+              Donation {row.donation_id}, {row.category}: reverse assignments{' '}
+              {row.assignment_ids.join(', ')} first.
+            </p>
+          ))}
+          <label className="block my-4">
+            Type {endPreview.slug} to confirm
+            <input
+              aria-label="Event slug confirmation"
+              value={confirmation}
+              onChange={(e) => setConfirmation(e.target.value)}
+              className="w-full px-3 py-2 text-sm"
+            />
+          </label>
+          {error && <p role="alert">{error}</p>}
+          <button
+            disabled={endBusy || !endPreview.can_apply || confirmation !== endPreview.slug}
+            onClick={applyEnd}
+            className="btrl-button"
+          >
+            confirm {endPreview.action === 'END' ? 'end Event' : 'Undo end'}
+          </button>
+        </Modal>
+      )}
       {modal && (
         <Modal
           title={modal === 'create' ? 'new event' : 'edit event'}

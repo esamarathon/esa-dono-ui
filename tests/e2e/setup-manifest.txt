@@ -1,0 +1,366 @@
+================================================================================
+E2E Testing Setup Manifest
+================================================================================
+
+Status:  Preserved setup draft; see tests/e2e/README.md for limitations.
+Project:  ESA Donation Platform (esa-dono-ui)
+Purpose:  End-to-end testing with Kollekt and esa-layouts-v2
+
+FILES CREATED IN THIS REPOSITORY:
+================================================================================
+
+1. docker-compose.e2e.yml
+   Location: ./tests/e2e/docker-compose.e2e.yml
+   Size:     6.2K
+   Purpose:  Main Docker Compose configuration for full E2E stack
+   Contains:
+   - Backend service (dono-backend)
+   - Frontend service (dono-frontend)
+   - RabbitMQ message broker (rabbitmq)
+   - Kollekt .NET consumer (esa-kollekt) [profile: with-kollekt]
+   - esa-layouts-v2 overlay (esa-layouts-v2) [profile: with-overlay]
+   Usage:
+   - Basic: docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml up -d
+   - Full:  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml --profile with-kollekt --profile with-overlay up -d
+
+2. tests/e2e/setup-e2e.sh
+   Location: ./tests/e2e/setup-e2e.sh
+   Size:     6.8K
+   Purpose:  Automated setup script (executable)
+   Features:
+   - Clones Kollekt and esa-layouts-v2 repositories
+   - Builds Docker images
+   - Starts services with health checks
+   - Initializes database and seeds test data
+   Usage:
+   - ./tests/e2e/setup-e2e.sh              (core stack only)
+   - ./tests/e2e/setup-e2e.sh --all        (all services)
+   - ./tests/e2e/setup-e2e.sh --with-kollekt (add Kollekt)
+
+3. tests/e2e/README.md
+   Location: ./tests/e2e/README.md
+   Size:     5.2K
+   Purpose:  Quick reference guide
+   Sections:
+   - Quick start (automated and manual)
+   - Access points (URLs and credentials)
+   - Common commands (docker, database)
+   - Environment variable summary
+   - Troubleshooting checklist
+   - Links to detailed documentation
+   Read time: 2-5 minutes
+
+4. tests/e2e/docs/e2e-testing.md
+   Location: ./tests/e2e/docs/e2e-testing.md
+   Size:     11K
+   Purpose:  Comprehensive testing guide
+   Sections:
+   - Quick start (clone, env, compose)
+   - Database initialization
+   - Test Scenario 1: Full Donation Flow
+     └─ UI → Backend → RabbitMQ → Kollekt → Overlay
+   - Test Scenario 2: API Integration
+     └─ Tiltify-compatible REST API testing
+   - Test Scenario 3: Message Flow Only
+   - RabbitMQ configuration details
+   - Troubleshooting guide (with solutions)
+   - Environment variables reference (100+ variables)
+   Read time: 15-20 minutes
+
+5. tests/e2e/docs/e2e-architecture.md
+   Location: ./tests/e2e/docs/e2e-architecture.md
+   Size:     18K
+   Purpose:  System architecture and design documentation
+   Sections:
+   - System overview diagram (ASCII art)
+   - Data flow diagrams:
+     ├─ Donation Creation → Message Publishing
+     ├─ Kollekt Consumption & Processing
+     ├─ esa-layouts-v2 Consumption & Display
+     └─ Request/Response Flow Example
+   - Service networking (Docker network details)
+   - Environment configuration flow
+   - Message queue setup (exchanges, bindings, topics)
+   - Database schema relationships
+   - Multi-event/channel setup example
+   Read time: 15-20 minutes
+
+WHAT ALREADY EXISTS IN REPO:
+================================================================================
+
+These files already existed and are documented for reference:
+
+1. .env.example
+   Location: ./.env.example
+   Purpose:  Template environment variables
+   Note:     Copy to .env and fill in values for your setup
+
+2. docker-compose.yml
+   Location: ./docker-compose.yml
+   Purpose:  Original compose file (for production)
+   Note:     The new docker-compose.e2e.yml is for E2E testing
+
+3. Dockerfile.backend
+   Location: ./Dockerfile.backend
+   Purpose:  Build backend service
+
+4. Dockerfile.frontend
+   Location: ./Dockerfile.frontend
+   Purpose:  Build frontend service
+
+5. server/
+   Location: ./server/
+   Purpose:  Backend source code (Express + Prisma)
+
+6. client/
+   Location: ./client/
+   Purpose:  Frontend source code (React + Vite)
+
+7. docs/adr/
+   Location: ./docs/adr/
+   Key files for E2E understanding:
+   - 0005-outbound-webhooks.md (event delivery design)
+   - 0009-tiltify-compatible-messages.md (message format)
+   - 0010-tiltify-compatible-rest-api.md (API specification)
+
+SETUP WORKFLOW:
+================================================================================
+
+Automated Setup (Recommended):
+  1. cd /var/lib/ai-workspace/projects/esa/esa-dono-ui
+  2. ./tests/e2e/setup-e2e.sh --all
+  3. Access http://localhost:8080
+  4. Follow tests/e2e/docs/e2e-testing.md test scenarios
+
+Manual Setup:
+  1. cd /var/lib/ai-workspace/projects/esa/esa-dono-ui
+  2. cp .env.example .env
+  3. Edit .env (set ADMIN_API_KEY, build contexts)
+  4. git clone https://github.com/esamarathon/kollekt.git ../kollekt
+  5. git clone https://github.com/esamarathon/esa-layouts-v2.git ../esa-layouts-v2
+  6. docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml --profile with-kollekt --profile with-overlay up -d
+  7. cd server && npx prisma migrate dev && npx prisma db seed && cd ..
+  8. Access services and run tests
+
+SERVICES AND PORTS:
+================================================================================
+
+Service              | Port  | URL                           | Notes
+──────────────────────┼───────┼──────────────────────────────┼─────────────────
+Frontend (UI)        | 8080  | http://localhost:8080         | React SPA
+Admin UI             | 8080  | http://localhost:8080/admin   | Uses ADMIN_API_KEY
+Moderator Dashboard  | 8080  | http://localhost:8080/moderate| Uses donor auth
+Backend API          | 3001  | http://localhost:3001/api     | Express server
+RabbitMQ AMQP        | 5672  | amqp://localhost:5672         | Message broker
+RabbitMQ Management  | 15672 | http://localhost:15672        | Web console
+Overlay (optional)   | 3002  | http://localhost:3002         | OBS integration
+
+ENVIRONMENT VARIABLES QUICK REFERENCE:
+================================================================================
+
+Required:
+  ADMIN_API_KEY=key_admin_change-me
+
+For Kollekt:
+  KOLLEKT_BUILD_CONTEXT=../../../kollekt
+  KOLLEKT_TAG=latest
+
+For Overlay:
+  OVERLAY_BUILD_CONTEXT=../../../esa-layouts-v2
+  OVERLAY_TAG=latest
+
+Service Configuration:
+  API_BASE_URL=http://dono-backend:3001/api
+  APP_BASE_URL=http://localhost:8080
+  BACKEND_PORT=3001
+  FRONTEND_PORT=8080
+  OVERLAY_PORT=3002
+  RABBITMQ_USER=guest
+  RABBITMQ_PASS=guest
+  RABBITMQ_PORT=5672
+
+Optional (leave empty to disable):
+  STRIPE_SECRET_KEY=
+  GOOGLE_CLIENT_ID=
+  DISCORD_CLIENT_ID=
+  TWITCH_CLIENT_ID=
+  SMTP_HOST=
+  DISCORD_FEEDBACK_WEBHOOK_URL=
+
+See tests/e2e/docs/e2e-testing.md for complete reference (100+ variables)
+
+COMMON COMMANDS:
+================================================================================
+
+Start services:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml up -d
+
+Stop services:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml down
+
+View logs:
+  docker logs -f esa-dono-backend
+  docker logs -f esa-rabbitmq
+  docker logs -f esa-kollekt
+  docker logs -f esa-layouts-v2
+
+Database:
+  cd server && npx prisma studio        # Browse database
+  cd server && npx prisma migrate reset # Reset database
+  cd server && npx prisma db seed       # Seed test data
+
+Clean up:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml down -v  # WARNING: deletes data
+
+Rebuild:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml build --no-cache
+
+DOCKER COMPOSE PROFILES:
+================================================================================
+
+Core Stack (backend + frontend + RabbitMQ):
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml up -d
+
++ Kollekt:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml --profile with-kollekt up -d
+
++ Overlay:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml --profile with-overlay up -d
+
++ Both:
+  docker compose --env-file .env -p esa-dono-e2e -f tests/e2e/docker-compose.e2e.yml \
+    --profile with-kollekt \
+    --profile with-overlay \
+    up -d
+
+TESTING SCENARIOS:
+================================================================================
+
+Scenario 1: Full Donation Flow
+  Entry point:  http://localhost:8080/admin/simulate
+  Flow:         Admin creates donation
+                → Backend processes
+                → Publishes to RabbitMQ
+                → Kollekt consumes
+                → Overlay displays
+  Verify at:    http://localhost:15672 (RabbitMQ UI)
+                docker logs -f esa-kollekt
+                http://localhost:3002 (overlay)
+
+Scenario 2: API Integration
+  Entry point:  http://localhost:8080/admin (create event, rewards, polls)
+  API endpoint: http://localhost:3001/api/admin/tiltify/campaigns/{id}
+  Flow:         Kollekt fetches campaign data via REST
+                Overlay fetches rewards/polls/goals
+  Verify at:    Test endpoints directly via curl
+
+Scenario 3: Message Flow Only
+  Skip Kollekt/Overlay
+  Monitor:      http://localhost:15672 (RabbitMQ Management UI)
+  Verify:       Messages published to correct exchange/queue
+
+DOCUMENTATION ORGANIZATION:
+================================================================================
+
+For different audiences:
+
+DevOps / Setup:
+  1. Read: tests/e2e/README.md (quick start)
+  2. Run: ./tests/e2e/setup-e2e.sh --all
+  3. Access services
+
+Developers / Testing:
+  1. Read: tests/e2e/README.md (2 min)
+  2. Read: tests/e2e/docs/e2e-testing.md (full guide + 3 scenarios)
+  3. Run: test scenarios with step-by-step commands
+
+Architects / System Design:
+  1. Read: tests/e2e/docs/e2e-architecture.md (system design)
+  2. Reference: docs/adr/0005, 0009, 0010 (detailed specs)
+  3. Understand: service interactions, data flows, message formats
+
+Quick Help:
+  1. Problem? → tests/e2e/README.md troubleshooting
+  2. How to? → tests/e2e/docs/e2e-testing.md section headers
+  3. Why? → tests/e2e/docs/e2e-architecture.md diagrams
+
+EXTERNAL REPOSITORIES:
+================================================================================
+
+Kollekt (.NET donation reader):
+  URL: https://github.com/esamarathon/kollekt
+  Purpose: Consumes donation events, processes them, provides data
+  Build:   Requires .NET runtime and SDK
+
+esa-layouts-v2 (Stream overlay):
+  URL: https://github.com/esamarathon/esa-layouts-v2
+  Purpose: Consumes donation events, updates OBS overlay
+  Build:   Requires Node.js runtime
+
+RELATED DOCUMENTATION IN THIS REPO:
+================================================================================
+
+Architecture Decision Records:
+  docs/adr/0005-outbound-webhooks.md
+    └─ Webhook delivery design, outbox pattern, retry semantics
+
+  docs/adr/0009-tiltify-compatible-messages.md
+    └─ Message format specification (what Kollekt expects)
+
+  docs/adr/0010-tiltify-compatible-rest-api.md
+    └─ REST API specification (what Kollekt fetches)
+
+Operational Guides:
+  docs/deployment.md
+    └─ Production deployment instructions
+
+  docs/environment-variables.md
+    └─ Detailed environment variable reference
+
+  docs/local-development.md
+    └─ Local dev setup (without E2E stack)
+
+Getting Help:
+================================================================================
+
+If something doesn't work:
+  1. Check docker logs: docker logs -f <service-name>
+  2. Read troubleshooting section in tests/e2e/README.md or tests/e2e/docs/e2e-testing.md
+  3. Verify environment variables in .env
+  4. Ensure ports 3001, 5672, 8080, 15672 are available
+  5. Check message format against ADR-0009 spec
+
+Questions about:
+  - Setup?          → tests/e2e/README.md or tests/e2e/docs/e2e-testing.md
+  - Architecture?   → tests/e2e/docs/e2e-architecture.md
+  - Message format? → docs/adr/0009-tiltify-compatible-messages.md
+  - REST API?       → docs/adr/0010-tiltify-compatible-rest-api.md
+  - Webhooks?       → docs/adr/0005-outbound-webhooks.md
+
+SUMMARY:
+================================================================================
+
+This E2E testing setup provides:
+
+✅ Complete docker-compose configuration (docker-compose.e2e.yml)
+✅ Automated setup script (tests/e2e/setup-e2e.sh)
+✅ Quick reference guide (tests/e2e/README.md)
+✅ Comprehensive testing guide (tests/e2e/docs/e2e-testing.md)
+✅ Architecture documentation (tests/e2e/docs/e2e-architecture.md)
+
+Services included:
+✅ esa-dono-ui Backend (Express + Prisma)
+✅ esa-dono-ui Frontend (React + Vite)
+✅ RabbitMQ Message Broker
+✅ Kollekt .NET Consumer (optional)
+✅ esa-layouts-v2 Overlay (optional)
+
+Testing scenarios:
+✅ Full donation flow (UI → Backend → RabbitMQ → Consumers)
+✅ API integration (Tiltify-compatible REST API)
+✅ Message flow only (RabbitMQ queue inspection)
+
+To get started:
+  cd /var/lib/ai-workspace/projects/esa/esa-dono-ui
+  ./tests/e2e/setup-e2e.sh --all
+  # Follow prompts and access http://localhost:8080

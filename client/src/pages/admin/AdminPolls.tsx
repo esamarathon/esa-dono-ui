@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import adminClient, { refundPollOption } from '../../api/admin';
+import adminClient, { refundPollOption, getReversalPreview } from '../../api/admin';
 import Card from '../../components/Card';
 import Modal from '../../components/Modal';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import StatusBadge from '../../components/StatusBadge';
+import { AllocationSources } from '../../components/StaffAmounts';
+import { reversalText } from '../../utils/money';
 import { apiErrorMessage, type Poll, type Channel } from '../../types';
+import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
+import { defaultOwner, ownerLabel, ownerPayload, useStaffEvents } from '../../utils/incentiveOwner';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -20,6 +24,7 @@ interface PollForm {
   max_entry_chars: number | string;
   auto_approve: boolean;
   channel_id: string | null;
+  event_id: string | null;
 }
 
 const EMPTY: PollForm = {
@@ -31,6 +36,7 @@ const EMPTY: PollForm = {
   max_entry_chars: '',
   auto_approve: true,
   channel_id: null,
+  event_id: null,
 };
 
 type PollModal = 'create' | Poll | null;
@@ -38,10 +44,12 @@ type PollModal = 'create' | Poll | null;
 export default function AdminPolls() {
   const [polls, setPolls] = useState<Poll[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const events = useStaffEvents(adminClient);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<PollModal>(null);
   const [form, setForm] = useState<PollForm>(EMPTY);
-  const [newOption, setNewOption] = useState('');
+  // Keyed by poll id: each poll's 'add option' input keeps its own text (#149).
+  const [newOptions, setNewOptions] = useState<Record<string, string>>({});
   const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
   const [optionDraft, setOptionDraft] = useState('');
   const [error, setError] = useState('');
@@ -53,11 +61,8 @@ export default function AdminPolls() {
     );
   }, []);
 
-  const channelName = (id: string | null | undefined) =>
-    id ? (channels.find((s) => s.id === id)?.name ?? 'unknown channel') : 'shared';
-
   const openCreate = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, ...defaultOwner(events) });
     setModal('create');
     setError('');
   };
@@ -67,6 +72,7 @@ export default function AdminPolls() {
       ends_at: p.ends_at ? p.ends_at.slice(0, 16) : '',
       max_entry_chars: p.max_entry_chars ?? '',
       channel_id: p.channel_id ?? null,
+      event_id: p.event_id,
     } as PollForm);
     setModal(p);
     setError('');
@@ -77,6 +83,7 @@ export default function AdminPolls() {
     try {
       const data = {
         ...form,
+        ...ownerPayload(form),
         ends_at: form.ends_at || null,
         max_entry_chars: form.max_entry_chars ? parseInt(String(form.max_entry_chars)) : null,
         allow_custom_entries: form.allow_custom_entries || false,
@@ -100,27 +107,36 @@ export default function AdminPolls() {
   };
 
   const addOption = async (pollId: string) => {
-    if (!newOption.trim()) return;
-    await adminClient.post(`/polls/${pollId}/options`, { label: newOption.trim() });
-    setNewOption('');
+    const label = newOptions[pollId]?.trim();
+    if (!label) return;
+    await adminClient.post(`/polls/${pollId}/options`, { label });
+    setNewOptions((prev) => ({ ...prev, [pollId]: '' }));
     await reload();
   };
 
   const deleteOption = async (id: string, label: string, allocatedCents: number) => {
-    const warning = allocatedCents
-      ? `This will refund ${fmt(allocatedCents)} to donor wallets, remove the option from the poll, and preserve its vote history. This cannot be undone.`
-      : 'Any allocated votes will be refunded to donor wallets; the option will be removed and its vote history preserved. This cannot be undone.';
-    if (!confirm(`Remove option "${label}"?\n\n${warning}`)) return;
-    await adminClient.delete(`/polls/options/${id}`);
-    await reload();
+    try {
+      const preview = await getReversalPreview(`/polls/options/${id}/reversal-preview`);
+      if (
+        !confirm(
+          `Reverse ${fmt(allocatedCents)} allocated votes and remove "${label}"? History stays. This cannot be undone. Server preview:\n${reversalText(preview)}`,
+        )
+      )
+        return;
+      await adminClient.delete(`/polls/options/${id}`);
+      await reload();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Remove failed'));
+    }
   };
 
   const handleRefundOption = async (id: string, label: string) => {
-    if (!confirm(`Refund all votes for "${label}"? This restores each donor's wallet balance.`))
-      return;
     try {
+      const preview = await getReversalPreview(`/polls/options/${id}/reversal-preview`);
+      if (!confirm(`Reverse all votes for "${label}"? Server preview:\n${reversalText(preview)}`))
+        return;
       const result = await refundPollOption(id);
-      alert(`Refunded ${result.refunded_count} vote(s) totaling ${fmt(result.refunded_cents)}.`);
+      alert(`Reversed ${result.refunded_count} vote(s), allocated ${fmt(result.refunded_cents)}.`);
       await reload();
     } catch (e) {
       setError(apiErrorMessage(e, 'Refund failed'));
@@ -150,6 +166,7 @@ export default function AdminPolls() {
         </button>
       </div>
 
+      {!modal && error && <p role="alert">{error}</p>}
       <div className="space-y-4">
         {polls.map((poll) => (
           <Card key={poll.id}>
@@ -160,11 +177,12 @@ export default function AdminPolls() {
                   <p className="font-body text-sm text-off-white/55">{poll.description}</p>
                 )}
                 <p className="font-data text-xs text-off-white/55">
-                  total votes: {fmt(poll.total_votes_cents)}
+                  allocated: {fmt(poll.allocated_cents ?? poll.total_votes_cents)}
                 </p>
                 <p className="font-data text-xs text-off-white/40">
-                  channel: {channelName(poll.channel_id)}
+                  channel: {ownerLabel(poll, channels, events)}
                 </p>
+                <AllocationSources row={poll} />
                 <div className="mt-2">
                   <StatusBadge active={poll.is_active} />
                 </div>
@@ -236,7 +254,7 @@ export default function AdminPolls() {
                           className="font-mono text-sm hover:underline"
                           style={{ color: 'var(--d-yellow)' }}
                         >
-                          refund votes
+                          reverse votes
                         </button>
                         <button
                           onClick={() => deleteOption(opt.id, opt.label, opt.votes_cents)}
@@ -254,8 +272,10 @@ export default function AdminPolls() {
                 <input
                   className="flex-1 px-2 py-1 text-sm"
                   placeholder="New option..."
-                  value={newOption}
-                  onChange={(e) => setNewOption(e.target.value)}
+                  value={newOptions[poll.id] ?? ''}
+                  onChange={(e) =>
+                    setNewOptions((prev) => ({ ...prev, [poll.id]: e.target.value }))
+                  }
                   onKeyDown={(e) => e.key === 'Enter' && addOption(poll.id)}
                 />
                 <button
@@ -305,21 +325,13 @@ export default function AdminPolls() {
               onChange={(e) => setForm((d) => ({ ...d, ends_at: e.target.value }))}
             />
           </div>
-          <div className="mb-3">
-            <label className="block font-data font-bold text-sm mb-1 text-off-white">channel</label>
-            <select
-              className="w-full px-3 py-2 text-sm"
-              value={form.channel_id ?? ''}
-              onChange={(e) => setForm((d) => ({ ...d, channel_id: e.target.value || null }))}
-            >
-              <option value="">shared (any channel)</option>
-              {channels.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IncentiveOwnerSelect
+            channels={channels}
+            events={events}
+            owner={form}
+            fixedEventId={modal && modal !== 'create' ? modal.event_id : undefined}
+            onChange={(owner) => setForm((d) => ({ ...d, ...owner }))}
+          />
           <div className="mb-3 flex items-center gap-2">
             <input
               type="checkbox"

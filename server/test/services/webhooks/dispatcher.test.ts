@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import crypto from 'crypto';
 import http from 'http';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../../lib/databaseClient.js';
 import {
   backoffSeconds,
   drainDestination,
@@ -14,7 +14,7 @@ const amqpMocks = vi.hoisted(() => ({ connect: vi.fn() }));
 
 vi.mock('amqplib', () => ({ connect: amqpMocks.connect }));
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve) =>

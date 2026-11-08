@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { channelTotalCents, eventTotalCents } from '../../lib/donationTotals.js';
+import { readRewardFundingTx } from '../rewardFunding.js';
 
 /**
  * Tiltify-shaped webhook messages (PRD-0002 §T, ADR-0009) for the consumers that
@@ -67,7 +68,10 @@ export async function buildTiltifyDonation(
       channel: { select: { id: true, slug: true, event_id: true } },
       // What the donation actually paid for: a pledge item that failed at
       // fulfilment has no row. Reversed rows are left out.
-      reward_claims: { where: { reversed_at: null }, orderBy: { created_at: 'asc' } },
+      reward_claims: {
+        where: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+        orderBy: { created_at: 'asc' },
+      },
       // A write-in (POLL_CUSTOM) vote counts once its option is approved (ACTIVE).
       poll_votes: {
         where: { reversed_at: null, poll_option: { status: 'ACTIVE' } },
@@ -83,11 +87,38 @@ export async function buildTiltifyDonation(
     poll_id: v.poll_id,
     poll_option_id: v.poll_option_id,
   }));
-  const contributions = donation.contributions.map((c) => ({
-    target_id: c.goal_id,
-    amount: money(c.amount_cents),
-  }));
-  const claims = donation.reward_claims.map((c) => ({
+  // Pooled rows split donor/auto provenance internally. Consumers see one
+  // selection per option/target, with its full allocation, never its source.
+  const publicVotes =
+    donation.pledge_amount_cents === null
+      ? votes
+      : [...new Map(votes.map((vote) => [vote.poll_option_id, vote])).values()];
+  const goalAmounts = new Map<string, number>();
+  for (const row of donation.contributions)
+    goalAmounts.set(row.goal_id, (goalAmounts.get(row.goal_id) ?? 0) + row.amount_cents);
+  const contributions =
+    donation.pledge_amount_cents === null
+      ? donation.contributions.map((c) => ({ target_id: c.goal_id, amount: money(c.amount_cents) }))
+      : [...goalAmounts].map(([target_id, cents]) => ({ target_id, amount: money(cents) }));
+  const creditClaims = await tx.rewardClaim.findMany({
+    where: {
+      reversed_at: null,
+      status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+      credit_redemptions: { some: { credit: { donation_id: donationId } } },
+    },
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+  });
+  const carried = [];
+  for (const claim of creditClaims) {
+    if ((await readRewardFundingTx(tx, claim)).carrier_donation_id === donationId)
+      carried.push(claim);
+  }
+  const claims = [
+    ...donation.reward_claims.filter(
+      (claim) => !creditClaims.some((credit) => credit.id === claim.id),
+    ),
+    ...carried,
+  ].map((c) => ({
     id: c.id,
     reward_id: c.reward_id,
     quantity: 1,
@@ -108,9 +139,9 @@ export async function buildTiltifyDonation(
     // carry the full set (kollekt#35 moves kollekt to the arrays).
     reward_id: claims[0]?.reward_id ?? null,
     reward_claims: claims,
-    poll_id: votes[0]?.poll_id ?? null,
-    poll_option_id: votes[0]?.poll_option_id ?? null,
-    poll_votes: votes,
+    poll_id: publicVotes[0]?.poll_id ?? null,
+    poll_option_id: publicVotes[0]?.poll_option_id ?? null,
+    poll_votes: publicVotes,
     target_id: contributions[0]?.target_id ?? null,
     target_contributions: contributions,
   };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Modal from './Modal';
-import { useCart } from '../context/CartContext';
+import { useDraftPledge } from '../context/DraftPledgeContext';
 import { getFeatureFlags } from '../api/featureFlags';
 import { sendFeedback } from '../api/feedback';
 import { getDonor } from '../api/donor';
@@ -32,7 +32,7 @@ function canvasToCompressedBlob(canvas: HTMLCanvasElement): Promise<Blob | null>
 }
 
 export default function FeedbackButton() {
-  const { cart, cartTotal, selectedChannelId, channels } = useCart();
+  const { selections: cart, draft, selectedChannelId, channels } = useDraftPledge();
 
   const [enabled, setEnabled] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -109,7 +109,7 @@ export default function FeedbackButton() {
     const cartSummary =
       cart.length === 0
         ? 'empty'
-        : `${cart.length} item${cart.length === 1 ? '' : 's'}, $${(cartTotal / 100).toFixed(2)}`;
+        : `${cart.length} selection${cart.length === 1 ? '' : 's'}, pledge $${((draft?.amountCents ?? 0) / 100).toFixed(2)}`;
     return {
       url: `${window.location.pathname}${window.location.search}`,
       donorId,
@@ -119,7 +119,7 @@ export default function FeedbackButton() {
       viewport: `${window.innerWidth}x${window.innerHeight}`,
       cartSummary,
     };
-  }, [cart, cartTotal, selectedChannelId, channels, donorId]);
+  }, [cart, draft, selectedChannelId, channels, donorId]);
 
   const handleSend = useCallback(async () => {
     if (!text.trim()) return;

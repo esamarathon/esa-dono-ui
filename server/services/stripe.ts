@@ -17,6 +17,7 @@ export interface CreateCheckoutOptions {
   amountCents: number;
   email?: string | null;
   requiresShipping?: boolean;
+  expiresAt: Date;
 }
 
 export interface CreateCheckoutResult {
@@ -34,17 +35,13 @@ export interface CreateCheckoutResult {
  * This forces the physical-item cart through Checkout even when wallet balance
  * would otherwise cover the pledge, so a shipping address is always captured.
  */
-export async function createCheckoutSession({
+export function pledgeCheckoutRequest({
   pledgeToken,
   amountCents,
   email,
+  expiresAt,
   requiresShipping = false,
-}: CreateCheckoutOptions): Promise<CreateCheckoutResult> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('STRIPE_SECRET_KEY is not configured');
-  }
-
+}: CreateCheckoutOptions): Stripe.Checkout.SessionCreateParams {
   const currency = process.env.STRIPE_CURRENCY || 'usd';
   const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
   const shippingRateId = process.env.STRIPE_SHIPPING_RATE_ID || '';
@@ -53,7 +50,7 @@ export async function createCheckoutSession({
     .map((c) => c.trim())
     .filter(Boolean);
 
-  const session = await stripe.checkout.sessions.create({
+  return {
     mode: 'payment',
     line_items: [
       {
@@ -69,16 +66,136 @@ export async function createCheckoutSession({
     metadata: { pledge_token: pledgeToken },
     customer_email: email || undefined,
     success_url: `${baseUrl}/pledge/${pledgeToken}`,
-    cancel_url: `${baseUrl}/pledge/${pledgeToken}`,
+    cancel_url: `${baseUrl}/pledge/${pledgeToken}?cancelled=1`,
+    expires_at: Math.floor(expiresAt.getTime() / 1000),
+    after_expiration: { recovery: { enabled: false } },
     ...(requiresShipping
       ? {
           shipping_address_collection: { allowed_countries: allowedCountries },
           shipping_options: shippingRateId ? [{ shipping_rate: shippingRateId }] : undefined,
         }
       : {}),
-  });
+  };
+}
 
-  return { id: session.id, url: session.url };
+/** Frozen parameters and the token key are reused verbatim after an uncertain create. */
+export async function createCheckoutSession(
+  options: CreateCheckoutOptions,
+  request = pledgeCheckoutRequest(options),
+): Promise<CheckoutSession> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return stripe.checkout.sessions.create(request, { idempotencyKey: options.pledgeToken });
+}
+
+export type CheckoutSession = Pick<Stripe.Checkout.Session, 'id' | 'status' | 'payment_status'> &
+  Partial<
+    Pick<
+      Stripe.Checkout.Session,
+      | 'amount_total'
+      | 'customer_email'
+      | 'customer_details'
+      | 'metadata'
+      | 'client_reference_id'
+      | 'total_details'
+      | 'payment_intent'
+      | 'recovered_from'
+      | 'expires_at'
+      | 'url'
+    >
+  >;
+
+export async function retrieveCheckoutSession(id: string): Promise<CheckoutSession> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return stripe.checkout.sessions.retrieve(id, { expand: ['payment_intent'] });
+}
+
+export async function expireCheckoutSession(id: string): Promise<CheckoutSession> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return stripe.checkout.sessions.expire(id);
+}
+
+/** Recover a lost id without replaying a possibly pruned idempotency key. */
+export async function findPledgeCheckoutSessions(
+  token: string,
+  requestedAt: Date,
+): Promise<CheckoutSession[]> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  const sessions: CheckoutSession[] = [];
+  for await (const session of stripe.checkout.sessions.list({
+    created: {
+      gte: Math.floor(requestedAt.getTime() / 1000) - 60,
+      lte: Math.floor(requestedAt.getTime() / 1000) + 86400,
+    },
+    limit: 100,
+  })) {
+    if (
+      session.client_reference_id === token &&
+      session.metadata?.pledge_token === token &&
+      !session.recovered_from
+    )
+      sessions.push(session);
+  }
+  return sessions;
+}
+
+export type PaymentRefundReceipt = Pick<
+  Stripe.Refund,
+  'id' | 'amount' | 'payment_intent' | 'metadata' | 'status'
+> &
+  Pick<Partial<Stripe.Refund>, 'failure_reason'>;
+
+export interface PaymentRefundRequest {
+  refundId: string;
+  donationId: string;
+  claimId: string;
+  paymentIntent: string;
+  itemCents: number;
+  shippingCents: number;
+}
+
+export async function createPaymentRefund(
+  input: PaymentRefundRequest,
+): Promise<PaymentRefundReceipt> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return stripe.refunds.create(
+    {
+      payment_intent: input.paymentIntent,
+      amount: input.itemCents + input.shippingCents,
+      metadata: {
+        payment_refund_id: input.refundId,
+        donation_id: input.donationId,
+        claim_id: input.claimId,
+      },
+    },
+    { idempotencyKey: input.refundId },
+  );
+}
+
+/** Auto-pagination is exhaustive, with no age window or silent first-page limit. */
+export async function listPaymentRefunds(paymentIntent: string): Promise<PaymentRefundReceipt[]> {
+  const stripe = getStripe();
+  if (!stripe) throw new Error('STRIPE_SECRET_KEY is not configured');
+  const refunds: PaymentRefundReceipt[] = [];
+  for await (const refund of stripe.refunds.list({ payment_intent: paymentIntent, limit: 100 }))
+    refunds.push(refund);
+  return refunds;
+}
+
+/** A transport timeout, rate limit or 5xx is NOT evidence that no refund exists. */
+export function isDefiniteRefundRejection(error: unknown): boolean {
+  return (
+    error instanceof Stripe.errors.StripeInvalidRequestError &&
+    error.statusCode !== undefined &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500 &&
+    error.statusCode !== 409 &&
+    error.statusCode !== 429
+  );
 }
 
 export interface CreateAuctionCheckoutOptions {

@@ -16,6 +16,7 @@ export async function assertCanActivateEvent(db: EventDb, eventId: string): Prom
     include: { primary_channel: true },
   });
   if (!event) throw httpError(404, 'Event not found');
+  if (event.ended_at) throw httpError(409, 'Undo Event end before reactivating');
   const primary = event.primary_channel;
   if (!primary) {
     throw httpError(409, 'Choose a primary channel before activating the event');

@@ -54,8 +54,8 @@ export default function Help() {
         </p>
         <p>
           Every donation is routed to exactly one <Term>channel</Term>. An incentive is either
-          shared (available for any channel) or tied to a specific channel, and you can't mix
-          incentives from two channels in a single cart.
+          shared (available on every channel of its event) or tied to a specific channel, and you
+          can't mix incentives from two channels in a single cart.
         </p>
       </Section>
 

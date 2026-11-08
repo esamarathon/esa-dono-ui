@@ -1,8 +1,30 @@
 import type { Prisma } from '@prisma/client';
+import { isAvailableOn } from '@dono/shared';
 import prisma from '../lib/prisma.js';
 import { httpError } from '../lib/httpError.js';
 import { assertUsableSlug, availableSlugFrom } from '../lib/slugs.js';
 import { activeEventWithPrimary } from './events.js';
+import { defaultGoal } from './defaultGoal.js';
+
+/** Live staff editor projection; uses the fulfillment resolver, never private donor data. */
+export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
+  const channels = await tx.channel.findMany({
+    orderBy: { created_at: 'asc' },
+    include: { default_goals: { orderBy: { position: 'asc' }, include: { goal: true } } },
+  });
+  const goal = async (id: string | null) =>
+    id ? tx.fundGoal.findUnique({ where: { id }, select: { id: true, title: true } }) : null;
+  return Promise.all(
+    channels.map(async (channel) => ({
+      ...channelResponse(channel),
+      default_goal: await goal(await defaultGoal(tx, channel.id)),
+      fallback_goal: await goal(await defaultGoal(tx, channel.id, true)),
+      has_eligible_default: channel.default_goals.some(
+        ({ goal }) => goal.is_active && !goal.is_complete && isAvailableOn(goal, channel),
+      ),
+    })),
+  );
+}
 
 /**
  * Channel create / update / deactivate, shared by the admin and moderator routes.
@@ -10,10 +32,19 @@ import { activeEventWithPrimary } from './events.js';
  */
 
 export interface ChannelInput {
+  /** Create only: a fixed id, e.g. so a reseeded demo keeps its Channel ids. */
+  id?: unknown;
   name?: unknown;
   slug?: unknown;
   event_id?: unknown;
   is_active?: unknown;
+  /** Update only: ordered goal ids (own or shared), including ineligible entries. */
+  default_goals?: unknown;
+}
+
+/** Public identity projection; never traverses donors or allocation actors. */
+export function channelResponse<T extends { default_goals: { goal_id: string }[] }>(channel: T) {
+  return { ...channel, default_goals: channel.default_goals.map((entry) => entry.goal_id) };
 }
 
 /** Map a Prisma unique-constraint error to a 409 (the slug check can race with another writer). */
@@ -27,6 +58,18 @@ function uniqueConflict(e: unknown): Error | null {
   return null;
 }
 
+/** Lowercase only, so one id cannot be stored in two spellings. */
+function optionalUuid(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  ) {
+    throw httpError(400, 'id must be a lowercase UUID');
+  }
+  return value;
+}
+
 /** `is_active` must be a boolean when given: a truthy string must not bypass the primary-channel rule. */
 function optionalBoolean(value: unknown, field: string): boolean | undefined {
   if (value === undefined) return undefined;
@@ -35,12 +78,14 @@ function optionalBoolean(value: unknown, field: string): boolean | undefined {
 }
 
 /**
- * The Event a new Channel joins: `event_id` if given, else the only Event that
- * exists. There is always at least one (the migration creates a default Event),
- * so this fallback keeps channel creation working until the Event admin UI
- * (#115) lets admins pick one.
+ * The Event a new Channel or shared incentive joins: `event_id` if given, else
+ * the only Event that exists. There is always at least one (the migration
+ * creates a default Event), so this fallback keeps single-Event callers working.
  */
-async function resolveEventId(tx: Prisma.TransactionClient, eventId: unknown): Promise<string> {
+export async function resolveEventId(
+  tx: Prisma.TransactionClient,
+  eventId: unknown,
+): Promise<string> {
   if (eventId !== undefined && eventId !== null && eventId !== '') {
     if (typeof eventId !== 'string') throw httpError(400, 'event_id must be a string');
     const event = await tx.event.findUnique({ where: { id: eventId }, select: { id: true } });
@@ -58,15 +103,19 @@ export async function createChannel(input: ChannelInput) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) throw httpError(400, 'name is required');
   const isActive = optionalBoolean(input.is_active, 'is_active');
+  const id = optionalUuid(input.id);
   try {
     return await prisma.$transaction(async (tx) => {
+      if (id && (await tx.channel.findUnique({ where: { id }, select: { id: true } }))) {
+        throw httpError(409, 'Channel id already exists');
+      }
       const event_id = await resolveEventId(tx, input.event_id);
       const slug =
         input.slug === undefined || input.slug === ''
           ? await availableSlugFrom(tx, name, 'channel')
           : await assertUsableSlug(tx, input.slug);
       return tx.channel.create({
-        data: { name, slug, event_id, is_active: isActive ?? true },
+        data: { id, name, slug, event_id, is_active: isActive ?? true },
       });
     });
   } catch (e) {
@@ -113,10 +162,54 @@ export async function updateChannel(id: string, input: ChannelInput) {
           );
         }
       }
-      if (movingEvent) data.event_id = await resolveEventId(tx, eventId);
+      if (movingEvent) {
+        // ADR-0012: an incentive never moves to another Event, so neither may its Channel.
+        const where = { channel_id: id };
+        const owned =
+          (await tx.reward.count({ where })) +
+          (await tx.poll.count({ where })) +
+          (await tx.fundGoal.count({ where })) +
+          (await tx.auction.count({ where }));
+        if (owned)
+          throw httpError(
+            409,
+            'This channel has incentives. Incentives cannot move to another event, so the channel cannot either.',
+          );
+        data.event_id = await resolveEventId(tx, eventId);
+      }
       if (isActive !== undefined) data.is_active = isActive;
 
-      return tx.channel.update({ where: { id }, data });
+      if (input.default_goals !== undefined) {
+        const ids = input.default_goals;
+        if (
+          !Array.isArray(ids) ||
+          ids.some((goalId) => typeof goalId !== 'string') ||
+          new Set(ids).size !== ids.length
+        ) {
+          throw httpError(400, 'default_goals must be an ordered list of unique goal ids');
+        }
+        const scope = { id, event_id: (data.event_id as string | undefined) ?? current.event_id };
+        for (const goalId of ids) {
+          const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
+          if (!goal || !isAvailableOn(goal, scope)) {
+            throw httpError(
+              400,
+              'Default goals must belong to this Channel or be shared in its event',
+            );
+          }
+        }
+        await tx.channelDefaultGoal.deleteMany({ where: { channel_id: id } });
+        await tx.channelDefaultGoal.createMany({
+          data: ids.map((goalId, position) => ({ channel_id: id, goal_id: goalId, position })),
+        });
+      }
+      return channelResponse(
+        await tx.channel.update({
+          where: { id },
+          data,
+          include: { default_goals: { orderBy: { position: 'asc' } } },
+        }),
+      );
     });
   } catch (e) {
     throw uniqueConflict(e) ?? e;

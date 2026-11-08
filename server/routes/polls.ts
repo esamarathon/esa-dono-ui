@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma.js';
 import { donorAuth } from '../middleware/donorAuth.js';
 import { spendLimit } from '../middleware/rateLimit.js';
-import { votePollTx, proposeCustomEntryTx } from '../services/spend.js';
+import { assertWalletSpendScopeTx, votePollTx, proposeCustomEntryTx } from '../services/spend.js';
 
 const router = Router();
 
@@ -20,6 +20,7 @@ router.post('/:id/custom-entry', spendLimit, donorAuth, async (req: Request, res
   try {
     const { label, amount_cents } = req.body;
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await assertWalletSpendScopeTx(tx, req.body.channel_id, 'poll', req.params.id!);
       return proposeCustomEntryTx(tx, req.donor!.id, req.params.id!, label, Number(amount_cents));
     });
     res.json({
@@ -37,6 +38,7 @@ router.post('/:id/vote', spendLimit, donorAuth, async (req: Request, res: Respon
   try {
     const { poll_option_id, amount_cents } = req.body;
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await assertWalletSpendScopeTx(tx, req.body.channel_id, 'poll', req.params.id!);
       await votePollTx(tx, req.donor!.id, req.params.id!, poll_option_id, Number(amount_cents));
     });
     res.json({ success: true });
