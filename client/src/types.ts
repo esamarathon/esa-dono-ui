@@ -629,7 +629,9 @@ export type WebhookMessageType =
 export interface WebhookEndpoint {
   id: string;
   url: string;
-  secret: string;
+  // #127: responses never carry the signing secret or the AMQP password.
+  has_secret: boolean;
+  has_amqp_url: boolean;
   is_active: boolean;
   event_types: string[];
   verify_ssl: boolean;
@@ -638,9 +640,15 @@ export interface WebhookEndpoint {
   updated_at: string;
   destination_type: 'HTTP' | 'RABBITMQ';
   payload_format: 'NATIVE' | 'TILTIFY';
+  // Password masked as `****`; null when absent or invalid.
   amqp_url: string | null;
   amqp_exchange: string;
   amqp_routing_key: string | null;
+}
+
+/** Create and rotate-secret disclose the secret once, on top of the safe shape. */
+export interface WebhookDestinationWithSecret extends WebhookEndpoint {
+  secret: string;
 }
 
 export interface WebhookDelivery {

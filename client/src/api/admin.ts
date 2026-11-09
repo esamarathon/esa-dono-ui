@@ -8,6 +8,7 @@ import type {
   RefundResult,
   ReversalPreview,
   WebhookDelivery,
+  WebhookDestinationWithSecret,
   WebhookEndpoint,
 } from '../types';
 
@@ -191,7 +192,7 @@ export async function createDestination(payload: {
   amqp_url?: string;
   amqp_exchange?: string;
   amqp_routing_key?: string;
-}): Promise<WebhookEndpoint> {
+}): Promise<WebhookDestinationWithSecret> {
   const { data } = await adminClient.post('/destinations', payload);
   return data;
 }
@@ -215,7 +216,7 @@ export async function updateDestination(
   return data;
 }
 
-export async function rotateDestinationSecret(id: string): Promise<WebhookEndpoint> {
+export async function rotateDestinationSecret(id: string): Promise<WebhookDestinationWithSecret> {
   const { data } = await adminClient.post(`/destinations/${id}/rotate-secret`);
   return data;
 }

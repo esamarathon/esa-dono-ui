@@ -70,6 +70,10 @@ import { TOKEN_TTL_MS } from '../config.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
 import { wakeDispatcher } from '../services/webhooks/dispatcher.js';
 import {
+  toDestinationResponse,
+  resolveAmqpUrlUpdate,
+} from '../services/webhooks/destinationResponse.js';
+import {
   isWebhookMessageType,
   PAYLOAD_FORMATS,
   TILTIFY_DEFAULT_EXCHANGE,
@@ -1248,12 +1252,8 @@ router.get('/destinations', async (req, res) => {
   const endpoints = await prisma.webhookDestination.findMany({
     orderBy: { created_at: 'desc' },
   });
-  res.json(
-    endpoints.map((ep) => ({
-      ...ep,
-      event_types: JSON.parse(ep.event_types),
-    })),
-  );
+  // #127: never return secret/amqp_url credentials in clear.
+  res.json(endpoints.map(toDestinationResponse));
 });
 
 /**
@@ -1338,9 +1338,10 @@ router.post('/destinations', async (req, res) => {
       payload_format: format,
     },
   });
+  // #127: the secret is disclosed once, on creation only.
   res.status(201).json({
-    ...destination,
-    event_types: JSON.parse(destination.event_types),
+    ...toDestinationResponse(destination),
+    secret: destination.secret,
   });
 });
 
@@ -1360,7 +1361,12 @@ router.put('/destinations/:id', async (req, res) => {
 
   const current = await prisma.webhookDestination.findUnique({
     where: { id: req.params.id },
-    select: { destination_type: true, payload_format: true, amqp_routing_key: true },
+    select: {
+      destination_type: true,
+      payload_format: true,
+      amqp_routing_key: true,
+      amqp_url: true,
+    },
   });
   if (!current) return res.status(404).json({ error: 'Destination not found' });
   // Validate the Destination as it will be after the update, not the request alone.
@@ -1387,7 +1393,10 @@ router.put('/destinations/:id', async (req, res) => {
     }
   } else if (destType === 'RABBITMQ') {
     if (amqp_url !== undefined) {
-      if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+      if (
+        typeof amqp_url !== 'string' ||
+        (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://'))
+      ) {
         return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
       }
     }
@@ -1407,6 +1416,16 @@ router.put('/destinations/:id', async (req, res) => {
     }
   }
 
+  // #127: a masked edit (password `****`) keeps the stored password.
+  let updatedAmqpUrl: string | undefined;
+  if (amqp_url !== undefined) {
+    try {
+      updatedAmqpUrl = resolveAmqpUrlUpdate(amqp_url, current.amqp_url);
+    } catch {
+      return res.status(400).json({ error: 'amqp_url must be a valid URL' });
+    }
+  }
+
   const endpoint = await prisma.webhookDestination.update({
     where: { id: req.params.id },
     data: {
@@ -1416,7 +1435,7 @@ router.put('/destinations/:id', async (req, res) => {
       ...(is_active !== undefined ? { is_active } : {}),
       ...(description !== undefined ? { description } : {}),
       ...(destination_type !== undefined ? { destination_type: destType } : {}),
-      ...(amqp_url !== undefined ? { amqp_url } : {}),
+      ...(updatedAmqpUrl !== undefined ? { amqp_url: updatedAmqpUrl } : {}),
       ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
       ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
       ...(payload_format !== undefined ? { payload_format } : {}),
@@ -1424,10 +1443,7 @@ router.put('/destinations/:id', async (req, res) => {
   });
   // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.
   if (endpoint.is_active) wakeDispatcher(endpoint.id);
-  res.json({
-    ...endpoint,
-    event_types: JSON.parse(endpoint.event_types),
-  });
+  res.json(toDestinationResponse(endpoint));
 });
 
 router.post('/destinations/:id/rotate-secret', async (req, res) => {
@@ -1436,9 +1452,10 @@ router.post('/destinations/:id/rotate-secret', async (req, res) => {
     where: { id: req.params.id },
     data: { secret: newSecret },
   });
+  // #127: the rotated secret is disclosed once, here only.
   res.json({
-    ...destination,
-    event_types: JSON.parse(destination.event_types),
+    ...toDestinationResponse(destination),
+    secret: destination.secret,
   });
 });
 
