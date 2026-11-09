@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
   getDonor: vi.fn(),
+  getSession: vi.fn(),
   requestToken: vi.fn(),
   getOAuthProviders: vi.fn(),
   getFeatureFlags: vi.fn(),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/api/donor', () => ({
   getDonor: mocks.getDonor,
+  getSession: mocks.getSession,
   requestToken: mocks.requestToken,
   getPoolCredits: vi.fn().mockResolvedValue({ wallet_credit_cents: 0, events: [] }),
   getPoolCreditEvent: vi.fn(),
@@ -56,10 +58,15 @@ describe('MyWallet', () => {
     vi.clearAllMocks();
     mocks.getOAuthProviders.mockResolvedValue({ providers: [] });
     mocks.getFeatureFlags.mockResolvedValue({ auctions: false });
+    // Signed-in by default; individual tests override for the logged-out path.
+    mocks.getSession.mockResolvedValue({
+      authenticated: true,
+      donor: { id: 'd1', email: 'alice@example.com', role: 'USER', balance_remaining: 1000 },
+    });
   });
 
-  it('shows the login form when there is no session', async () => {
-    mocks.getDonor.mockRejectedValue(new Error('no session'));
+  it('shows the login form without an error when the session probe reports no session', async () => {
+    mocks.getSession.mockResolvedValue({ authenticated: false });
 
     render(
       <MemoryRouter>
@@ -68,6 +75,10 @@ describe('MyWallet', () => {
     );
 
     expect(await screen.findByText('access your wallet')).toBeInTheDocument();
+    // "No session" is the expected logged-out answer, not an error (#135).
+    expect(screen.queryByText(/No active wallet session/)).not.toBeInTheDocument();
+    expect(mocks.getDonor).not.toHaveBeenCalled();
+    expect(mocks.clearSessionMarker).toHaveBeenCalled();
   });
 
   it('shows the wallet when a donor is logged in', async () => {

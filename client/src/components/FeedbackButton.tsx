@@ -3,7 +3,7 @@ import Modal from './Modal';
 import { useDraftPledge } from '../context/DraftPledgeContext';
 import { getFeatureFlags } from '../api/featureFlags';
 import { sendFeedback } from '../api/feedback';
-import { getDonor } from '../api/donor';
+import { getSession } from '../api/donor';
 import { isSessionActive } from '../utils/authToken';
 import { apiErrorMessage } from '../types';
 
@@ -59,8 +59,8 @@ export default function FeedbackButton() {
       setDonorId(null);
       return;
     }
-    getDonor()
-      .then((donor) => setDonorId(donor.id))
+    getSession()
+      .then((session) => setDonorId(session.authenticated ? session.donor.id : null))
       .catch(() => setDonorId(null));
   }, []);
 

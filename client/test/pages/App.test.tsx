@@ -6,7 +6,11 @@ vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
-vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn(), requestToken: vi.fn() }));
+vi.mock('../../src/api/donor', () => ({
+  getDonor: vi.fn(),
+  getSession: vi.fn().mockResolvedValue({ authenticated: false }),
+  requestToken: vi.fn(),
+}));
 vi.mock('../../src/api/pledge', () => ({ createPledge: vi.fn(), getPledge: vi.fn() }));
 vi.mock('../../src/lib/tracing', () => ({
   track: vi.fn(),

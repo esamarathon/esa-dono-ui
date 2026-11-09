@@ -14,7 +14,7 @@ import { getOAuthProviders } from '../../src/api/auth';
 import { getCampaign } from '../../src/api/campaign';
 import { getChannels } from '../../src/api/channels';
 import { getPublicEvents, getPublicEvent } from '../../src/api/events';
-import { getDonor, requestToken } from '../../src/api/donor';
+import { getDonor, getSession, requestToken } from '../../src/api/donor';
 import { getGoals } from '../../src/api/goals';
 import { getPolls } from '../../src/api/polls';
 import { getRewards } from '../../src/api/rewards';
@@ -64,6 +64,12 @@ describe('public API helpers', () => {
     mocks.get.mockResolvedValue({ data: { email: 'a@b.c' } });
     await expect(getDonor()).resolves.toEqual({ email: 'a@b.c' });
     expect(mocks.get).toHaveBeenCalledWith('/donor');
+  });
+
+  it('getSession returns the session probe payload', async () => {
+    mocks.get.mockResolvedValue({ data: { authenticated: false } });
+    await expect(getSession()).resolves.toEqual({ authenticated: false });
+    expect(mocks.get).toHaveBeenCalledWith('/auth/session');
   });
 
   it('requestToken posts the email', async () => {
