@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { MIN_SPEND_CENTS, minNextBidCents } from '@dono/shared';
 import { AUCTION_OFFER_TTL_MS } from '../config.js';
+import { countedDonation } from '../lib/donationTotals.js';
 import { createAuctionCheckoutSession } from './stripe.js';
 import { sendAuctionOfferEmail } from './email.js';
 
@@ -17,7 +18,8 @@ function httpError(message: string, status: number) {
  *
  * Eligibility (deliberately strict, since bids carry no upfront cost):
  * the donor must have a verified email AND at least one completed
- * donation on record, must not be frozen, and cannot bid against
+ * donation on record (the money-total rule in lib/donationTotals.ts:
+ * COMPLETED or REFUNDED), must not be frozen, and cannot bid against
  * themselves while already the current high bidder.
  */
 export async function placeBidTx(tx: Tx, donorId: string, auctionId: string, cents: number) {
@@ -36,7 +38,13 @@ export async function placeBidTx(tx: Tx, donorId: string, auctionId: string, cen
   if (!donor.email_verified) {
     throw httpError('A verified email is required to bid on auctions', 403);
   }
-  const donationCount = await tx.donation.count({ where: { donor_id: donorId } });
+  // #176: count only donations the charity kept (lib/donationTotals.ts:
+  // COMPLETED + REFUNDED). PENDING is unpaid and CHARGEBACK took the money
+  // back. Wallet-only donations count: they are COMPLETED donations in the
+  // accounting model, funded by Wallet credit the donor previously paid for.
+  const donationCount = await tx.donation.count({
+    where: { donor_id: donorId, ...countedDonation },
+  });
   if (donationCount === 0) {
     throw httpError('A prior completed donation is required to bid on auctions', 403);
   }
