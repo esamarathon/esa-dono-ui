@@ -21,7 +21,9 @@ import AdminDestinations from '../../src/pages/admin/AdminDestinations';
 const endpoint = {
   id: 'ep-1',
   url: 'https://example.com/webhook',
-  secret: 's3cret',
+  // #127: the API never returns the secret or the AMQP password.
+  has_secret: true,
+  has_amqp_url: false,
   is_active: true,
   event_types: ['donation.created'],
   verify_ssl: true,
@@ -67,6 +69,8 @@ describe('AdminDestinations', () => {
 
     expect(await screen.findByText('webhooks')).toBeInTheDocument();
     expect(await screen.findByText('donation.created')).toBeInTheDocument();
+    // Masked shape: the configured secret is only reported, never displayed.
+    expect(await screen.findByText('secret set')).toBeInTheDocument();
   });
 
   it('shows the empty state when no destinations exist', async () => {
@@ -83,7 +87,7 @@ describe('AdminDestinations', () => {
 
   it('creates an HTTP destination', async () => {
     mocks.getDestinations.mockResolvedValue([]);
-    mocks.createDestination.mockResolvedValue({ id: 'ep-2' });
+    mocks.createDestination.mockResolvedValue({ id: 'ep-2', secret: 'generated-secret' });
 
     render(
       <MemoryRouter>
@@ -105,6 +109,9 @@ describe('AdminDestinations', () => {
         expect.objectContaining({ url: 'https://example.com/hook' }),
       ),
     );
+    // The new secret is disclosed once, for copying.
+    expect(await screen.findByText('copy destination secret')).toBeInTheDocument();
+    expect(screen.getByLabelText('Destination secret')).toHaveValue('generated-secret');
   });
 
   it('toggles a destination active state', async () => {
@@ -151,6 +158,9 @@ describe('AdminDestinations', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
     expect(screen.getByText('edit destination')).toBeInTheDocument();
+    // #127: the secret is not editable on update, only reportable and rotatable.
+    expect(screen.getByText('Secret set. Use rotate to replace it.')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('(auto-generated if blank)')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
 
     await waitFor(() =>
@@ -263,6 +273,9 @@ describe('AdminDestinations', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'rotate' }));
 
     await waitFor(() => expect(mocks.rotateDestinationSecret).toHaveBeenCalledWith('ep-1'));
+    // The rotated secret is disclosed once, for copying.
+    expect(await screen.findByText('copy destination secret')).toBeInTheDocument();
+    expect(screen.getByLabelText('Destination secret')).toHaveValue('new_secret');
     vi.unstubAllGlobals();
   });
 

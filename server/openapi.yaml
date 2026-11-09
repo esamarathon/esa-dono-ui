@@ -3100,11 +3100,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '201':
-          description: Endpoint created (secret included on creation only)
+          description: Destination created (copy the secret now; only create and rotate disclose it)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '400':
           description: Validation error
 
@@ -3161,7 +3161,9 @@ paths:
                 verify_ssl: { type: boolean }
                 is_active: { type: boolean }
                 description: { type: string }
-                amqp_url: { type: string }
+                amqp_url:
+                  type: string
+                  description: 'Omit to keep the stored URL. A password of **** preserves the stored password (or no password) while applying other URL changes.'
                 amqp_exchange: { type: string }
                 amqp_routing_key:
                   { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
@@ -3172,7 +3174,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '200':
-          description: Endpoint updated
+          description: Destination updated (the signing secret is unchanged and never returned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDestination'
         '400':
           description: Validation error
         '404':
@@ -3190,11 +3196,11 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: New secret returned
+          description: New secret returned once; copy it before closing the dialog
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '404':
           description: Endpoint not found
 
@@ -5728,11 +5734,12 @@ components:
       properties:
         id: { type: string }
         url: { type: string }
-        secret:
-          {
-            type: string,
-            description: 'Returned in full by the admin API (create, list, update); see #127. Use rotate-secret to replace it.',
-          }
+        has_secret:
+          type: boolean
+          description: 'Whether a signing secret is set. The secret itself is omitted except on create and rotate-secret (#127).'
+        has_amqp_url:
+          type: boolean
+          description: 'Whether an AMQP URL is configured.'
         is_active: { type: boolean }
         event_types:
           type: array
@@ -5760,7 +5767,7 @@ components:
           {
             type: string,
             nullable: true,
-            description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
+            description: 'amqp:// or amqps:// URL with the password masked as **** (#127). User, host, port, vhost and query are preserved. Null when absent or invalid.',
           }
         amqp_exchange:
           {
@@ -5780,6 +5787,15 @@ components:
           description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    WebhookDestinationWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/WebhookDestination'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: 'Disclosed only on create and rotate-secret. Copy it then; list and update never return it.'
     WebhookDelivery:
       type: object
       properties:

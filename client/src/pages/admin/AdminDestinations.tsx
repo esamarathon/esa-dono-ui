@@ -63,6 +63,8 @@ export default function AdminWebhooks() {
   const [modal, setModal] = useState<WebhookEndpoint | 'create' | null>(null);
   const [form, setForm] = useState<WebhookForm>(EMPTY_FORM);
   const [secretVisible, setSecretVisible] = useState(false);
+  // #127: a new secret is disclosed once (create/rotate) for copying.
+  const [disclosedSecret, setDisclosedSecret] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
@@ -96,7 +98,8 @@ export default function AdminWebhooks() {
       destination_type: ep.destination_type,
       payload_format: ep.payload_format ?? 'NATIVE',
       url: ep.url,
-      secret: ep.secret,
+      // #127: the secret is never returned; edits cannot change it (use rotate).
+      secret: '',
       event_types: ep.event_types as WebhookMessageType[],
       verify_ssl: ep.verify_ssl,
       description: ep.description ?? '',
@@ -142,7 +145,7 @@ export default function AdminWebhooks() {
     setError('');
     try {
       if (modal === 'create') {
-        await createDestination({
+        const created = await createDestination({
           destination_type: form.destination_type,
           payload_format: form.payload_format,
           url: form.url || undefined,
@@ -154,6 +157,8 @@ export default function AdminWebhooks() {
           amqp_exchange: form.amqp_exchange || undefined,
           amqp_routing_key: form.amqp_routing_key || undefined,
         });
+        setDisclosedSecret(created.secret);
+        setForm(EMPTY_FORM);
       } else if (modal) {
         await updateDestination(modal.id, {
           destination_type: form.destination_type,
@@ -177,7 +182,8 @@ export default function AdminWebhooks() {
   const handleRotate = async (id: string) => {
     if (!confirm('Rotate the secret? The old secret will stop working immediately.')) return;
     try {
-      await rotateDestinationSecret(id);
+      const rotated = await rotateDestinationSecret(id);
+      setDisclosedSecret(rotated.secret);
       await reload();
     } catch (e) {
       alert(apiErrorMessage(e, 'Rotate failed'));
@@ -304,6 +310,14 @@ export default function AdminWebhooks() {
                         </span>
                       )}
                     </div>
+                    <p className="font-mono text-xs text-off-white/55 break-all">
+                      {ep.destination_type === 'RABBITMQ'
+                        ? (ep.amqp_url ?? 'no AMQP URL configured')
+                        : ep.url}
+                    </p>
+                    <p className="font-data text-xs text-off-white/55">
+                      {ep.has_secret ? 'secret set' : 'no secret set'}
+                    </p>
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
@@ -473,6 +487,24 @@ export default function AdminWebhooks() {
         </table>
       </div>
 
+      {disclosedSecret && (
+        <Modal title="copy destination secret" onClose={() => setDisclosedSecret(null)}>
+          <p className="font-data text-sm mb-3">
+            Copy this secret now. It will not be shown again after you close this dialog.
+          </p>
+          <input
+            aria-label="Destination secret"
+            className="w-full px-3 py-2 text-sm font-mono mb-3"
+            readOnly
+            value={disclosedSecret}
+            onFocus={(e) => e.target.select()}
+          />
+          <button onClick={() => setDisclosedSecret(null)} className="btrl-button">
+            done
+          </button>
+        </Modal>
+      )}
+
       {modal && (
         <Modal
           title={modal === 'create' ? 'new destination' : 'edit destination'}
@@ -542,7 +574,8 @@ export default function AdminWebhooks() {
                   onChange={(e) => setForm((f) => ({ ...f, amqp_url: e.target.value }))}
                 />
                 <p className="text-xs text-off-white/40 mt-1">
-                  Credentials embedded in URL, stored in DB.
+                  Credentials embedded in URL, stored in DB. The stored password is shown as ****:
+                  keep it to preserve the stored password, or replace it with a new one.
                 </p>
               </div>
               <div className="mb-3">
@@ -589,35 +622,36 @@ export default function AdminWebhooks() {
                   Disable only if using a self-signed certificate in development.
                 </p>
               </div>
-              <div className="mb-3">
-                <label className="block font-data font-bold text-sm mb-2 text-off-white">
-                  Secret
-                  {modal !== 'create' && (
-                    <span className="font-normal text-off-white/40 ml-2">
-                      (leave blank to keep current)
-                    </span>
-                  )}
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type={secretVisible ? 'text' : 'password'}
-                    className="flex-1 px-3 py-2 text-sm font-mono"
-                    placeholder={
-                      modal === 'create' ? '(auto-generated if blank)' : '(current secret)'
-                    }
-                    value={form.secret}
-                    onChange={(e) => setForm((f) => ({ ...f, secret: e.target.value }))}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setSecretVisible((v) => !v)}
-                    className="btrl-button-outline text-xs"
-                  >
-                    {secretVisible ? 'hide' : 'show'}
-                  </button>
+              {modal === 'create' && (
+                <div className="mb-3">
+                  <label className="block font-data font-bold text-sm mb-2 text-off-white">
+                    Secret
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type={secretVisible ? 'text' : 'password'}
+                      className="flex-1 px-3 py-2 text-sm font-mono"
+                      placeholder="(auto-generated if blank)"
+                      value={form.secret}
+                      onChange={(e) => setForm((f) => ({ ...f, secret: e.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSecretVisible((v) => !v)}
+                      className="btrl-button-outline text-xs"
+                    >
+                      {secretVisible ? 'hide' : 'show'}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
+          )}
+
+          {modal !== 'create' && (
+            <p className="font-data text-sm text-off-white/55 mb-3">
+              {modal.has_secret ? 'Secret set. Use rotate to replace it.' : 'No secret set.'}
+            </p>
           )}
 
           <div className="mb-3">
