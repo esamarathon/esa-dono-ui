@@ -173,7 +173,7 @@ This tests Kollekt and Overlay's ability to fetch campaign/incentive data.
 
 1. **Create a channel via Admin UI:**
    - On `main`: go to http://localhost:8080/admin/channels (the model is
-     called `Channel`/`channel_id` on `main`; CLAUDE.md's "Event"/`event_id`
+     called `Channel`/`channel_id` on `main`; AGENTS.md's "Event"/`event_id`
      terminology and `/api/events` route describe the `dev` branch's renamed
      model, not what's on `main` today — see ADR-0008 for the rename history).
    - On `dev`: go to http://localhost:8080/admin/events instead.

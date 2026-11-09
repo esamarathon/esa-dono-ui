@@ -41,35 +41,22 @@ Note: run tests via the npm scripts above (per-workspace vitest configs). Runnin
 ## Language / TypeScript
 
 The codebase is **TypeScript (strict)** across both workspaces (see
-`docs/adr/0001-typescript-for-frontend-and-backend.md`). Key points:
+`docs/adr/0001-typescript-for-frontend-and-backend.md`). The rules that change how you write a
+line of code:
 
-- **Server** runs `.ts` directly via **`tsx`** (`tsx watch index.ts` in dev, `tsx index.ts`
-  in prod) — no build/emit step. `npm run typecheck --workspace server` runs `tsc --noEmit`.
+- **Server** runs `.ts` directly via **`tsx`** — no build step; `npm run typecheck` is `tsc --noEmit`.
   NodeNext ESM: relative imports **keep the `.js` extension** even though sources are `.ts`.
 - **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are
-  **extensionless**. `tsc --noEmit` for typecheck.
-- **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both
-  sides: branded `Cents` money helpers, Stripe webhook payload types, and `claim_data` helpers.
-  It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
-- `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
-- Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too
-  (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, and one `eslint.config.ts` per
-  workspace — loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is
-  `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts`
-  PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
+  **extensionless**.
+- **`packages/shared`** (`@dono/shared`) holds cross-cutting types consumed by both sides.
+
+Tooling detail (config files, `allowJs`, the single remaining `.js` file): `docs/architecture.md`
+§ Language / TypeScript.
 
 ## Docker
 
-Full deployment and operations guide: `docs/deployment.md`. Image and publish details:
-`docs/architecture.md` § Container images.
-
-```bash
-# Local full stack (needs ADMIN_API_KEY at minimum); frontend on http://localhost:8080
-ADMIN_API_KEY=change-me docker compose up --build
-
-# After building, prove the stack functions (always tears down)
-ADMIN_API_KEY=change-me FRONTEND_PORT=18080 ./scripts/smoke-test.sh
-```
+Full guide (local stack, smoke test, publishing): `docs/deployment.md`. Image and publish
+details: `docs/architecture.md` § Container images.
 
 Behind an external proxy (Caddy, a TLS terminator, a load balancer), set **`TRUST_PROXY=2`**
 (one more per extra proxy), or every visitor shares one rate-limit bucket (#140).

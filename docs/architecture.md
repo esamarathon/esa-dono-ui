@@ -4,6 +4,14 @@ How the server, client and data model fit together. `AGENTS.md` keeps the invari
 
 npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.ts`).
 
+## Language / TypeScript
+
+- **Server** runs `.ts` directly via **`tsx`** (`tsx watch index.ts` in dev, `tsx index.ts` in prod) — no build/emit step. `npm run typecheck --workspace server` runs `tsc --noEmit`. NodeNext ESM: relative imports **keep the `.js` extension** even though sources are `.ts`.
+- **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are **extensionless**.
+- **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both sides: branded `Cents` money helpers, Stripe webhook payload types, and `claim_data` helpers. It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
+- `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
+- Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, and one `eslint.config.ts` per workspace — loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts` PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
+
 ## Server
 
 - `server/index.ts` — Express entry point. The Stripe webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
