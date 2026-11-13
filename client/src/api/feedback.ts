@@ -1,25 +1,33 @@
 import client from './client';
+import type { FeedbackMetadata } from '@dono/shared';
 
-export interface FeedbackMetadata {
-  url?: string;
-  donorId?: string | null;
-  channelId?: string | null;
-  channelName?: string | null;
-  userAgent?: string;
-  viewport?: string;
-  cartSummary?: string;
-}
+export type { FeedbackMetadata };
 
-export async function sendFeedback(params: {
+export interface SendFeedbackParams {
   text: string;
   metadata: FeedbackMetadata;
+  /** Decimal string of the page scroll position at capture time. */
+  scrollY?: number;
   screenshot?: Blob | null;
-}): Promise<{ success: boolean }> {
+  /** DOM snapshot of the page with its live form values. */
+  snapshot?: Blob | null;
+  /** Bounded client error record (client/src/lib/feedback/diagnostics.ts). */
+  diagnostics?: string | null;
+}
+
+export async function sendFeedback(params: SendFeedbackParams): Promise<{ success: boolean }> {
   const form = new FormData();
   form.append('text', params.text);
   form.append('metadata', JSON.stringify(params.metadata));
+  if (params.scrollY !== undefined) form.append('scrollY', String(Math.round(params.scrollY)));
   if (params.screenshot) {
     form.append('screenshot', params.screenshot, 'screenshot.jpg');
+  }
+  if (params.snapshot) {
+    form.append('snapshot', params.snapshot, 'snapshot.html');
+  }
+  if (params.diagnostics) {
+    form.append('diagnostics', params.diagnostics);
   }
   const response = await client.post('/feedback', form, {
     headers: { 'Content-Type': 'multipart/form-data' },

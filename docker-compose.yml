@@ -62,10 +62,19 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
-      # Feedback widget (server/routes/feedback.ts). Leave empty to disable
-      # (503); the `feedback` feature flag must also be enabled.
+      # Feedback queue (server/routes/feedback.ts). Reports persist to the
+      # database and FEEDBACK_DIR first; Discord and email are best-effort
+      # notifications on top. The `feedback` feature flag must also be enabled
+      # (admin/staff UI → feature flags).
       - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}
       - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL:-}
+      # Report files (screenshot + DOM snapshot) live under /data so they
+      # survive a container rebuild. Set FEEDBACK_RECIPIENTS (comma-separated)
+      # to email new reports to staff through the SMTP_* relay above; unset =
+      # email skipped (the queue page and Discord still work).
+      - FEEDBACK_DIR=/data/feedback
+      - FEEDBACK_RECIPIENTS=${FEEDBACK_RECIPIENTS:-}
+      - INSTANCE_LABEL=${INSTANCE_LABEL:-}
     volumes:
       - dono-data:/data
     restart: unless-stopped

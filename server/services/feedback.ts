@@ -1,9 +1,14 @@
 /**
- * Feedback delivery — posts a user feedback submission (free-text + optional
- * screenshot) to a Discord channel via an incoming webhook. Thin, stateless
- * proxy: nothing is persisted server-side, and the webhook URL is never
+ * Feedback delivery — posts a user feedback submission (free-text + screenshot,
+ * with the DOM snapshot attached as a second file) to a Discord channel via an
+ * incoming webhook. One of two notification channels: the report row itself is
+ * durable (routes/feedback.ts), so this is best-effort by design.
+ *
+ * Thin and stateless: nothing is persisted here, and the webhook URL is never
  * logged.
  */
+
+import type { FeedbackMetadata } from '@dono/shared';
 
 const DISCORD_TIMEOUT_MS = 10_000;
 
@@ -16,20 +21,15 @@ function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-export interface FeedbackMetadata {
-  url?: string;
-  donorId?: string | null;
-  channelId?: string | null;
-  channelName?: string | null;
-  userAgent?: string;
-  viewport?: string;
-  cartSummary?: string;
-}
-
 export interface SendFeedbackParams {
   text: string;
   metadata: FeedbackMetadata;
   screenshot?: { buffer: Buffer; mimetype: string } | null;
+  snapshot?: { buffer: Buffer } | null;
+  /** Client errors / failed requests in the report's diagnostics. */
+  diagnosticsErrorCount?: number;
+  /** Server-side user agent (from the request header), never trusted from the form. */
+  userAgent?: string;
 }
 
 export function isFeedbackConfigured(): boolean {
@@ -38,8 +38,9 @@ export function isFeedbackConfigured(): boolean {
 
 /**
  * Posts the feedback to Discord. Throws an Error with a `status` property
- * (503 = not configured, 502 = Discord rejected/unreachable) so the route can
- * translate it directly into an HTTP response.
+ * (503 = not configured, 502 = Discord rejected/unreachable) so callers can
+ * distinguish the failure without it ever reaching the sender (the row is
+ * already durable when this runs).
  */
 export async function sendFeedbackToDiscord(params: SendFeedbackParams): Promise<void> {
   const webhookUrl = process.env.DISCORD_FEEDBACK_WEBHOOK_URL;
@@ -47,23 +48,23 @@ export async function sendFeedbackToDiscord(params: SendFeedbackParams): Promise
     throw Object.assign(new Error('Feedback is not configured'), { status: 503 });
   }
 
-  const { text, metadata, screenshot } = params;
+  const { text, metadata, screenshot, snapshot, userAgent } = params;
 
   const fields = [
     { name: 'Page', value: truncate(metadata.url || 'unknown', FIELD_VALUE_MAX), inline: false },
     {
       name: 'Donor',
-      value: truncate(metadata.donorId || 'anonymous', FIELD_VALUE_MAX),
+      value: truncate(metadata.donor_id || 'anonymous', FIELD_VALUE_MAX),
       inline: true,
     },
     {
       name: 'Channel',
-      value: truncate(metadata.channelName || metadata.channelId || 'none', FIELD_VALUE_MAX),
+      value: truncate(metadata.channel_name || metadata.channel_id || 'none', FIELD_VALUE_MAX),
       inline: true,
     },
     {
       name: 'User agent',
-      value: truncate(metadata.userAgent || 'unknown', FIELD_VALUE_MAX),
+      value: truncate(userAgent || 'unknown', FIELD_VALUE_MAX),
       inline: false,
     },
     {
@@ -73,7 +74,7 @@ export async function sendFeedbackToDiscord(params: SendFeedbackParams): Promise
     },
     {
       name: 'Cart',
-      value: truncate(metadata.cartSummary || 'empty', FIELD_VALUE_MAX),
+      value: truncate(metadata.cart_summary || 'empty', FIELD_VALUE_MAX),
       inline: false,
     },
   ];
@@ -96,8 +97,17 @@ export async function sendFeedbackToDiscord(params: SendFeedbackParams): Promise
     const extension = screenshot.mimetype === 'image/png' ? 'png' : 'jpg';
     form.append(
       'files[0]',
-      new Blob([screenshot.buffer], { type: screenshot.mimetype }),
+      new Blob([new Uint8Array(screenshot.buffer)], { type: screenshot.mimetype }),
       `screenshot.${extension}`,
+    );
+  }
+  // The DOM snapshot re-renders in a browser with the real values — the
+  // picture's correction when the PNG has a rendering artefact.
+  if (snapshot) {
+    form.append(
+      'files[1]',
+      new Blob([new Uint8Array(snapshot.buffer)], { type: 'text/html' }),
+      'snapshot.html',
     );
   }
 
