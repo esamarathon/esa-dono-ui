@@ -48,9 +48,12 @@ LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
       org.opencontainers.image.vendor="ESA"
 
 # Patch OS packages to fix CVEs in the base image (e.g. libcrypto3/OpenSSL).
-# The version floor also refreshes a cached upgrade layer (CVE-2026-77214).
+# The version floors also refresh a cached upgrade layer (CVE-2026-77214,
+# libxslt CVE-2026-125350/87636/9947 — NVD titles them "chromium-browser";
+# the flagged package is the nginx dependency libxslt, no browser is shipped).
 USER root
-RUN apk upgrade --no-cache && apk add --no-cache 'libexpat>=2.10.0-r0'
+RUN apk upgrade --no-cache \
+ && apk add --no-cache 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4'
 USER nginx
 
 COPY nginx.conf /etc/nginx/templates/default.conf.template
