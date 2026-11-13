@@ -17,6 +17,7 @@ export default function Modal({
 
   return (
     <div
+      data-feedback-overlay
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >

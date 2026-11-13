@@ -272,4 +272,79 @@ export async function uploadRewardImage(file: File): Promise<string> {
   return data.url as string;
 }
 
+// ─── Feedback queue (ported from the esa-crew-corner feedback bubble) ───
+
+export interface FeedbackSenderRef {
+  id: string;
+  email: string | null;
+}
+
+export interface FeedbackQueueItem {
+  id: string;
+  ref: string;
+  message: string;
+  page_url: string;
+  route: string;
+  viewport: string;
+  scroll_y: number;
+  status: string;
+  created_at: string;
+  sender: FeedbackSenderRef | null;
+  has_screenshot: boolean;
+  has_snapshot: boolean;
+  diagnostics_error_count: number;
+  resolution_note: string;
+  resolution_pr: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+}
+
+export interface FeedbackQueueResponse {
+  open_count: number;
+  items: FeedbackQueueItem[];
+}
+
+export interface FeedbackQueueDetail extends FeedbackQueueItem {
+  user_agent: string;
+  diagnostics: import('@dono/shared').FeedbackDiagnostics | null;
+}
+
+export type FeedbackQueueFilter = 'open' | 'done' | 'all';
+
+export async function getFeedbackQueue(
+  filter: FeedbackQueueFilter = 'open',
+): Promise<FeedbackQueueResponse> {
+  const { data } = await adminClient.get('/feedback', { params: { filter } });
+  return data;
+}
+
+export async function getFeedbackItem(id: string): Promise<FeedbackQueueDetail> {
+  const { data } = await adminClient.get(`/feedback/${id}`);
+  return data;
+}
+
+export async function markFeedbackSeen(id: string): Promise<void> {
+  await adminClient.post(`/feedback/${id}/seen`);
+}
+
+export async function updateFeedback(
+  id: string,
+  payload: { status: string; resolution_note?: string; resolution_pr?: string },
+): Promise<{ success: boolean; status: string }> {
+  const { data } = await adminClient.patch(`/feedback/${id}`, payload);
+  return data;
+}
+
+/** The report's screenshot as bytes (auth rides the header, so a plain href will not do). */
+export async function getFeedbackScreenshot(id: string): Promise<Blob> {
+  const { data } = await adminClient.get(`/feedback/${id}/screenshot`, { responseType: 'blob' });
+  return data as Blob;
+}
+
+/** The report's DOM snapshot HTML; open it in a browser to re-render the page. */
+export async function getFeedbackSnapshot(id: string): Promise<string> {
+  const { data } = await adminClient.get(`/feedback/${id}/snapshot`, { responseType: 'text' });
+  return data as string;
+}
+
 export default adminClient;

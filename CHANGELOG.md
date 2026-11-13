@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, a minor version can contain
 breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **Feedback queue** (ported from the esa-crew-corner feedback bubble): the
+  floating donor widget now captures the whole page (html2canvas-pro, with the
+  scroll-pin, closed-`<details>` and unsized-SVG fixes), a DOM snapshot with the
+  page's live form values, and a bounded diagnostics record (client errors and
+  failed fetches; passwords, file inputs and secrets in URLs are never
+  captured). Reports persist to a new `Feedback` table with their files under
+  `FEEDBACK_DIR` (prod default `/data/feedback`); Discord
+  (`DISCORD_FEEDBACK_WEBHOOK_URL`) and staff email (`FEEDBACK_RECIPIENTS` over
+  the existing `SMTP_*` relay) are best-effort notifications after the row is
+  durable. Admins get a resolver queue at `/admin/feedback` (open/answered/all
+  filters, screenshot and snapshot viewers, Handle form) plus a terminal CLI
+  (`npm run feedback --workspace server`) sharing the same resolve path.
+  Submission stays gated on the `feedback` feature flag and its IP rate limit.
+  New environment variables: `FEEDBACK_DIR`, `FEEDBACK_RECIPIENTS`,
+  `INSTANCE_LABEL` (passthrough added to `docker-compose.yml`).
+
 ## [0.3.0] — 2026-10-31
 
 Amount-first donations with independent incentive Pools (#151, PRD-0003). The same

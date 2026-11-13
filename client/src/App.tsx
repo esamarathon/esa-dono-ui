@@ -25,6 +25,7 @@ import AdminDonationDetail from './pages/admin/AdminDonationDetail';
 import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
+import AdminFeedback from './pages/admin/AdminFeedback';
 import AdminFeatureFlags from './pages/admin/AdminFeatureFlags';
 import AdminBroadcast from './pages/admin/AdminBroadcast';
 import AdminPledges from './pages/admin/AdminPledges';
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="simulate" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
+          <Route path="feedback" element={<AdminFeedback />} />
           <Route path="feature-flags" element={<AdminFeatureFlags />} />
           <Route path="broadcast" element={<AdminBroadcast />} />
           <Route path="auctions" element={<AdminAuctions />} />
