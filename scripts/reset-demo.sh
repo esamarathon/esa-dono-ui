@@ -178,5 +178,19 @@ fi
 echo "==> Seeding persistent dev accounts (moderator/admin) + key banner"
 $COMPOSE exec -T -w /app/server dono-backend sh -c '/app/node_modules/.bin/tsx prisma/seed.ts'
 
+# --- 4c. Restore the demo baseline's feedback flag -------------------------
+# The `feedback` flag migration inserts the row DISABLED (its fresh-install
+# default). The demo baseline wants the feedback bubble on so testers can
+# report; without this step the nightly reset silently turns the button off
+# again. Goes through the same admin PATCH the admin UI uses, with the key
+# the script already holds (passed by name to the API, never logged).
+echo "==> Enabling the feedback feature flag"
+if ! curl -sf -X PATCH "$SEED_BASE/api/admin/feature-flags/feedback" \
+  -H "Authorization: Bearer key_admin_$KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"is_enabled": true}' >/dev/null; then
+  echo "WARN: could not enable the feedback feature flag" >&2
+fi
+
 # --- 5. Completion marker (audit trail for scheduled runs) -----------------
 echo "==> [$(ts)] Demo reset COMPLETE"
