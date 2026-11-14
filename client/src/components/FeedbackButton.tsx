@@ -149,15 +149,12 @@ export default function FeedbackButton() {
   const [enabled, setEnabled] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [screenshotPreviewUrl, setScreenshotPreviewUrl] = useState<string | null>(null);
   const [text, setText] = useState(() => sessionStorage.getItem(DRAFT_STORAGE_KEY) || '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [donorId, setDonorId] = useState<string | null>(null);
 
-  const previewUrlRef = useRef<string | null>(null);
-  previewUrlRef.current = screenshotPreviewUrl;
   const captureRef = useRef<Promise<Capture> | null>(null);
 
   useEffect(() => {
@@ -180,13 +177,6 @@ export default function FeedbackButton() {
     sessionStorage.setItem(DRAFT_STORAGE_KEY, text);
   }, [text]);
 
-  // Revoke the object URL when it's replaced or the component unmounts.
-  useEffect(() => {
-    return () => {
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    };
-  }, []);
-
   // The modal overlay (rendered by <Modal> while open) never belongs in a
   // capture; the button is matched by id.
   const OVERLAY_SELECTOR = '[data-feedback-overlay]';
@@ -196,17 +186,13 @@ export default function FeedbackButton() {
     setError('');
     setSuccess(false);
     // Capture starts BEFORE the dialog opens, so the picture is what the
-    // sender saw — no dialog, no backdrop in it. Sending awaits this capture.
+    // sender saw — no dialog, no backdrop in it. The evidence is never shown
+    // to the sender: the dialog is text-box + submit only, while the
+    // screenshot, DOM snapshot and diagnostics travel to the resolver queue.
     captureRef.current = capturePage(OVERLAY_SELECTOR);
-    try {
-      const capture = await captureRef.current;
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-      const previewUrl = capture.screenshot ? URL.createObjectURL(capture.screenshot) : null;
-      setScreenshotPreviewUrl(previewUrl);
-    } finally {
-      setCapturing(false);
-      setModalOpen(true);
-    }
+    await captureRef.current.catch(() => null);
+    setCapturing(false);
+    setModalOpen(true);
   }, []);
 
   const buildMetadata = useCallback((): FeedbackMetadata => {
@@ -249,8 +235,6 @@ export default function FeedbackButton() {
         setModalOpen(false);
         setSuccess(false);
         setText('');
-        if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-        setScreenshotPreviewUrl(null);
         captureRef.current = null;
       }, 1500);
     } catch (e) {
@@ -263,8 +247,6 @@ export default function FeedbackButton() {
   const handleClose = useCallback(() => {
     setModalOpen(false);
     setError('');
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    setScreenshotPreviewUrl(null);
     captureRef.current = null;
   }, []);
 
@@ -287,13 +269,6 @@ export default function FeedbackButton() {
 
       {modalOpen && (
         <Modal title="Send feedback" onClose={handleClose}>
-          {screenshotPreviewUrl && (
-            <img
-              src={screenshotPreviewUrl}
-              alt="Screenshot preview"
-              className="w-full mb-3 rounded-sm"
-            />
-          )}
           <textarea
             className="w-full px-3 py-2 text-sm mb-1"
             rows={4}

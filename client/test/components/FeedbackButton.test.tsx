@@ -103,6 +103,18 @@ describe('FeedbackButton', () => {
     expect(textarea).toHaveValue('This page is broken');
   });
 
+  it('never shows the captured screenshot to the sender — text box and submit only', async () => {
+    vi.mocked(getFeatureFlags).mockResolvedValue({ feedback: true });
+    renderButton();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send feedback' }));
+    await screen.findByPlaceholderText("What's going on?");
+    // The capture happened (and is attached on send), but the sender's dialog
+    // carries no image of their screen.
+    expect(html2canvas).toHaveBeenCalled();
+    expect(document.querySelector('[data-feedback-overlay] img')).toBeNull();
+    expect(screen.queryByAltText('Screenshot preview')).toBeNull();
+  });
+
   it('sends text, metadata, the scroll position, the snapshot and the diagnostics payload', async () => {
     vi.mocked(getFeatureFlags).mockResolvedValue({ feedback: true });
     vi.mocked(sendFeedback).mockResolvedValue({ success: true });
