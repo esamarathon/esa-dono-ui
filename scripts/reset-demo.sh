@@ -192,5 +192,33 @@ if ! curl -sf -X PATCH "$SEED_BASE/api/admin/feature-flags/feedback" \
   echo "WARN: could not enable the feedback feature flag" >&2
 fi
 
+# --- 4d. Restore the agent admin donor (agents read the queue via the REST API)
+# The feedback-agent@localhost ADMIN donor is created out-of-band (by no seed),
+# so 'down -v' would silently break the agents' REST access every night. The
+# operator distributes its token to agents (and holds it in the service
+# environment as DONO_FEEDBACK_AGENT_TOKEN); this step re-upserts the donor
+# row with exactly that token. Without the variable, warn and skip rather
+# than mint a token no agent can know.
+if [ -n "$DONO_FEEDBACK_AGENT_TOKEN" ]; then
+  echo "==> Restoring the feedback agent donor (feedback-agent@localhost)"
+  if ! $COMPOSE exec -T -e DONO_FEEDBACK_AGENT_TOKEN -w /app/server dono-backend sh -c '
+    node --input-type=module -e "
+      import prisma from \"./lib/prisma.js\";
+      const token = process.env.DONO_FEEDBACK_AGENT_TOKEN;
+      await prisma.donor.upsert({
+        where: { email: \"feedback-agent@localhost\" },
+        update: { role: \"ADMIN\", email_verified: true, magic_token: token, is_frozen: false },
+        create: { email: \"feedback-agent@localhost\", role: \"ADMIN\", email_verified: true, magic_token: token },
+      });
+      console.log(\"feedback agent donor restored\");
+      await prisma.\$disconnect();
+    "
+  '; then
+    echo "WARN: could not restore the feedback agent donor" >&2
+  fi
+else
+  echo "WARN: DONO_FEEDBACK_AGENT_TOKEN unset; the feedback agent donor was NOT restored (agents' REST access stays broken)" >&2
+fi
+
 # --- 5. Completion marker (audit trail for scheduled runs) -----------------
 echo "==> [$(ts)] Demo reset COMPLETE"
