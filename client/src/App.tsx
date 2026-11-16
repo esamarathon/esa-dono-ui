@@ -67,7 +67,7 @@ export default function App() {
           <Route path="goals" element={<AdminGoals />} />
           <Route path="donations" element={<AdminDonations />} />
           <Route path="donations/:id" element={<AdminDonationDetail />} />
-          <Route path="simulate" element={<AdminSimulate />} />
+          <Route path="add-donation" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
           <Route path="feedback" element={<AdminFeedback />} />
