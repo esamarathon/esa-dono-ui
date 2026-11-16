@@ -226,13 +226,19 @@ jobs:
             echo "$dst -> $b"
           done
 
-  # Version tagging (#238 release flow): dev pushes carry the version with a
-  # -dev suffix (0.4.0-dev), the main integration merge carries the bare
-  # version (0.4.0), which matches the release-tag glob and so also triggers
-  # promote-release. One tag per version: the immutable release-tags ruleset
-  # forbids reuse, so an existing tag means "already tagged; skip". Needs
-  # build-and-push so a main tag's promote-release run always finds the
-  # :<sha> images built for this exact commit.
+  # Version tagging: dev pushes carry the version with a -dev suffix
+  # (0.4.0-dev), the main integration merge carries the bare version (0.4.0).
+  # One tag per version: the immutable release-tags ruleset forbids reuse, so
+  # an existing tag means "already tagged; skip". Needs build-and-push so the
+  # images for the tagged commit exist before anything is promoted.
+  #
+  # On main this job also promotes the images itself instead of relying on
+  # the tag-push trigger: a tag pushed with GITHUB_TOKEN does not start a
+  # new workflow run (GitHub suppresses token-created events), which silently
+  # skipped promote-release for release 0.4.0. Promotion reads the commit the
+  # tag points to and is idempotent — if :<version> already exists its digest
+  # must match :<tag-commit>, and if it is missing it is created from
+  # :<tag-commit>.
   tag-version:
     needs: build-and-push
     if: >-
@@ -241,11 +247,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Read the version from the root manifest
         id: version
         run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag the pushed commit (skip when the tag already exists)
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -264,3 +277,44 @@ jobs:
           git tag "$TAG" "$GITHUB_SHA"
           git push origin "refs/tags/$TAG"
           echo "tagged $GITHUB_SHA as $TAG"
+      - name: Ensure :<version> images match the tagged commit (main only)
+        if: github.ref_name == 'main'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Promote from the commit the tag points to — not from this run's
+          # head. That is the same commit when this run created the tag, and
+          # the release merge commit when the tag already existed (for example
+          # right after this promotion logic itself is first deployed).
+          TAG_SHA=$(git ls-remote origin "refs/tags/$VERSION^{}" | cut -f1)
+          if [ -z "$TAG_SHA" ]; then
+            echo "::error::tag $VERSION not found on origin"
+            exit 1
+          fi
+          for img in backend frontend; do
+            src="${IMAGE_PREFIX}/${img}:${TAG_SHA}"
+            dst="${IMAGE_PREFIX}/${img}:${VERSION}"
+            if ! docker buildx imagetools inspect "$src" >/dev/null 2>&1; then
+              echo "::error::$src not found. It is built by build-and-push when commit $TAG_SHA was pushed to main or dev."
+              exit 1
+            fi
+            if docker buildx imagetools inspect "$dst" >/dev/null 2>&1; then
+              a=$(docker buildx imagetools inspect "$src" --format '{{json .Manifest.Digest}}')
+              b=$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest.Digest}}')
+              if [ "$a" != "$b" ]; then
+                echo "::error::$dst digest $b differs from $src digest $a"
+                exit 1
+              fi
+              echo "$dst already matches $TAG_SHA"
+              continue
+            fi
+            docker buildx imagetools create --tag "$dst" "$src"
+            a=$(docker buildx imagetools inspect "$src" --format '{{json .Manifest.Digest}}')
+            b=$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest.Digest}}')
+            if [ "$a" != "$b" ]; then
+              echo "::error::$dst digest $b differs from $src digest $a"
+              exit 1
+            fi
+            echo "$dst -> $b"
+          done
