@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { getDonor } from '../api/donor';
+import { getSession } from '../api/donor';
 import { getFeatureFlags } from '../api/featureFlags';
 import { isSessionActive, endSession } from '../utils/authToken';
 import { useDraftPledge } from '../context/DraftPledgeContext';
 import UserMenu from './UserMenu';
-import type { DonorWallet } from '../types';
+import type { SessionDonor } from '../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
 export default function Navbar() {
-  const [donor, setDonor] = useState<DonorWallet | null>(null);
+  const [donor, setDonor] = useState<SessionDonor | null>(null);
   const [auctionsEnabled, setAuctionsEnabled] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -38,8 +38,8 @@ export default function Navbar() {
         setDonor(null);
         return;
       }
-      getDonor()
-        .then(setDonor)
+      getSession()
+        .then((session) => setDonor(session.authenticated ? session.donor : null))
         .catch(() => setDonor(null));
     };
     refresh();

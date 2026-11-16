@@ -35,6 +35,7 @@ model Donor {
   current_bid_auctions Auction[] @relation("CurrentBidder")
   held_pledges       PendingPledge[] @relation("PledgeWalletDonor")
   pool_credit_batches PoolCreditBatch[]
+  feedback_sent      Feedback[] @relation("FeedbackSender")
 }
 
 model Donation {
@@ -642,6 +643,45 @@ model WebhookDelivery {
   @@unique([destination_id, seq])
   @@index([status, updated_at])
   @@map("WebhookDelivery")
+}
+
+/// Feedback queue (ported from the esa-crew-corner feedback bubble): one click,
+/// one sentence, with a screenshot and a DOM snapshot of the page attached.
+/// The files live OUTSIDE the database under FEEDBACK_DIR; the two *_path
+/// columns are relative to it. `status` is NEW | SEEN | DONE | DECLINED
+/// ("open" = NEW + SEEN); `resolution_note` is the visible answer a report
+/// ends in — every report gets one, including "no, because". Shown to humans
+/// as FB-<first uuid segment> (feedbackRef in @dono/shared). `diagnostics` is
+/// a bounded JSON string (SQLite has no JSON column) — recent client
+/// errors/failed fetches plus server-stamped context; never form values or
+/// secrets (see the shared sanitize helpers). Anonymous reports keep
+/// sender_id null; resolver is always an ADMIN donor.
+model Feedback {
+  id              String    @id @default(uuid())
+  sender_id       String?
+  sender          Donor?    @relation("FeedbackSender", fields: [sender_id], references: [id], onDelete: SetNull)
+  message         String
+  page_url        String    @default("")
+  /// The client route the sender was on, derived from page_url, never trusted separately.
+  route           String    @default("")
+  viewport        String    @default("")
+  scroll_y        Int       @default(0)
+  user_agent      String    @default("")
+  screenshot_path String?
+  snapshot_path   String?
+  /// Bounded diagnostics JSON from @dono/shared (parseFeedbackDiagnostics).
+  diagnostics     String?
+  status          String    @default("NEW") // NEW | SEEN | DONE | DECLINED
+  resolution_note String    @default("")
+  resolution_pr   String    @default("")
+  /// Plain audit label (Donation.moderated_by precedent): the admin donor's
+  /// email, or 'admin' when the operational API key performed the write.
+  resolved_by     String?
+  resolved_at     DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([status, created_at])
+  @@index([sender_id])
 }
 
 model FeatureFlag {

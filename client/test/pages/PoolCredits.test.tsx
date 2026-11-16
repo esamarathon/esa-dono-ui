@@ -6,6 +6,7 @@ import MyWallet from '../../src/pages/MyWallet';
 import type { CreditAmounts, CreditEvent } from '@dono/shared';
 vi.mock('../../src/api/donor', () => ({
   getDonor: vi.fn(),
+  getSession: vi.fn(),
   getPoolCredits: vi.fn(),
   getPoolCreditEvent: vi.fn(),
   applyPoolCredits: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('../../src/api/pledge', () => ({
 vi.mock('../../src/lib/tracing', () => ({ track: vi.fn(), identifyDonor: vi.fn() }));
 import {
   getDonor,
+  getSession,
   getPoolCredits,
   getPoolCreditEvent,
   applyPoolCredits,
@@ -127,6 +129,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(applyPoolCredits).mockReset();
+  // MyWallet checks in via the always-200 session probe first (issue #135).
+  vi.mocked(getSession).mockResolvedValue({
+    authenticated: true,
+    donor: { id: 'd1', email: 'donor@example.com', role: 'USER', balance_remaining: 0 },
+  });
 });
 it('unconfirmed choices clear on leaving/re-entering under the same real provider', async () => {
   creditScenario({

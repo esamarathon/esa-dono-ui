@@ -4,6 +4,7 @@ import { authLimit } from '../middleware/rateLimit.js';
 import prisma from '../lib/prisma.js';
 import { requestTokenByEmail, generateToken, tokenExpiryDate } from '../services/auth.js';
 import { setSessionCookie, clearSessionCookie } from '../lib/session.js';
+import { donorAuthOptional } from '../middleware/donorAuthOptional.js';
 import {
   isOAuthProvider,
   enabledProviders,
@@ -102,6 +103,30 @@ router.post('/session', async (req: Request, res: Response) => {
 router.post('/session/logout', (_req: Request, res: Response) => {
   clearSessionCookie(res);
   res.json({ success: true });
+});
+
+/**
+ * GET /api/auth/session
+ *
+ * Read-only session probe for the SPA's anonymous-tolerant login check (#135).
+ * ALWAYS answers 200: "no session" is an expected outcome, not an error, so
+ * anonymous page views never produce a failed request in the browser console.
+ * Auth resolution reuses `donorAuthOptional` (the same cookie/Bearer token
+ * lookup as `donorAuth`); a signed-in donor gets only the small identity
+ * payload the UI already reads from GET /api/donor.
+ */
+router.get('/session', donorAuthOptional, (req: Request, res: Response) => {
+  const donor = req.donor;
+  if (!donor) return res.json({ authenticated: false });
+  res.json({
+    authenticated: true,
+    donor: {
+      id: donor.id,
+      email: donor.email,
+      role: donor.role,
+      balance_remaining: donor.balance_remaining,
+    },
+  });
 });
 
 /**

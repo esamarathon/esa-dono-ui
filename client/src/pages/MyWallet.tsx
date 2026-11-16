@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { getDonor, requestToken } from '../api/donor';
+import { getDonor, getSession, requestToken } from '../api/donor';
 import { getOAuthProviders } from '../api/auth';
 import { getFeatureFlags } from '../api/featureFlags';
 import { track, identifyDonor } from '../lib/tracing';
@@ -192,6 +192,16 @@ export default function MyWallet() {
     setLoading(true);
     setError(null);
     try {
+      // Anonymous-tolerant probe first (issue #135): "no session" is an
+      // expected 200 answer here, so a logged-out visit never logs a failed
+      // request in the browser console. The full wallet is fetched only when a
+      // session actually exists.
+      const session = await getSession();
+      if (!session.authenticated) {
+        setDonor(null);
+        clearSessionMarker();
+        return;
+      }
       const data = await getDonor();
       setDonor(data);
       setError(null);

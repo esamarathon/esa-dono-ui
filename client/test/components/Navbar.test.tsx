@@ -5,7 +5,7 @@ import Navbar from '../../src/components/Navbar';
 import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPledgeContext';
 import type { DonorWallet } from '../../src/types';
 
-vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
+vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn(), getSession: vi.fn() }));
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
 vi.mock('../../src/api/goals', () => ({ getGoals: vi.fn() }));
@@ -22,7 +22,7 @@ vi.mock('../../src/utils/authToken', () => ({
   endSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { getDonor } from '../../src/api/donor';
+import { getSession } from '../../src/api/donor';
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
 import { getGoals } from '../../src/api/goals';
@@ -94,7 +94,10 @@ describe('Navbar', () => {
 
   it('combines wallet/logout into a user dropdown for a plain USER donor, hiding moderate/admin', async () => {
     localStorage.setItem('donor_session_active', '1');
-    vi.mocked(getDonor).mockResolvedValue(donor({ role: 'USER' }));
+    vi.mocked(getSession).mockResolvedValue({
+      authenticated: true,
+      donor: donor({ role: 'USER' }),
+    });
 
     renderNavbar();
 
@@ -112,7 +115,10 @@ describe('Navbar', () => {
 
   it('shows moderate but not admin for a MODERATOR donor', async () => {
     localStorage.setItem('donor_session_active', '1');
-    vi.mocked(getDonor).mockResolvedValue(donor({ role: 'MODERATOR' }));
+    vi.mocked(getSession).mockResolvedValue({
+      authenticated: true,
+      donor: donor({ role: 'MODERATOR' }),
+    });
 
     renderNavbar();
 
@@ -125,7 +131,10 @@ describe('Navbar', () => {
 
   it('shows both moderate and admin for an ADMIN donor', async () => {
     localStorage.setItem('donor_session_active', '1');
-    vi.mocked(getDonor).mockResolvedValue(donor({ role: 'ADMIN' }));
+    vi.mocked(getSession).mockResolvedValue({
+      authenticated: true,
+      donor: donor({ role: 'ADMIN' }),
+    });
 
     renderNavbar();
 
@@ -134,6 +143,19 @@ describe('Navbar', () => {
 
     expect(await screen.findByText('moderate')).toBeDefined();
     expect(await screen.findByText('admin')).toBeDefined();
+  });
+
+  it('falls back to the logged-out nav when the session probe reports no session', async () => {
+    // Stale local session marker: the probe answers 200 {authenticated:false}
+    // (issue #135) and the navbar must show the logged-out state without
+    // surfacing any error.
+    localStorage.setItem('donor_session_active', '1');
+    vi.mocked(getSession).mockResolvedValue({ authenticated: false });
+
+    renderNavbar();
+
+    expect(await screen.findByText('login')).toBeDefined();
+    expect(screen.queryByText('logged in as')).toBeNull();
   });
 
   it('offers resume to the saved Channel and step outside donate, with no cart button', async () => {

@@ -66,9 +66,24 @@ import {
   resendCurrentOfferTx,
 } from '../services/auction.js';
 import { invalidateFlagCache } from '../services/featureFlags.js';
+import {
+  applyFeedbackUpdate,
+  countOpenFeedback,
+  loadFeedbackItem,
+  loadFeedbackQueue,
+  markFeedbackSeen,
+  parseFeedbackUpdate,
+  parseQueueFilter,
+  FEEDBACK_UPDATE_ERRORS,
+} from '../services/feedbackQueue.js';
+import { readFeedbackFile } from '../services/feedbackStorage.js';
 import { TOKEN_TTL_MS } from '../config.js';
 import { withWebhooks } from '../services/webhooks/outbox.js';
 import { wakeDispatcher } from '../services/webhooks/dispatcher.js';
+import {
+  toDestinationResponse,
+  resolveAmqpUrlUpdate,
+} from '../services/webhooks/destinationResponse.js';
 import {
   isWebhookMessageType,
   PAYLOAD_FORMATS,
@@ -1248,12 +1263,8 @@ router.get('/destinations', async (req, res) => {
   const endpoints = await prisma.webhookDestination.findMany({
     orderBy: { created_at: 'desc' },
   });
-  res.json(
-    endpoints.map((ep) => ({
-      ...ep,
-      event_types: JSON.parse(ep.event_types),
-    })),
-  );
+  // #127: never return secret/amqp_url credentials in clear.
+  res.json(endpoints.map(toDestinationResponse));
 });
 
 /**
@@ -1338,9 +1349,10 @@ router.post('/destinations', async (req, res) => {
       payload_format: format,
     },
   });
+  // #127: the secret is disclosed once, on creation only.
   res.status(201).json({
-    ...destination,
-    event_types: JSON.parse(destination.event_types),
+    ...toDestinationResponse(destination),
+    secret: destination.secret,
   });
 });
 
@@ -1360,7 +1372,12 @@ router.put('/destinations/:id', async (req, res) => {
 
   const current = await prisma.webhookDestination.findUnique({
     where: { id: req.params.id },
-    select: { destination_type: true, payload_format: true, amqp_routing_key: true },
+    select: {
+      destination_type: true,
+      payload_format: true,
+      amqp_routing_key: true,
+      amqp_url: true,
+    },
   });
   if (!current) return res.status(404).json({ error: 'Destination not found' });
   // Validate the Destination as it will be after the update, not the request alone.
@@ -1387,7 +1404,10 @@ router.put('/destinations/:id', async (req, res) => {
     }
   } else if (destType === 'RABBITMQ') {
     if (amqp_url !== undefined) {
-      if (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://')) {
+      if (
+        typeof amqp_url !== 'string' ||
+        (!amqp_url.startsWith('amqp://') && !amqp_url.startsWith('amqps://'))
+      ) {
         return res.status(400).json({ error: 'amqp_url must start with amqp:// or amqps://' });
       }
     }
@@ -1407,6 +1427,16 @@ router.put('/destinations/:id', async (req, res) => {
     }
   }
 
+  // #127: a masked edit (password `****`) keeps the stored password.
+  let updatedAmqpUrl: string | undefined;
+  if (amqp_url !== undefined) {
+    try {
+      updatedAmqpUrl = resolveAmqpUrlUpdate(amqp_url, current.amqp_url);
+    } catch {
+      return res.status(400).json({ error: 'amqp_url must be a valid URL' });
+    }
+  }
+
   const endpoint = await prisma.webhookDestination.update({
     where: { id: req.params.id },
     data: {
@@ -1416,7 +1446,7 @@ router.put('/destinations/:id', async (req, res) => {
       ...(is_active !== undefined ? { is_active } : {}),
       ...(description !== undefined ? { description } : {}),
       ...(destination_type !== undefined ? { destination_type: destType } : {}),
-      ...(amqp_url !== undefined ? { amqp_url } : {}),
+      ...(updatedAmqpUrl !== undefined ? { amqp_url: updatedAmqpUrl } : {}),
       ...(amqp_exchange !== undefined ? { amqp_exchange } : {}),
       ...(amqp_routing_key !== undefined ? { amqp_routing_key } : {}),
       ...(payload_format !== undefined ? { payload_format } : {}),
@@ -1424,10 +1454,7 @@ router.put('/destinations/:id', async (req, res) => {
   });
   // Reactivated (or reconfigured): its waiting messages resume now, not on the next tick.
   if (endpoint.is_active) wakeDispatcher(endpoint.id);
-  res.json({
-    ...endpoint,
-    event_types: JSON.parse(endpoint.event_types),
-  });
+  res.json(toDestinationResponse(endpoint));
 });
 
 router.post('/destinations/:id/rotate-secret', async (req, res) => {
@@ -1436,9 +1463,10 @@ router.post('/destinations/:id/rotate-secret', async (req, res) => {
     where: { id: req.params.id },
     data: { secret: newSecret },
   });
+  // #127: the rotated secret is disclosed once, here only.
   res.json({
-    ...destination,
-    event_types: JSON.parse(destination.event_types),
+    ...toDestinationResponse(destination),
+    secret: destination.secret,
   });
 });
 
@@ -1673,5 +1701,107 @@ router.delete('/broadcast', async (req, res) => {
   await prisma.broadcast.deleteMany();
   res.json({ success: true });
 });
+
+// ---------------------------------------------------------------------------
+// Feedback queue (ported from the esa-crew-corner feedback bubble). Read and
+// resolution are ADMIN-only: the reports carry the sender's page state (DOM
+// snapshot, diagnostics), which must never leak through moderator routes.
+// Sender emails appear here by the standing privacy rule — only admin.ts may
+// return donor email.
+// ---------------------------------------------------------------------------
+
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_MAGIC = [0xff, 0xd8, 0xff];
+
+/** Content type from the stored bytes' magic numbers, never from the sender. */
+function looksLikeScreenshot(bytes: Buffer): string | null {
+  if (PNG_MAGIC.every((b, i) => bytes[i] === b)) return 'image/png';
+  if (JPEG_MAGIC.every((b, i) => bytes[i] === b)) return 'image/jpeg';
+  return null;
+}
+
+router.get(
+  '/feedback',
+  handle('[admin/feedback]', async (req, res) => {
+    const [items, open_count] = await Promise.all([
+      loadFeedbackQueue(parseQueueFilter(req.query.filter)),
+      countOpenFeedback(),
+    ]);
+    res.json({ open_count, items });
+  }),
+);
+
+router.get(
+  '/feedback/:id',
+  handle('[admin/feedback]', async (req, res) => {
+    const item = await loadFeedbackItem(req.params.id!);
+    if (!item) return res.status(404).json({ error: 'Feedback not found' });
+    res.json(item);
+  }),
+);
+
+// Opening a fresh report marks it SEEN; a no-op beyond that state.
+router.post(
+  '/feedback/:id/seen',
+  handle('[admin/feedback]', async (req, res) => {
+    await markFeedbackSeen(req.params.id!);
+    res.json({ success: true });
+  }),
+);
+
+// The one write path: parseFeedbackUpdate + applyFeedbackUpdate, the exact
+// pair the CLI uses, so validation and the resolver stamp are identical.
+router.patch(
+  '/feedback/:id',
+  handle('[admin/feedback]', async (req, res) => {
+    const parsed = parseFeedbackUpdate({ ...req.body, id: req.params.id });
+    if ('error' in parsed) {
+      return res.status(400).json({ error: FEEDBACK_UPDATE_ERRORS[parsed.error] });
+    }
+    const resolverId = req.donor?.email || 'admin';
+    const row = await applyFeedbackUpdate(parsed, resolverId);
+    res.json({ success: true, status: row.status });
+  }),
+);
+
+// Report files. Served only to admins; Content-Disposition inline so the DOM
+// snapshot opens as a page that never runs (sandbox CSP) and cannot navigate
+// away. A missing file is a 404, not a 500.
+router.get(
+  '/feedback/:id/screenshot',
+  handle('[admin/feedback]', async (req, res) => {
+    const row = await prisma.feedback.findUnique({
+      where: { id: req.params.id! },
+      select: { screenshot_path: true },
+    });
+    if (!row?.screenshot_path) return res.status(404).json({ error: 'No screenshot' });
+    const bytes = await readFeedbackFile(row.screenshot_path);
+    if (!bytes) return res.status(404).json({ error: 'Screenshot file is gone' });
+    const mime = looksLikeScreenshot(bytes) ?? 'application/octet-stream';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(bytes);
+  }),
+);
+
+router.get(
+  '/feedback/:id/snapshot',
+  handle('[admin/feedback]', async (req, res) => {
+    const row = await prisma.feedback.findUnique({
+      where: { id: req.params.id! },
+      select: { snapshot_path: true },
+    });
+    if (!row?.snapshot_path) return res.status(404).json({ error: 'No snapshot' });
+    const bytes = await readFeedbackFile(row.snapshot_path);
+    if (!bytes) return res.status(404).json({ error: 'Snapshot file is gone' });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // Renders, never runs: `sandbox` blocks scripts and gives the document an
+    // opaque origin, so it cannot read cookies or navigate away.
+    res.setHeader('Content-Security-Policy', 'sandbox');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(bytes);
+  }),
+);
 
 export default router;

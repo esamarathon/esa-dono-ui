@@ -4,6 +4,14 @@ How the server, client and data model fit together. `AGENTS.md` keeps the invari
 
 npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React + Vite + Tailwind), and `packages/shared` (`@dono/shared`, cross-cutting TypeScript types). In dev, Vite proxies all `/api` requests to `localhost:3001` (`client/vite.config.ts`).
 
+## Language / TypeScript
+
+- **Server** runs `.ts` directly via **`tsx`** (`tsx watch index.ts` in dev, `tsx index.ts` in prod) — no build/emit step. `npm run typecheck --workspace server` runs `tsc --noEmit`. NodeNext ESM: relative imports **keep the `.js` extension** even though sources are `.ts`.
+- **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are **extensionless**.
+- **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both sides: branded `Cents` money helpers, Stripe webhook payload types, and `claim_data` helpers. It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
+- `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
+- Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, and one `eslint.config.ts` per workspace — loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts` PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
+
 ## Server
 
 - `server/index.ts` — Express entry point. The Stripe webhook route **must** be mounted before `express.json()` because it needs the raw body buffer for HMAC verification.
@@ -33,7 +41,10 @@ npm workspaces monorepo: `server/` (Express + Prisma + SQLite), `client/` (React
   - Milestones and matches are `[]`.
   - `total_amount_raised` uses `channelTotalCents`/`eventTotalCents` from `lib/donationTotals.ts`, the same numbers as the `fact.updated` message.
   - Contract tests: `server/test/routes/tiltify.test.ts`. Consumer config: `docs/outbound-events.md` § Consumer setup.
-- `server/routes/feedback.ts` — `POST /api/feedback`, public/unauthenticated multipart endpoint for the floating feedback widget (text + optional screenshot + session metadata). Gated on the `feedback` feature flag (404 when disabled) and rate-limited via `RATE_LIMIT_FEEDBACK`. Delegates to `server/services/feedback.ts`, which posts to the `DISCORD_FEEDBACK_WEBHOOK_URL` Discord webhook (503 if unset, 502 on Discord failure/non-2xx). Nothing is persisted — the server is a stateless proxy; metadata keys resembling `email`/`token` are stripped before forwarding.
+- `server/routes/feedback.ts` — `POST /api/feedback`, public/unauthenticated multipart endpoint for the floating feedback widget (text + page URL + optional screenshot, DOM snapshot and diagnostics). Gated on the `feedback` feature flag (404 when disabled) and rate-limited via `RATE_LIMIT_FEEDBACK`.
+- **The report is the durable thing** (ported from the esa-crew-corner feedback bubble): the row lands in the `Feedback` table first; files (screenshot PNG/JPEG + DOM snapshot HTML) are written under `FEEDBACK_DIR` (prod default `/data/feedback`, relative paths stored in the DB, escape-checked on read); the Discord webhook (`DISCORD_FEEDBACK_WEBHOOK_URL`) and the staff email (`FEEDBACK_RECIPIENTS` over `SMTP_*`) are best-effort notifications afterwards and never fail the sender's request. Metadata keys resembling `email`/`token` are stripped; page URLs on other hosts are dropped; screenshots are verified by magic bytes, not by declared type.
+- **Diagnostics** (`@dono/shared` feedback helpers): a browser ring buffer (window errors, unhandled rejections, `console.error`, failed fetches; last 20 entries, secret-looking query values redacted) is re-validated server-side and stamped with the sender's session donor and effective role. Never captured: form values, bodies, headers, cookies. `console.error` object arguments are reduced to their class name.
+- **Admin resolver queue** (`GET/PATCH /api/admin/feedback*` in `server/routes/admin.ts`, client `/admin/feedback`): filters open/answered/all, opening a NEW report marks it SEEN, answering (DONE/DECLINED) stamps `resolved_by`/`resolved_at` (reopening clears), files served admin-only, the snapshot under a `sandbox` CSP. Readable from a terminal with `npm run feedback --workspace server` (`list`/`show`/`resolve`, same parse/apply pair as the API). Statuses NEW | SEEN | DONE | DECLINED; every report ends in a visible answer, including "no, because".
 
 ## Moderator Setup
 
@@ -138,7 +149,7 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 - `client/src/api/moderator.ts` — axios instance (`withCredentials`) that sends the operational moderator key as `Authorization: Bearer key_mod_<key>` only when no donor session is active; otherwise relies on the session cookie.
 - `client/src/context/DraftPledgeContext.tsx` — one browser-local `donation_draft_v1`, last-edit-wins across tabs, expiring after 24 hours without edits. A pending token survives local TTL and is reconciled before catalog repair; the immutable server review stays authoritative while payment is unresolved. Async responses are guarded against newer drafts/tokens and sign-out. Sign-out deletes only the local draft, never releases held funding. Old `sessionStorage.donation_cart_v1` is removed; remembered donor email/name remain.
 - `client/src/pages/DonateFlow.tsx` — amount → browse with sticky independent Pool meters → review, using the shared plan; message-only skips browse. Overages require explicit amount change; server corrections require reconfirmation. This is the only checkout path; no CartDrawer remains. `/rewards`, `/polls`, `/goals` redirect to their donate tabs. Navbar resumes the stored amount/step.
-- `client/src/pages/MyWallet.tsx` — determines login via `GET /api/donor` (cookie); a pasted `?token=` is exchanged for the session cookie via `POST /api/auth/session` and stripped from the URL. Its credits page uses the per-Event/category catalog and reviewed batch API; unconfirmed credit selections stay in memory and never auto-allocate. Wallet credit is separate and funds a normal draft pledge.
+- `client/src/pages/MyWallet.tsx` — determines login via the always-200 `GET /api/auth/session` probe (cookie; #135), then loads the wallet via `GET /api/donor`; a pasted `?token=` is exchanged for the session cookie via `POST /api/auth/session` and stripped from the URL. Its credits page uses the per-Event/category catalog and reviewed batch API; unconfirmed credit selections stay in memory and never auto-allocate. Wallet credit is separate and funds a normal draft pledge.
 - `client/src/pages/admin/AdminLayout.tsx` — renders a key-entry gate if `localStorage.admin_key` is absent; logout clears the key.
 
 ## Database

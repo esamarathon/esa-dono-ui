@@ -22,7 +22,10 @@ vi.mock('../../src/api/pledge', () => ({
   continuePledge: vi.fn(),
   getDefaultGoalPreview: vi.fn(),
 }));
-vi.mock('../../src/api/donor', () => ({ getDonor: vi.fn() }));
+vi.mock('../../src/api/donor', () => ({
+  getDonor: vi.fn(),
+  getSession: vi.fn().mockResolvedValue({ authenticated: false }),
+}));
 vi.mock('../../src/api/featureFlags', () => ({ getFeatureFlags: vi.fn().mockResolvedValue({}) }));
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';

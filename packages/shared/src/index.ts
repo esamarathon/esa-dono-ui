@@ -5,3 +5,4 @@ export * from './auction.js';
 export * from './pledgePlan.js';
 export * from './poolCredit.js';
 export * from './incentiveScope.js';
+export * from './feedback.js';

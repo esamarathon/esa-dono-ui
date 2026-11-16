@@ -49,6 +49,7 @@ describe('auction service', () => {
     opts: {
       verified?: boolean;
       hasDonation?: boolean;
+      donationStatus?: string;
       frozen?: boolean;
     } = {},
   ) {
@@ -66,6 +67,7 @@ describe('auction service', () => {
           external_id: `don-${donor.id}`,
           donor_id: donor.id,
           amount_cents: 5000,
+          status: opts.donationStatus ?? 'COMPLETED',
         },
       });
     }
@@ -148,6 +150,45 @@ describe('auction service', () => {
 
       await cleanupAuction(auction.id);
       await cleanupDonor(donor.id);
+    });
+
+    // #176: the gate must count only donations the charity kept — the
+    // money-total rule in lib/donationTotals.ts (COMPLETED + REFUNDED).
+    describe('prior-donation status gate (#176)', () => {
+      it.each([
+        { status: 'COMPLETED', outcome: 'can bid' },
+        { status: 'REFUNDED', outcome: 'can bid' },
+        { status: 'PENDING', outcome: 'cannot bid' },
+        { status: 'CHARGEBACK', outcome: 'cannot bid' },
+        // Not Donation statuses (FAILED is a PaymentRefund/delivery status,
+        // PAYMENT_REVIEW a PendingPledge status). Donation.status is a free
+        // String; issue #176's reproduction table covered these values too.
+        { status: 'FAILED', outcome: 'cannot bid' },
+        { status: 'PAYMENT_REVIEW', outcome: 'cannot bid' },
+      ])('a donor whose only donation is $status $outcome', async ({ status, outcome }) => {
+        const allowed = outcome === 'can bid';
+        const donor = await makeDonor({ donationStatus: status });
+        const auction = await makeAuction();
+
+        if (allowed) {
+          await prisma.$transaction((tx) => placeBidTx(tx, donor.id, auction.id, 1000));
+          const updated = await prisma.auction.findUnique({ where: { id: auction.id } });
+          expect(updated!.current_bid_cents).toBe(1000);
+          expect(updated!.current_bidder_id).toBe(donor.id);
+        } else {
+          const error = await prisma
+            .$transaction((tx) => placeBidTx(tx, donor.id, auction.id, 1000))
+            .then(
+              () => null,
+              (err: unknown) => err as { message?: string; status?: number },
+            );
+          expect(error?.message).toBe('A prior completed donation is required to bid on auctions');
+          expect(error?.status).toBe(403);
+        }
+
+        await cleanupAuction(auction.id);
+        await cleanupDonor(donor.id);
+      });
     });
 
     it('rejects a frozen donor', async () => {

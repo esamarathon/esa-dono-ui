@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.3.0'
+  version: '0.4.0'
 
 servers:
   - url: /api
@@ -97,6 +97,8 @@ tags:
   - name: Webhook
   - name: Admin
   - name: Moderator
+  - name: Feedback
+    description: Public feedback widget (POST, gated on the `feedback` feature flag) and the admin-only resolver queue
   - name: Tiltify
     description: Tiltify-compatible read API for kollekt and esa-layouts-v2 (PRD-0002 §R)
 
@@ -327,6 +329,33 @@ paths:
           description: Rate limit exceeded
 
   /auth/session:
+    get:
+      tags: [Auth]
+      summary: Read-only session probe
+      description: |
+        Anonymous-tolerant login check for the SPA. ALWAYS answers 200 — "no
+        session" is an expected outcome, not an error. An anonymous visitor
+        gets `{ authenticated: false }`; a signed-in donor gets a small
+        identity payload. Never mutates state.
+      responses:
+        '200':
+          description: Session state (200 even without a session)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+                  donor:
+                    type: object
+                    description: Present only when authenticated
+                    required: [id, email, role, balance_remaining]
+                    properties:
+                      id: { type: string, format: uuid }
+                      email: { type: string, format: email }
+                      role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+                      balance_remaining: { type: integer }
     post:
       tags: [Auth]
       summary: Exchange a magic token for an httpOnly session cookie
@@ -3005,6 +3034,105 @@ paths:
         '200':
           description: Cleared
 
+  /admin/feedback:
+    get:
+      tags: [Feedback]
+      summary: List feedback reports for the resolver queue
+      description: Admin-only. Reports carry the sender's page state, so this never appears on moderator routes.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - in: query
+          name: filter
+          schema: { type: string, enum: [open, done, all], default: open }
+          description: open = NEW + SEEN; done = DONE + DECLINED
+      responses:
+        '200':
+          description: Open count plus up to 500 reports, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  open_count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedbackQueueItem' }
+
+  /admin/feedback/{id}:
+    get:
+      tags: [Feedback]
+      summary: One report with its full diagnostics record
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: The queue item plus user_agent and the parsed diagnostics (null when not captured)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackQueueItem' }
+        '404':
+          description: Unknown report id
+    patch:
+      tags: [Feedback]
+      summary: Resolve a report (the shared parse/apply write the CLI also uses)
+      description: >
+        Answering (DONE/DECLINED) stamps resolved_by/resolved_at; reopening
+        (NEW/SEEN) clears the stamp. The CLI calls the same helpers.
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [NEW, SEEN, DONE, DECLINED] }
+                resolution_note:
+                  type: string
+                  description: The visible answer the report ends in, including "no, because"
+                resolution_pr:
+                  type: string
+                  description: http(s) PR link, when one exists
+      responses:
+        '200':
+          description: Updated
+        '400':
+          description: Invalid status, over-long note or non-http(s) PR link
+
+  /admin/feedback/{id}/seen:
+    post:
+      tags: [Feedback]
+      summary: Mark a NEW report SEEN (a no-op beyond that state)
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Marked
+
+  /admin/feedback/{id}/screenshot:
+    get:
+      tags: [Feedback]
+      summary: The stored screenshot (admin-only)
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: PNG/JPEG bytes, typed from the stored magic bytes
+        '404':
+          description: No screenshot was captured, or the file is gone
+
+  /admin/feedback/{id}/snapshot:
+    get:
+      tags: [Feedback]
+      summary: The stored DOM snapshot (admin-only)
+      description: >
+        text/html served under a `sandbox` Content-Security-Policy: it renders
+        with the page's real values, never runs scripts, and cannot navigate away.
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: The snapshot HTML
+        '404':
+          description: No snapshot was captured, or the file is gone
+
   /admin/destinations:
     get:
       tags: [Admin]
@@ -3073,11 +3201,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '201':
-          description: Endpoint created (secret included on creation only)
+          description: Destination created (copy the secret now; only create and rotate disclose it)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '400':
           description: Validation error
 
@@ -3134,7 +3262,9 @@ paths:
                 verify_ssl: { type: boolean }
                 is_active: { type: boolean }
                 description: { type: string }
-                amqp_url: { type: string }
+                amqp_url:
+                  type: string
+                  description: 'Omit to keep the stored URL. A password of **** preserves the stored password (or no password) while applying other URL changes.'
                 amqp_exchange: { type: string }
                 amqp_routing_key:
                   { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
@@ -3145,7 +3275,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '200':
-          description: Endpoint updated
+          description: Destination updated (the signing secret is unchanged and never returned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDestination'
         '400':
           description: Validation error
         '404':
@@ -3163,11 +3297,11 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: New secret returned
+          description: New secret returned once; copy it before closing the dialog
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '404':
           description: Endpoint not found
 
@@ -4603,6 +4737,52 @@ paths:
             description: Event not ended or converted credit consumed by live post-end moderator assignments,
           }
 
+  # ─── Feedback ───
+  /feedback:
+    post:
+      tags: [Feedback]
+      summary: Submit feedback from the floating widget (multipart)
+      description: >
+        Gated on the `feedback` feature flag (404 when disabled) and rate-limited
+        per IP. Multipart: text, metadata (JSON), optional screenshot (jpeg/png),
+        optional snapshot (HTML), optional diagnostics (JSON). The row is
+        persisted first (feedback queue), then Discord and email notifications
+        are best-effort: they never fail the sender's request. Sensitive
+        metadata keys (anything resembling email/token) are stripped.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 5000 }
+                metadata:
+                  type: string
+                  description: JSON blob — url, donor_id, channel_id, channel_name, viewport, cart_summary
+                scrollY:
+                  { type: string, description: Decimal string of the page scroll at capture time }
+                screenshot: { type: string, format: binary }
+                snapshot: { type: string, format: binary }
+                diagnostics:
+                  type: string
+                  description: Bounded client error record; re-validated server-side, dropped when malformed
+      responses:
+        '200':
+          description: Report stored (id + FB-<short id> ref); notifications may still have failed silently
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  id: { type: string }
+                  ref: { type: string, example: FB-1a2b3c4d }
+        '400': { description: Missing/over-long text or an invalid screenshot type }
+        '404': { description: The feedback feature flag is disabled }
+        '413': { description: Multipart body over the screenshot+snapshot cap }
+
 components:
   responses:
     PaymentRefundResult:
@@ -5696,16 +5876,43 @@ components:
               slug: { type: string }
               event_id: { type: string }
               is_active: { type: boolean }
+    FeedbackQueueItem:
+      type: object
+      description: One feedback report for the admin resolver queue. Diagnostics hold client errors and failed request lines only — never form values, bodies, or secrets in URLs.
+      properties:
+        id: { type: string }
+        ref: { type: string, example: FB-1a2b3c4d }
+        message: { type: string }
+        page_url: { type: string }
+        route: { type: string }
+        viewport: { type: string }
+        scroll_y: { type: integer }
+        status: { type: string, enum: [NEW, SEEN, DONE, DECLINED] }
+        created_at: { type: string, format: date-time }
+        sender:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            email: { type: string, nullable: true }
+        has_screenshot: { type: boolean }
+        has_snapshot: { type: boolean }
+        diagnostics_error_count: { type: integer }
+        resolution_note: { type: string }
+        resolution_pr: { type: string }
+        resolved_by: { type: string, nullable: true }
+        resolved_at: { type: string, format: date-time, nullable: true }
     WebhookDestination:
       type: object
       properties:
         id: { type: string }
         url: { type: string }
-        secret:
-          {
-            type: string,
-            description: 'Returned in full by the admin API (create, list, update); see #127. Use rotate-secret to replace it.',
-          }
+        has_secret:
+          type: boolean
+          description: 'Whether a signing secret is set. The secret itself is omitted except on create and rotate-secret (#127).'
+        has_amqp_url:
+          type: boolean
+          description: 'Whether an AMQP URL is configured.'
         is_active: { type: boolean }
         event_types:
           type: array
@@ -5733,7 +5940,7 @@ components:
           {
             type: string,
             nullable: true,
-            description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
+            description: 'amqp:// or amqps:// URL with the password masked as **** (#127). User, host, port, vhost and query are preserved. Null when absent or invalid.',
           }
         amqp_exchange:
           {
@@ -5753,6 +5960,15 @@ components:
           description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    WebhookDestinationWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/WebhookDestination'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: 'Disclosed only on create and rotate-secret. Copy it then; list and update never return it.'
     WebhookDelivery:
       type: object
       properties:
