@@ -1,34 +1,46 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import SidebarLayout, { type SidebarNavItem } from '../../src/components/SidebarLayout';
+import SidebarLayout, { type SidebarNavGroup } from '../../src/components/SidebarLayout';
 
 function DummyIcon(props: { className?: string }) {
   return <svg data-testid="dummy-icon" className={props.className} />;
 }
 
-const NAV: SidebarNavItem[] = [
-  { to: '/', label: 'dashboard', end: true, icon: DummyIcon },
-  { to: '/other', label: 'other page', icon: DummyIcon },
+// #238: the layout takes grouped navigation; two sections to see headings.
+const GROUPS: SidebarNavGroup[] = [
+  { heading: 'overview', items: [{ to: '/', label: 'dashboard', end: true, icon: DummyIcon }] },
+  { heading: 'money', items: [{ to: '/other', label: 'other page', icon: DummyIcon }] },
 ];
 
-function renderLayout(storageKey = 'test_sidebar_collapsed') {
+function renderLayout(storageKey = 'test_sidebar_collapsed', path = '/') {
   return render(
-    <MemoryRouter initialEntries={['/']}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/" element={<SidebarLayout title="admin" nav={NAV} storageKey={storageKey} />}>
+        <Route
+          path="/"
+          element={
+            <SidebarLayout
+              title="admin"
+              groups={GROUPS}
+              storageKey={storageKey}
+              header={<div>page-scoped control</div>}
+            />
+          }
+        >
           <Route index element={<div>content</div>} />
+          <Route path="other" element={<div>other content</div>} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 }
 
-function renderExpandedLayout(storageKey: string) {
+function renderExpandedLayout(storageKey: string, path = '/') {
   // The component defaults to collapsed unless localStorage explicitly says
   // '0' — set that up front so these tests exercise the expanded state.
   localStorage.setItem(storageKey, '0');
-  return renderLayout(storageKey);
+  return renderLayout(storageKey, path);
 }
 
 describe('SidebarLayout', () => {
@@ -38,26 +50,29 @@ describe('SidebarLayout', () => {
 
   it('is collapsed by default (no stored preference)', () => {
     renderLayout();
-    expect(screen.queryByText('dashboard')).toBeNull();
-    expect(screen.queryByText('other page')).toBeNull();
+    expect(screen.queryByText('dashboard', { selector: 'aside span' })).toBeNull();
+    expect(screen.queryByText('other page', { selector: 'aside span' })).toBeNull();
     expect(screen.getByTitle('expand')).toBeDefined();
     expect(screen.getAllByTestId('dummy-icon').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('renders nav labels and title when explicitly expanded via storage', () => {
+  it('renders nav labels, group headings and title when explicitly expanded via storage', () => {
     renderExpandedLayout('expanded_key');
     expect(screen.getByText('admin')).toBeDefined();
-    expect(screen.getByText('dashboard')).toBeDefined();
-    expect(screen.getByText('other page')).toBeDefined();
+    expect(screen.getByText('overview')).toBeDefined();
+    expect(screen.getByText('money')).toBeDefined();
+    expect(screen.getByText('dashboard', { selector: 'aside span' })).toBeDefined();
+    expect(screen.getByText('other page', { selector: 'aside span' })).toBeDefined();
     expect(screen.getByTitle('collapse')).toBeDefined();
   });
 
-  it('collapses on toggle click, hiding labels but keeping icons', () => {
+  it('collapses on toggle click, hiding labels and group headings but keeping icons', () => {
     renderExpandedLayout('collapse_toggle_key');
     fireEvent.click(screen.getByTitle('collapse'));
 
-    expect(screen.queryByText('dashboard')).toBeNull();
-    expect(screen.queryByText('other page')).toBeNull();
+    expect(screen.queryByText('dashboard', { selector: 'aside span' })).toBeNull();
+    expect(screen.queryByText('other page', { selector: 'aside span' })).toBeNull();
+    expect(screen.queryByText('overview')).toBeNull();
     expect(screen.getAllByTestId('dummy-icon').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByTitle('expand')).toBeDefined();
   });
@@ -66,8 +81,8 @@ describe('SidebarLayout', () => {
     renderLayout('expand_toggle_key');
     fireEvent.click(screen.getByTitle('expand'));
 
-    expect(screen.getByText('dashboard')).toBeDefined();
-    expect(screen.getByText('other page')).toBeDefined();
+    expect(screen.getByText('dashboard', { selector: 'aside span' })).toBeDefined();
+    expect(screen.getByText('other page', { selector: 'aside span' })).toBeDefined();
     expect(screen.getByTitle('collapse')).toBeDefined();
   });
 
@@ -80,8 +95,20 @@ describe('SidebarLayout', () => {
   it('restores collapsed state from localStorage on mount', () => {
     localStorage.setItem('my_storage_key', '1');
     renderLayout('my_storage_key');
-    expect(screen.queryByText('dashboard')).toBeNull();
+    expect(screen.queryByText('dashboard', { selector: 'aside span' })).toBeNull();
     expect(screen.getByTitle('expand')).toBeDefined();
+  });
+
+  it('shows the active page label in the location bar (#238)', () => {
+    renderExpandedLayout('location_bar_key', '/other');
+    // Sidebar link and location-bar label share the same text.
+    const labels = screen.getAllByText('other page');
+    expect(labels.length).toBe(2);
+  });
+
+  it('renders page-scoped controls in the location bar header slot (#238)', () => {
+    renderLayout('header_slot_key');
+    expect(screen.getByText('page-scoped control')).toBeDefined();
   });
 
   it('renders the collapse-aware footer', () => {
@@ -95,7 +122,7 @@ describe('SidebarLayout', () => {
             element={
               <SidebarLayout
                 title="admin"
-                nav={NAV}
+                groups={GROUPS}
                 storageKey={storageKey}
                 footer={(collapsed) => <div>footer-{collapsed ? 'collapsed' : 'expanded'}</div>}
               />

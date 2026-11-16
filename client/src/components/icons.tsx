@@ -199,3 +199,66 @@ export function BroadcastIcon(props: IconProps) {
     props,
   );
 }
+
+/** Auctions — gavel over a sound block (#238: one distinct icon per nav item). */
+export function AuctionIcon(props: IconProps) {
+  return base(
+    <>
+      <path d="M5.5 6.5l3.2-3.2 4.4 4.4-3.2 3.2z" />
+      <path d="M9.4 11.2 16 17.8" />
+      <path d="M13.5 17.8H18" />
+    </>,
+    props,
+  );
+}
+
+/** Blocked words — a shield with an X (#238). */
+export function ShieldIcon(props: IconProps) {
+  return base(
+    <>
+      <path d="M10 2.5l6.5 2.5v4.5c0 4.5-3 7.5-6.5 8.5-3.5-1-6.5-4-6.5-8.5V5z" />
+      <path d="M7.7 7.7l4.6 4.6M12.3 7.7l-4.6 4.6" />
+    </>,
+    props,
+  );
+}
+
+/** Feedback — a speech bubble (#238). */
+export function ChatIcon(props: IconProps) {
+  return base(<path d="M17.5 9.5a7 7 0 0 1-7 7H3.5l1.6-2.4A7 7 0 1 1 17.5 9.5z" />, props);
+}
+
+/** Feature flags — two sliders (#238). */
+export function SlidersIcon(props: IconProps) {
+  return base(
+    <>
+      <path d="M3 6.5h7M13.5 6.5H17M3 13.5h2.5M9 13.5h8" />
+      <circle cx="11.5" cy="6.5" r="2" />
+      <circle cx="7" cy="13.5" r="2" />
+    </>,
+    props,
+  );
+}
+
+/** Donations & claims — a banknote (#238). */
+export function MoneyIcon(props: IconProps) {
+  return base(
+    <>
+      <rect x="2.5" y="5.5" width="15" height="9" rx="1.5" />
+      <circle cx="10" cy="10" r="2" />
+      <path d="M5.5 8.5v3M14.5 8.5v3" />
+    </>,
+    props,
+  );
+}
+
+/** Add donation — plus in a circle (#238). */
+export function PlusCircleIcon(props: IconProps) {
+  return base(
+    <>
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 6.5v7M6.5 10h7" />
+    </>,
+    props,
+  );
+}

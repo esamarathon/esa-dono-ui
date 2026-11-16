@@ -48,7 +48,7 @@ export default function ModeratorUnusedPoolMoney() {
         }
       })
       .catch((e) => {
-        if (current) setError(apiErrorMessage(e, 'Could not load Unused pool money'));
+        if (current) setError(apiErrorMessage(e, 'Could not load unused pool money'));
       })
       .finally(() => {
         if (current) setLoading(false);
@@ -106,7 +106,7 @@ export default function ModeratorUnusedPoolMoney() {
   };
   return (
     <div>
-      <h1 className="font-display text-4xl uppercase mb-6">Unused pool money</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">unused pool money</h1>
       <p className="font-body text-sm mb-4">
         Assign all of one category to an open target. Incentive amounts are not money totals.
       </p>
@@ -157,7 +157,7 @@ export default function ModeratorUnusedPoolMoney() {
                   donation.unused_cents[category] > 0 && (
                     <div key={category}>
                       <span>
-                        {category}: {money(donation.unused_cents[category])} Unused pool money{' '}
+                        {category}: {money(donation.unused_cents[category])} unused pool money{' '}
                       </span>
                       <button
                         disabled={busy || !donation.channel_id}
