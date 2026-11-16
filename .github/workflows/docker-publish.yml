@@ -287,7 +287,11 @@ jobs:
           # head. That is the same commit when this run created the tag, and
           # the release merge commit when the tag already existed (for example
           # right after this promotion logic itself is first deployed).
-          TAG_SHA=$(git ls-remote origin "refs/tags/$VERSION^{}" | cut -f1)
+          # Resolve the tag locally: GitHub only advertises a peeled ^{}
+          # target over ls-remote for annotated tag objects, and our tags are
+          # lightweight — fetch the tag and peel with rev-parse instead.
+          git fetch --quiet origin "refs/tags/$VERSION"
+          TAG_SHA=$(git rev-parse --verify "FETCH_HEAD^{commit}")
           if [ -z "$TAG_SHA" ]; then
             echo "::error::tag $VERSION not found on origin"
             exit 1
