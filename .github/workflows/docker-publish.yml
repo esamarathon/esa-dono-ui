@@ -225,3 +225,42 @@ jobs:
             fi
             echo "$dst -> $b"
           done
+
+  # Version tagging (#238 release flow): dev pushes carry the version with a
+  # -dev suffix (0.4.0-dev), the main integration merge carries the bare
+  # version (0.4.0), which matches the release-tag glob and so also triggers
+  # promote-release. One tag per version: the immutable release-tags ruleset
+  # forbids reuse, so an existing tag means "already tagged; skip". Needs
+  # build-and-push so a main tag's promote-release run always finds the
+  # :<sha> images built for this exact commit.
+  tag-version:
+    needs: build-and-push
+    if: >-
+      github.event_name == 'push' && github.ref_type == 'branch' &&
+      (github.ref_name == 'main' || github.ref_name == 'dev')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version from the root manifest
+        id: version
+        run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+      - name: Tag the pushed commit (skip when the tag already exists)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$BRANCH" = main ]; then
+            TAG="$VERSION"
+          else
+            TAG="$VERSION-dev"
+          fi
+          if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; nothing to do"
+            exit 0
+          fi
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "tagged $GITHUB_SHA as $TAG"

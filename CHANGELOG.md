@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, a minor version can contain
 breaking changes.
 
-## [Unreleased]
+## [0.4.0] — 2026-11-16
 
 ### Added
 
@@ -24,6 +24,24 @@ breaking changes.
   Submission stays gated on the `feedback` feature flag and its IP rate limit.
   New environment variables: `FEEDBACK_DIR`, `FEEDBACK_RECIPIENTS`,
   `INSTANCE_LABEL` (passthrough added to `docker-compose.yml`).
+
+### Changed
+
+- **Staff views** (#238): grouped sidebar navigation for admin and moderator
+  (overview / event content / money / platform / support) with a distinct icon
+  per item, an always-visible location bar (page label left, the moderator
+  channel filter right), shared login card and sidebar footer, and the
+  `/admin/simulate` route renamed to `/admin/add-donation` to match the nav
+  label. No API changes.
+
+### Fixed
+
+- Feedback: never show the captured screenshot back to the sender (#233).
+- Demo reset: the baseline restores the feedback agent donor and re-enables
+  the feedback flag (#234, #235).
+- Frontend image: bump the libxslt floor to 1.1.43-r4 so the cached apk layer
+  resolves.
+- Dependencies: seven dependencies bumped without code changes (#237).
 
 ## [0.3.0] — 2026-10-31
 
@@ -376,7 +394,8 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.4.0
 [0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0
