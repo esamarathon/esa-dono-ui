@@ -7,6 +7,13 @@ breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Feature flags**: the seed installs the default flags (`feedback`, `auctions`)
+  disabled, so they are visible and toggleable under `/admin/feature-flags`;
+  re-seeding preserves operator toggles. Every flag's use and purpose is now
+  documented in `docs/admin-event-setup.md` § Feature flags.
+
 ## [0.6.0] — 2026-11-21
 
 ### Added
