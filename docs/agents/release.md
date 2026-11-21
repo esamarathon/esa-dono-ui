@@ -67,8 +67,10 @@ Release from the matching changelog section.
   Minor/major updates stay individual, manual PRs.
 - `rebaseWhen: behind-base-branch` keeps stale grouped PRs from rotting.
 - Security updates come from OSV lookups (`osvVulnerabilityAlerts`) instead of
-  repo Dependabot alerts (`vulnerabilityAlerts.enabled = false`) — the
-  `RENOVATE_TOKEN` does not carry the Dependabot-alerts read permission.
+  repo Dependabot alerts (`vulnerabilityAlerts.enabled = false`). Renovate runs
+  on the workflow's `GITHUB_TOKEN` (there is no `RENOVATE_TOKEN` secret), and
+  that token cannot read the Dependabot-alerts API — there is no matching
+  Actions `permissions:` key — so OSV is the only source of alert coverage.
 
 Repo settings this depends on: **Allow auto-merge** must be enabled on the
 repository. Branch protection on `main` with required checks is recommended so

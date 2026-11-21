@@ -12,13 +12,6 @@
   "rebaseWhen": "behind-base-branch",
   "platformAutomerge": true,
   "labels": ["dependencies", "no-changelog"],
-  "hostRules": [
-    {
-      "hostType": "github",
-      "matchHost": "github.com",
-      "token": "{{ env.RENOVATE_TOKEN }}"
-    }
-  ],
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
