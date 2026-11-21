@@ -21,6 +21,9 @@ breaking changes.
 
 ### Fixed
 
+- Release tooling: `npm run release` rewrites only the workspace versions in
+  `package-lock.json`, never a third-party package's own version (which
+  desynced `npm ci`), and refuses a bump that would.
 - Simulated donations: the admin `simulate-donation` boundary accepts
   `send_email: false` so synthetic donors (the simulator's `@demo.test`
   mailboxes) no longer trigger magic-link emails that bounce against the SMTP
