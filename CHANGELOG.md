@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-21
+
 ### Changed
 
 - **Goals** (#201, #252): every goal write is capped at the goal's live remaining
