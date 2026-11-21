@@ -14,12 +14,23 @@ section.**
   Renovate PRs carry `dependencies` + `no-changelog` and are exempt by rule:
   dependency bumps get one `Dependencies` bullet in the next release section
   instead of one line per PR.
-- **No version bump ever lands on `dev`.** The manifests stay at the last
-  released version.
+- **No version bump in feature/fix PRs.** The only version change on `dev` comes
+  from the release prepare PR in Lane 2.
 
-## Lane 2 — the release PR (`dev` → `main`)
+## Lane 2 — release: prepare on `dev`, gate on `main`
 
-Merging to `main` is the only release act. The PR carries exactly:
+A release is two merges, in this order (this matches the 0.4.0 history: #242
+prepared on `dev`, #243 was the gate):
+
+1. **Prepare PR into `dev`** (`chore/release-x.y.z`, titled `Release x.y.z`):
+   run `npm run release`, commit the six version fields plus the changelog
+   rewrite. On merge, `tag-version` tags `x.y.z-dev` on the dev push.
+2. **Gate PR `dev` → `main`** (titled `Release x.y.z`): its diff carries the
+   version bump and the dated section. On merge, `tag-version` tags `x.y.z`,
+   promotes the `:sha` images to `:x.y.z`, and publishes the GitHub Release from
+   the matching changelog section.
+
+The release PR carries exactly:
 
 1. the version bump in all six fields — root/server/client/packages.shared
    `package.json`, `package-lock.json` (root + workspace entries),
@@ -38,12 +49,11 @@ The script rewrites all six fields (never by string replace — third-party
 packages can share the version string), moves the Unreleased bullets under the
 new dated heading, then verifies the result with the same checks CI runs.
 
-The CI `release-guard` job fails the PR unless: all six version fields agree,
-the version is greater than the latest bare tag, `## [x.y.z]` exists with a
-`— YYYY-MM-DD` date and bullet points, and `## [Unreleased]` is empty. After
-the merge, `tag-version` in `docker-publish.yml` tags `<version>` on main (and
-`<version>-dev` on dev), promotes the `:sha` images, and publishes the GitHub
-Release from the matching changelog section.
+The CI `release-guard` job fails the gate PR unless: all six version fields
+agree, the version is greater than the latest bare tag, `## [x.y.z]` exists with
+a `— YYYY-MM-DD` date and bullet points, and `## [Unreleased]` is empty. Cut the
+gate PR right after the prepare merge — a dev PR that lands in between adds
+bullets to `## [Unreleased]` again and the gate fails until they are moved.
 
 ### Bump rule (0.x, `main` = what gets deployed)
 
@@ -66,6 +76,11 @@ Release from the matching changelog section.
   (`platformAutomerge`); `lockFileMaintenance` is enabled and automerges too.
   Minor/major updates stay individual, manual PRs.
 - `rebaseWhen: behind-base-branch` keeps stale grouped PRs from rotting.
+- Security updates come from OSV lookups (`osvVulnerabilityAlerts`) instead of
+  repo Dependabot alerts (`vulnerabilityAlerts.enabled = false`). Renovate runs
+  on the workflow's `GITHUB_TOKEN` (there is no `RENOVATE_TOKEN` secret), and
+  that token cannot read the Dependabot-alerts API — there is no matching
+  Actions `permissions:` key — so OSV is the only source of alert coverage.
 
 Repo settings this depends on: **Allow auto-merge** must be enabled on the
 repository. Branch protection on `main` with required checks is recommended so

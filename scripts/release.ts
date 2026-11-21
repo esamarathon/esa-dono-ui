@@ -340,7 +340,7 @@ function prepare(versionArg: string | undefined, force: boolean): void {
       ', CHANGELOG.md',
   );
   console.log(
-    `Next: commit these files on the release PR (dev -> main) "chore(release): ${targetText}".`,
+    `Next: commit these files on chore/release-${targetText}, merge it to dev, then open the dev -> main gate PR.`,
   );
 }
 

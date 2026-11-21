@@ -5,16 +5,13 @@
   "schedule": ["before 5am on Monday"],
   "timezone": "Europe/Stockholm",
   "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "enabled": false
+  },
+  "osvVulnerabilityAlerts": true,
   "rebaseWhen": "behind-base-branch",
   "platformAutomerge": true,
   "labels": ["dependencies", "no-changelog"],
-  "hostRules": [
-    {
-      "hostType": "github",
-      "matchHost": "github.com",
-      "token": "{{ env.RENOVATE_TOKEN }}"
-    }
-  ],
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
