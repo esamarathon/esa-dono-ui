@@ -1,8 +1,16 @@
 import Card from '../components/Card';
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  id,
+  children,
+}: {
+  title: string;
+  id?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card className="mb-6">
+    <Card id={id} className="mb-6">
       <h2 className="font-display text-3xl uppercase text-off-white mb-3">{title}</h2>
       <div className="space-y-3 font-body text-sm text-off-white/55">{children}</div>
     </Card>
@@ -116,12 +124,20 @@ export default function Help() {
         </p>
       </Section>
 
-      <Section title="your data (gdpr)">
+      <Section title="your data (gdpr)" id="your-data-gdpr">
         <p>
           This platform stores only what it needs to route your donation: your email address, an
           optional donor name, and any comment or write-in you submit. It never collects or stores
           your shipping address. There are no passwords. Card details are held by Stripe, never by
           this platform.
+        </p>
+        <p>
+          We never use your email for marketing, never sell it, and share it only with Stripe, our
+          payment processor.
+        </p>
+        <p>
+          Beyond your donation, we may also email you an auction offer if you win a bid, or a
+          sign-in link if you request one.
         </p>
         <p>
           Moderators never see your email address — only admins can. To request access to,

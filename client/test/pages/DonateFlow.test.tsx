@@ -259,6 +259,22 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByText(/^5\/500/)).toBeInTheDocument();
   });
 
+  it('discloses the email uses in an InfoTip linking to Help (#81)', async () => {
+    save(saved());
+    renderAt();
+    await screen.findByRole('textbox', { name: 'Email address (required)' });
+    const tip = screen.getByLabelText(
+      /We use your email to identify your donation, take payment through Stripe, and send your donation email — the link in it unlocks your wallet\. We never use it for marketing, never sell it, and share it only with Stripe\. More in Help/,
+    );
+    expect(tip).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'More in Help' });
+    expect(link).toHaveAttribute('href', '/help#your-data-gdpr');
+    expect(screen.getByRole('textbox', { name: 'Email address (required)' })).toHaveAttribute(
+      'type',
+      'email',
+    );
+  });
+
   it('keeps empty poll review customer-facing without staff reservation details', async () => {
     save(saved({ amountCents: 5000 }));
     renderAt();

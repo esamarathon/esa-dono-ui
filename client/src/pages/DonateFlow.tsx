@@ -4,6 +4,7 @@ import { useDraftPledge, type IncentiveCategory } from '../context/DraftPledgeCo
 import { getPublicEvent } from '../api/events';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
+import InfoTip from '../components/InfoTip';
 import ShareLinkButton from '../components/ShareLinkButton';
 import RewardList from '../components/incentives/RewardList';
 import PollList from '../components/incentives/PollList';
@@ -526,9 +527,14 @@ export default function DonateFlow() {
               amount before paying.
             </p>
           ) : null}
-          <label className="block font-data text-sm mb-3">
-            Email address (required)
+          <div className="block font-data text-sm mb-3">
+            <label htmlFor="donate-email">Email address (required)</label>{' '}
+            <InfoTip
+              text="We use your email to identify your donation, take payment through Stripe, and send your donation email — the link in it unlocks your wallet. We never use it for marketing, never sell it, and share it only with Stripe."
+              link={{ href: '/help#your-data-gdpr', label: 'More in Help' }}
+            />
             <input
+              id="donate-email"
               type="email"
               required
               aria-label="Email address (required)"
@@ -537,7 +543,7 @@ export default function DonateFlow() {
               disabled={busy}
               onChange={(e) => flow.setEmail(e.target.value)}
             />
-          </label>
+          </div>
           <label className="block font-data text-sm mb-3">
             Display name (optional; empty = Anonymous)
             <input
