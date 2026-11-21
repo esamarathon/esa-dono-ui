@@ -24,6 +24,7 @@ breaking changes.
 - Release machinery: `tag-version` promotes the release images itself on main,
   resolves the release tag locally before promotion, and publishes the GitHub
   Release for the version tag (#244, #246, #248).
+- Frontend image: bump the libxml2 floor to 2.13.9-r3 (CVE-2026-86144, HIGH).
 
 ## [0.4.0] — 2026-11-16
 
