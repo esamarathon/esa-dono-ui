@@ -231,6 +231,7 @@ describe('Simulator Executor', () => {
         amount_cents: 1000,
         comment: 'Hello',
         channel_id: 'channel-id',
+        send_email: false,
       },
       'Bearer key_admin_admin-secret',
     );
@@ -250,6 +251,7 @@ describe('Simulator Executor', () => {
         donor_name: 'donor1',
         amount_cents: 2000,
         channel_id: null,
+        send_email: false,
       },
       'Bearer key_admin_admin-secret',
     );
@@ -342,6 +344,7 @@ describe('Simulator Executor', () => {
       donor_name: 'donor1',
       amount_cents: 700,
       pledge_token: 'confirmed',
+      send_email: false,
     });
     expect(outcome).toMatchObject({ status: 200, accepted: true });
   });

@@ -87,6 +87,9 @@ export class Executor {
           amount_cents: p.amountCents,
           comment: p.comment as string | undefined,
           channel_id: p.channelRef ? this.ref(p.channelRef as string) : null,
+          // Synthetic @demo.test addresses would bounce; the token captured
+          // from the response replaces the emailed magic link.
+          send_email: false,
         };
         const res = await fetch(`${baseUrl}/api/admin/simulate-donation`, {
           method: 'POST',
@@ -328,6 +331,7 @@ export class Executor {
           donor_name: params.displayName ?? donorRef,
           amount_cents: json.new_money_cents,
           pledge_token: json.pledge_token,
+          send_email: false,
         }),
       });
       if (!payment.ok)
