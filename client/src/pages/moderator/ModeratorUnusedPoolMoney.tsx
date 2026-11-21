@@ -73,6 +73,8 @@ export default function ModeratorUnusedPoolMoney() {
         setError(apiErrorMessage(e, 'Could not load eligible targets'));
     }
   };
+  // A goal target takes only its remaining need; the button states the real amount.
+  const selectedTarget = picker?.data.targets.find((item) => item.id === target) ?? null;
   const assign = async () => {
     if (!picker || busy) return;
     setBusy(true);
@@ -201,7 +203,8 @@ export default function ModeratorUnusedPoolMoney() {
         >
           <p>
             Assign all {money(picker.data.amount_cents)}. Impact is computed by the server and
-            checked again on assignment.
+            checked again on assignment. A fund goal takes only what its target still needs; the
+            rest stays Unused pool money.
           </p>
           {picker.data.targets.map((item) => (
             <label key={item.id} className="block my-3">
@@ -229,7 +232,12 @@ export default function ModeratorUnusedPoolMoney() {
             disabled={busy || !target || picker.data.amount_cents <= 0}
             onClick={assign}
           >
-            assign all {money(picker.data.amount_cents)}
+            {selectedTarget &&
+            selectedTarget.after_cents - selectedTarget.before_cents < picker.data.amount_cents
+              ? `assign ${money(
+                  selectedTarget.after_cents - selectedTarget.before_cents,
+                )} of ${money(picker.data.amount_cents)}`
+              : `assign all ${money(picker.data.amount_cents)}`}
           </button>
         </Modal>
       )}

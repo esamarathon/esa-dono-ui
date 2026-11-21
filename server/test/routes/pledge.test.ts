@@ -80,17 +80,20 @@ describe('pledge HTTP contract on SQLite', () => {
         ],
       });
       const preview = () => request(app()).get(`/api/pledge/default-goal/${own.id}`);
-      expect((await preview()).body).toEqual({ goal: { id: listed.id, title: 'Own list' } });
+      const chain = async () => (await preview()).body.chain.map((row: { id: string }) => row.id);
+      expect((await preview()).body.goal).toEqual({ id: listed.id, title: 'Own list' });
+      expect(await chain()).toEqual([listed.id, shared.id, closest.id]);
       await prisma.fundGoal.update({ where: { id: listed.id }, data: { is_complete: true } });
-      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      expect((await preview()).body.goal).toEqual({ id: shared.id, title: 'Primary list' });
       await prisma.channelDefaultGoal.deleteMany({ where: { channel_id: primary.id } });
-      expect((await preview()).body).toEqual({ goal: { id: closest.id, title: 'Closest own' } });
+      expect((await preview()).body.goal).toEqual({ id: closest.id, title: 'Closest own' });
+      expect(await chain()).toEqual([closest.id, shared.id]);
       await prisma.fundGoal.update({ where: { id: closest.id }, data: { is_active: false } });
-      expect((await preview()).body).toEqual({ goal: { id: shared.id, title: 'Primary list' } });
+      expect((await preview()).body.goal).toEqual({ id: shared.id, title: 'Primary list' });
       await prisma.fundGoal.update({ where: { id: shared.id }, data: { is_active: false } });
       const response = await preview();
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ goal: null });
+      expect(response.body).toEqual({ goal: null, chain: [] });
       expect(await prisma.fundGoal.findUnique({ where: { id: closest.id } })).toMatchObject({
         current_cents: 0,
       });

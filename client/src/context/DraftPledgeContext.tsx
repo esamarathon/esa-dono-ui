@@ -20,6 +20,7 @@ import {
   cancelPledge,
   continuePledge,
   getDefaultGoalPreview,
+  type DefaultGoalPreview,
 } from '../api/pledge';
 import { isSessionActive } from '../utils/authToken';
 import { INCENTIVES_POLL_MS, DEFAULT_VOTE_AMOUNT, DEFAULT_GOAL_AMOUNT } from '../config';
@@ -158,6 +159,7 @@ interface DraftContextValue {
   success: PaymentSuccess | null;
   acknowledgeSuccess: (receipt: SuccessReceipt) => void;
   defaultGoal: { id: string; title: string } | null;
+  defaultGoalChain: DefaultGoalPreview['chain'];
   previewError: boolean;
   corrected: boolean;
   confirmCorrected: () => void;
@@ -222,6 +224,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_KEY) ?? '');
   const [wallet, setWallet] = useState<number | null>(null);
   const [defaultGoal, setDefaultGoal] = useState<{ id: string; title: string } | null>(null);
+  const [defaultGoalChain, setDefaultGoalChain] = useState<DefaultGoalPreview['chain']>([]);
   const [previewError, setPreviewError] = useState(false);
   const [correctedPlan, setCorrectedPlan] = useState<PledgePlan | null>(null);
   const [corrected, setCorrected] = useState(false);
@@ -480,11 +483,13 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
     const valid = guard();
     let active = true;
     setDefaultGoal(null);
+    setDefaultGoalChain([]);
     setPreviewError(true);
     getDefaultGoalPreview(pending.channel_id)
       .then((preview) => {
         if (active && valid()) {
           setDefaultGoal(preview.goal);
+          setDefaultGoalChain(preview.chain);
           setPreviewError(false);
         }
       })
@@ -607,7 +612,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
         const balance =
           reviewing && isSessionActive() ? (await getDonor()).balance_remaining : null;
         const previewChannel = d?.channelId;
-        let preview: { goal: { id: string; title: string } | null } | null = null;
+        let preview: DefaultGoalPreview | null = null;
         if (reviewing && previewChannel) {
           try {
             preview = await getDefaultGoalPreview(previewChannel);
@@ -620,6 +625,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
         if (reviewing) {
           setWallet(balance);
           setDefaultGoal(preview?.goal ?? null);
+          setDefaultGoalChain(preview?.chain ?? []);
           setPreviewError(!!previewChannel && !preview);
           setReviewReady(true);
         }
@@ -1073,6 +1079,7 @@ export function DraftPledgeProvider({ children }: { children: ReactNode }) {
     success,
     acknowledgeSuccess,
     defaultGoal,
+    defaultGoalChain,
     previewError,
     corrected,
     confirmCorrected: () => {

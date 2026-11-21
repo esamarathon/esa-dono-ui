@@ -85,7 +85,38 @@ describe('Goals routes', () => {
       .send({ channel_id: channelId, amount_cents: 100 });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.body).toMatchObject({ success: true, cost: 100 });
+
+    await prisma.fundContribution.deleteMany({ where: { donor_id: donor.id } });
+    await prisma.fundGoal.delete({ where: { id: goal.id } });
+    await prisma.donor.delete({ where: { id: donor.id } });
+  });
+
+  it('POST /:id/contribute places only the last cents a goal still needs (#201)', async () => {
+    const { donor, token } = await makeDonor(5000);
+    const goal = await prisma.fundGoal.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Almost complete',
+        target_cents: 1000,
+        current_cents: 900,
+      },
+    });
+
+    const res = await request(createApp())
+      .post(`/api/goals/${goal.id}/contribute`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ channel_id: channelId, amount_cents: 500 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, cost: 100 });
+    expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
+      current_cents: 1000,
+      is_complete: true,
+    });
+    expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+      balance_remaining: 4900,
+    });
 
     await prisma.fundContribution.deleteMany({ where: { donor_id: donor.id } });
     await prisma.fundGoal.delete({ where: { id: goal.id } });

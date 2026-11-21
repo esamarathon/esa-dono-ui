@@ -162,7 +162,7 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(getChannels).mockResolvedValue([
       { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true },
     ]);
-    vi.mocked(getDefaultGoalPreview).mockResolvedValue({ goal: null });
+    vi.mocked(getDefaultGoalPreview).mockResolvedValue({ goal: null, chain: [] });
     vi.mocked(reconcilePledge).mockReset();
     vi.mocked(cancelPledge).mockReset();
     vi.mocked(createPledge).mockReset();
@@ -349,7 +349,10 @@ describe('amount-first donate through the routed flow', () => {
         options: [{ id: 'o1', label: 'Runner', votes_cents: 0 }],
       },
     ]);
-    vi.mocked(getDefaultGoalPreview).mockResolvedValue({ goal: { id: 'g1', title: 'Glitch run' } });
+    vi.mocked(getDefaultGoalPreview).mockResolvedValue({
+      goal: { id: 'g1', title: 'Glitch run' },
+      chain: [{ id: 'g1', title: 'Glitch run', remaining_cents: 5000 }],
+    });
     renderAt();
     const polls = await screen.findByRole('region', { name: 'polls review' });
     await waitFor(() => expect(polls).toHaveTextContent('$2.00 + $8.00'));
@@ -364,6 +367,44 @@ describe('amount-first donate through the routed flow', () => {
     expect(goals).not.toHaveTextContent(
       /eligibility|subject to availability|ordered Default goal list/i,
     );
+  });
+
+  it('models the goal target cap and says where the excess continues (#201)', async () => {
+    save(
+      saved({
+        selections: [
+          {
+            kind: 'GOAL',
+            target_id: 'g1',
+            label: 'Glitch run',
+            amount_cents: 1000,
+            insertion_order: 0,
+          },
+        ],
+      }),
+    );
+    vi.mocked(getGoals).mockResolvedValue([
+      { event_id: 'e1', id: 'g1', title: 'Glitch run', current_cents: 700, target_cents: 1000 },
+    ]);
+    vi.mocked(getDefaultGoalPreview).mockResolvedValue({
+      goal: { id: 'g1', title: 'Glitch run' },
+      chain: [
+        { id: 'g1', title: 'Glitch run', remaining_cents: 300 },
+        { id: 'g2', title: 'Second goal', remaining_cents: 5000 },
+      ],
+    });
+    renderAt();
+    const goals = await screen.findByRole('region', { name: 'fund goals review' });
+    expect(await screen.findByLabelText('goal target cap')).toHaveTextContent(
+      'Glitch run is capped at $3.00 of $10.00: the goal only needs $3.00 more.',
+    );
+    await waitFor(() =>
+      expect(goals).toHaveTextContent(
+        "$7.00 continues to your other fund goals in proportion, then the Channel's default goal (now: Glitch run); anything no goal can take becomes Unused pool money.",
+      ),
+    );
+    // The immutable plan is unchanged: the donor still pledged the full amount.
+    expect(goals).toHaveTextContent('$10.00');
   });
 
   it('recalculates Wallet credit on review and separates new money and shipping', async () => {

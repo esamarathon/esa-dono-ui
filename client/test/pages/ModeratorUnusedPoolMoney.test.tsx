@@ -120,3 +120,36 @@ it('shows stale errors, keeps the choice for review and never retries an assignm
   expect(await screen.findByText(/Unused amount changed/)).toBeInTheDocument();
   expect(client.post).toHaveBeenCalledTimes(1);
 });
+
+it('states the capped goal amount instead of the whole Unused amount (#201)', async () => {
+  client.get.mockImplementation((path: string) =>
+    Promise.resolve({
+      data:
+        path === '/channels'
+          ? [{ id: 'main', name: 'Main' }]
+          : path.includes('/targets')
+            ? {
+                amount_cents: 37,
+                targets: [
+                  {
+                    id: 'goal-1',
+                    label: 'Glitch run',
+                    channel_id: null,
+                    before_cents: 990,
+                    after_cents: 1000,
+                    target_cents: 1000,
+                  },
+                ],
+              }
+            : [{ ...donation(0, 0), unused_cents: { poll: 0, goal: 37 }, assignments: [] }],
+    }),
+  );
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'assign goal…' }));
+  expect(
+    await screen.findByText(/A fund goal takes only what its target still needs/),
+  ).toBeVisible();
+  expect(screen.getByText(/\$9.90 → \$10.00 of \$10.00/)).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText(/Glitch run/));
+  expect(screen.getByRole('button', { name: 'assign $0.10 of $0.37' })).toBeEnabled();
+});

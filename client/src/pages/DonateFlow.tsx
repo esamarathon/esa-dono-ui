@@ -50,6 +50,10 @@ export default function DonateFlow() {
   const consumedSelection = useRef('');
   const consumedTab = useRef('');
   const amountCents = draft?.amountCents;
+  /** Live remaining need per goal, so the review models the target cap (#201). */
+  const goalRemaining = Object.fromEntries(
+    flow.goals.map((goal) => [goal.id, Math.max(0, goal.target_cents - goal.current_cents)]),
+  );
   const pendingToken = draft?.pendingToken;
   const draftChannelId = draft?.channelId;
   const hasDraft = draft !== null;
@@ -207,6 +211,8 @@ export default function DonateFlow() {
               <PledgeReview
                 plan={pending.plan}
                 defaultGoal={flow.defaultGoal}
+                defaultGoalChain={flow.defaultGoalChain}
+                goalRemaining={goalRemaining}
                 previewError={flow.previewError}
               />
             ) : (
@@ -509,6 +515,8 @@ export default function DonateFlow() {
               plan={plan}
               selections={draft!.selections}
               defaultGoal={flow.defaultGoal}
+              defaultGoalChain={flow.defaultGoalChain}
+              goalRemaining={goalRemaining}
               previewError={flow.previewError}
             />
           )}

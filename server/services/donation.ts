@@ -14,7 +14,7 @@ import {
 } from './spend.js';
 import { isAvailableOn, planPledge, type PledgePlan, type PledgeItemKind } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
-import { defaultGoal } from './defaultGoal.js';
+import { fulfillGoalMoneyTx } from './goalAllocation.js';
 
 type Pledge = Prisma.PendingPledgeGetPayload<{ include: { items: true } }>;
 
@@ -436,18 +436,8 @@ async function fulfillPooledPledge(
           repaired.top_up_rows.find((row) => row.selection_index === index)?.amount_cents ?? 0;
       });
     }
-    if (category === 'goal' && eligible.length === 0) {
-      const goalId = await defaultGoal(tx, pledge.channel_id!);
-      if (goalId) {
-        await contributeGoalTx(tx, donorId, goalId, pledge.pledge_amount_cents!, donationId, {
-          mode: 'pool',
-          source: 'auto',
-        });
-        totalSpent += pledge.pledge_amount_cents!;
-      }
-    }
     // Round the flat selections first, then combine identical targets for one
-    // live write. A donor+auto goal may overshoot and complete in that write.
+    // live write.
     const writes = new Map<string, (typeof groups)[number]>();
     for (const group of eligible) {
       const { item } = group;
@@ -463,12 +453,41 @@ async function fulfillPooledPledge(
         previous.auto += group.auto;
       } else writes.set(key, { ...group });
     }
+    if (category === 'goal') {
+      // #201: cap at live remaining need and continue the excess through the
+      // donor's other goal selections, then the Default goal list. Money with
+      // no goal selection at all starts at the Default goal list.
+      const outcome = await fulfillGoalMoneyTx(tx, {
+        donorId,
+        donationId,
+        channelId: pledge.channel_id!,
+        asks: [...writes.values()].map(({ item, donor, auto, order }) => ({
+          goal_id: item.target_id,
+          donor_cents: donor,
+          auto_cents: auto,
+          order,
+        })),
+        fallbackCents: eligible.length === 0 ? pledge.pledge_amount_cents! : 0,
+      });
+      if (eligible.length === 0) totalSpent += outcome.placedCents;
+      else {
+        const placedByGoal = new Map(
+          outcome.placements.map((row) => [row.goal_id, row.donor_cents + row.auto_cents]),
+        );
+        for (const { item } of writes.values()) {
+          const cost = placedByGoal.get(item.target_id) ?? 0;
+          results.push({ item_id: item.id, kind: item.kind, status: 'fulfilled', cost });
+        }
+        // Continuation may also reach goals the donor did not select; both parts
+        // are goal-Pool money that was actually written.
+        totalSpent += outcome.placedCents;
+      }
+      continue;
+    }
     for (const { item, donor, auto } of writes.values()) {
       const amount = donor + auto;
       const mode = { mode: 'pool' as const, source: 'donor' as const, auto_cents: auto };
-      if (item.kind === 'GOAL')
-        await contributeGoalTx(tx, donorId, item.target_id, amount, donationId, mode);
-      else if (item.kind === 'POLL_VOTE')
+      if (item.kind === 'POLL_VOTE')
         await votePollTx(tx, donorId, item.poll_id!, item.target_id, amount, donationId, mode);
       else if (item.kind === 'POLL_CUSTOM')
         await proposeCustomEntryTx(

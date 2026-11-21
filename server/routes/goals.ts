@@ -18,11 +18,12 @@ router.get('/', async (req: Request, res: Response) => {
 router.post('/:id/contribute', spendLimit, donorAuth, async (req: Request, res: Response) => {
   try {
     const { amount_cents } = req.body;
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const { cost } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await assertWalletSpendScopeTx(tx, req.body.channel_id, 'goal', req.params.id!);
-      await contributeGoalTx(tx, req.donor!.id, req.params.id!, Number(amount_cents));
+      return contributeGoalTx(tx, req.donor!.id, req.params.id!, Number(amount_cents));
     });
-    res.json({ success: true });
+    // #201: `cost` is what the goal could take; 0 means it already reached its target.
+    res.json({ success: true, cost });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     res.status(status).json({ error: (err as Error).message });
