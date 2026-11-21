@@ -66,6 +66,9 @@ Release from the matching changelog section.
   (`platformAutomerge`); `lockFileMaintenance` is enabled and automerges too.
   Minor/major updates stay individual, manual PRs.
 - `rebaseWhen: behind-base-branch` keeps stale grouped PRs from rotting.
+- Security updates come from OSV lookups (`osvVulnerabilityAlerts`) instead of
+  repo Dependabot alerts (`vulnerabilityAlerts.enabled = false`) — the
+  `RENOVATE_TOKEN` does not carry the Dependabot-alerts read permission.
 
 Repo settings this depends on: **Allow auto-merge** must be enabled on the
 repository. Branch protection on `main` with required checks is recommended so
