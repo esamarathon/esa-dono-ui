@@ -438,6 +438,7 @@ router.post('/simulate-donation', async (req, res) => {
       event_id,
       external_id,
       occurred_at,
+      send_email,
     } = req.body;
     const cents = Number(amount_cents);
     if (!email || !Number.isInteger(cents) || cents < MIN_SPEND_CENTS) {
@@ -481,6 +482,9 @@ router.post('/simulate-donation', async (req, res) => {
       channelId: channel_id || null,
       eventId: event_id || null,
       occurredAt,
+      // Synthetic donors (simulator runs) have undeliverable addresses; only
+      // the caller suppresses mail — real external entries still get a link.
+      sendEmail: send_email !== false,
     });
     if ('duplicate' in result) {
       return res

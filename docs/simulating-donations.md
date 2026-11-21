@@ -52,7 +52,7 @@ the shipping separately. Wallet-only pooled pledges add $0 money, consume their 
 funding and create no new Wallet credit. Incentive allocations can exceed the money
 amount across independent categories; never sum them as money.
 
-Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet).
+Returns `{ success: true, token, donor }`. Build a magic link: `http://localhost:5173/api/auth/magic?token=<token>` (sets the session cookie, redirects to the wallet). Pass `"send_email": false` for synthetic donors with undeliverable addresses (e.g. the seeded simulator's `@demo.test` mailboxes) to skip the magic-link email and its bounces; the token is still returned.
 
 ## Option D — Seeded platform simulator (bulk, reproducible)
 

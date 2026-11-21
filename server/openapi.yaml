@@ -2349,6 +2349,10 @@ paths:
                   type: string
                   format: date-time
                   description: Optional; backdates the created Donation's created_at to when the donation actually occurred (e.g. on the external platform). Defaults to now.
+                send_email:
+                  type: boolean
+                  default: true
+                  description: Set false for synthetic/simulator donors whose addresses are undeliverable (e.g. @demo.test) so the magic-link email is not sent; the response still returns the token. Real recorded donations keep the default.
       responses:
         '200':
           description: Donation added

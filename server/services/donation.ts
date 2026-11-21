@@ -37,6 +37,9 @@ export type DonationIntake =
       eventId?: string | null;
       /** Backdate an externally received donation (#62). */
       occurredAt?: Date | null;
+      /** Suppress the magic-link email for synthetic/simulator donors whose
+       * addresses do not exist (e.g. @demo.test) and would bounce (#34). */
+      sendEmail?: boolean;
     })
   | {
       source: 'wallet';
@@ -291,9 +294,11 @@ async function intakeDonationInner(input: DonationIntake) {
     throw err;
   }
 
-  sendMagicLink(email, result.donor.magic_token!).catch((err) =>
-    console.error('Email error:', err),
-  );
+  const sendEmail = input.source === 'admin' ? input.sendEmail !== false : true;
+  if (sendEmail)
+    sendMagicLink(email, result.donor.magic_token!).catch((err) =>
+      console.error('Email error:', err),
+    );
   return { ...result, token: result.donor.magic_token };
 }
 

@@ -7,6 +7,14 @@ breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Simulated donations: the admin `simulate-donation` boundary accepts
+  `send_email: false` so synthetic donors (the simulator's `@demo.test`
+  mailboxes) no longer trigger magic-link emails that bounce against the SMTP
+  relay. The token is still returned, so simulation is unchanged; recorded real
+  donations keep sending mail by default.
+
 ## [0.5.0] — 2026-11-21
 
 ### Changed
