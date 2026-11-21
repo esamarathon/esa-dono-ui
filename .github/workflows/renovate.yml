@@ -20,5 +20,9 @@ jobs:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN || secrets.GITHUB_TOKEN }}
         env:
-          RENOVATE_AUTODISCOVER: 'true'
+          # RENOVATE_TOKEN is a user credential, not the repo-scoped GITHUB_TOKEN, so
+          # autodiscovery would fan out to every repository that account can see and
+          # fail on the first one without write access. Pin the single target repo.
+          RENOVATE_AUTODISCOVER: 'false'
+          RENOVATE_REPOSITORIES: '["esamarathon/esa-dono-ui"]'
           GITHUB_COM_TOKEN: ${{ secrets.RENOVATE_TOKEN || secrets.GITHUB_TOKEN }}
