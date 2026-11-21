@@ -1,9 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "baseBranches": ["dev"],
   "schedule": ["before 5am on Monday"],
   "timezone": "Europe/Stockholm",
-  "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
+  "rebaseWhen": "behind-base-branch",
+  "platformAutomerge": true,
+  "labels": ["dependencies", "no-changelog"],
   "hostRules": [
     {
       "hostType": "github",
@@ -11,9 +15,15 @@
       "token": "{{ env.RENOVATE_TOKEN }}"
     }
   ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
   "packageRules": [
     {
-      "matchUpdateTypes": ["patch"],
+      "description": "Patch/digest/pin updates: one grouped, automergeable PR per run",
+      "matchUpdateTypes": ["patch", "digest", "pin"],
+      "groupName": "patch dependencies",
       "automerge": true
     }
   ]

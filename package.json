@@ -18,6 +18,7 @@
     "lint:fix": "npm run lint:fix --workspaces",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "release": "tsx scripts/release.ts",
     "prepare": "husky || true"
   },
   "devDependencies": {
