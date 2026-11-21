@@ -7,6 +7,16 @@ breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Email/privacy disclosure in checkout** (#81): the checkout email field gets an
+  InfoTip explaining how the email is used (identify the donation, take payment
+  through Stripe, send the donation email with the wallet link) and stating that it
+  is never used for marketing, never sold, and shared only with Stripe. "More in
+  Help" links to the Help "your data (gdpr)" section, which gains the promise and
+  the full send list (auction offer emails, sign-in links). The InfoTip component
+  can now host a link and Help sections have anchor ids.
+
 ### Fixed
 
 - Simulated donations: the admin `simulate-donation` boundary accepts
