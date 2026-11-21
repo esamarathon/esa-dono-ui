@@ -1,5 +1,11 @@
 import type { Prisma } from '@prisma/client';
-import { MIN_SPEND_CENTS, isAvailableOn, type ClaimData, type PoolCategory } from '@dono/shared';
+import {
+  MIN_SPEND_CENTS,
+  claimAnswerError,
+  isAvailableOn,
+  type ClaimData,
+  type PoolCategory,
+} from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 import { readDonationAccountingTx } from './poolAccounting.js';
 import { textWordTokens } from './blockedWords.js';
@@ -205,6 +211,10 @@ export async function claimRewardTx(
     throw httpError(400, 'quantity must be a positive integer');
   const reward = await tx.reward.findUnique({ where: { id: rewardId } });
   if (!reward || !reward.is_active) throw httpError(404, 'Reward not found');
+  // A labeled CUSTOM reward requires its claim answer (#78). Creation only:
+  // historical claims with blank answers are never rewritten.
+  const answerError = claimAnswerError(claimData, reward);
+  if (answerError) throw httpError(400, answerError);
   if (reward.type === 'PHYSICAL' && !pool)
     throw httpError(400, 'Physical rewards require a cash-funded pledge through Stripe checkout');
   if (reward.quantity_total !== null && reward.quantity_claimed + quantity > reward.quantity_total)

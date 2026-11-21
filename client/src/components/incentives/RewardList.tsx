@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
-import Modal from '../Modal';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
+import InfoTip from '../InfoTip';
 import { useDraftPledge } from '../../context/DraftPledgeContext';
+import { rewardTypeDefinition } from '../../lib/rewardTypeDefinitions';
+import { claimFieldsFor } from '../../lib/rewardClaimFields';
+import RewardClaimModal from './RewardClaimModal';
 import type { Reward } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-interface FieldDef {
-  key: string;
-  label: string;
-  required: boolean;
-}
-
-// PHYSICAL rewards intentionally collect NO fields here. The donor adds the
-// item to the cart and completes Stripe Checkout to pay; no shipping address
-// is captured or stored by the platform.
-const FIELDS: Record<string, FieldDef[]> = {
-  SHOUTOUT: [{ key: 'message', label: 'Shoutout Message', required: false }],
-  PHYSICAL: [],
-  DIGITAL: [],
-};
+// Field-carrying rewards stay quantity-1 from this donor UI: they show a plain
+// "remove" button in the cart, never the quantity stepper (#50/#78).
+const fieldsFor = claimFieldsFor;
 
 export default function RewardList() {
   const {
@@ -36,7 +28,6 @@ export default function RewardList() {
     decrementRewardQuantity,
   } = useDraftPledge();
   const [claiming, setClaiming] = useState<Reward | null>(null);
-  const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -54,11 +45,6 @@ export default function RewardList() {
   const inCart = (id: string) => cart.some((i) => i.kind === 'REWARD' && i.target_id === id);
   const cartQuantity = (id: string) =>
     cart.find((i) => i.kind === 'REWARD' && i.target_id === id)?.quantity ?? 1;
-
-  const fieldsFor = (reward: Reward): FieldDef[] =>
-    FIELDS[reward.type] ?? [
-      { key: 'data', label: reward.custom_type_label ?? 'Additional Info', required: false },
-    ];
 
   const commitAdd = (reward: Reward, data: Record<string, string>) => {
     addToCart({
@@ -80,13 +66,6 @@ export default function RewardList() {
       return;
     }
     setClaiming(reward);
-    setFormData({});
-  };
-
-  const handleModalSubmit = () => {
-    if (!claiming) return;
-    commitAdd(claiming, formData);
-    setClaiming(null);
   };
 
   return (
@@ -129,6 +108,14 @@ export default function RewardList() {
                   >
                     {r.type}
                   </span>
+                  {rewardTypeDefinition(r.type) && (
+                    <span className="inline-flex align-middle ml-1">
+                      <InfoTip
+                        text={rewardTypeDefinition(r.type)!}
+                        link={{ href: '/help#reward-types', label: 'more in Help' }}
+                      />
+                    </span>
+                  )}
                   {r.quantity_total !== null && (
                     <span className="font-mono text-sm text-off-white/55 ml-2">
                       {r.quantity_total - r.quantity_claimed} left
@@ -193,33 +180,21 @@ export default function RewardList() {
       </div>
 
       {claiming && (
-        <Modal title={`add: ${claiming.title}`} onClose={() => setClaiming(null)}>
-          <p className="font-body text-sm text-off-white/55 mb-3">
-            This will use your reward Pool for{' '}
-            <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
-          </p>
-          {fieldsFor(claiming).map((f) => (
-            <div className="mb-3" key={f.key}>
-              <label className="block font-data font-bold text-sm mb-1 text-off-white">
-                {f.label}{' '}
-                {!f.required && <span className="text-off-white/40 font-normal">(optional)</span>}
-              </label>
-              <input
-                className="w-full px-3 py-2 text-sm"
-                value={formData[f.key] || ''}
-                onChange={(e) => setFormData((d) => ({ ...d, [f.key]: e.target.value }))}
-              />
-            </div>
-          ))}
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setClaiming(null)} className="btrl-button btrl-button-outline">
-              cancel
-            </button>
-            <button onClick={handleModalSubmit} className="btrl-button">
-              add selection
-            </button>
-          </div>
-        </Modal>
+        <RewardClaimModal
+          reward={claiming}
+          intro={
+            <p className="font-body text-sm text-off-white/55 mb-3">
+              This will use your reward Pool for{' '}
+              <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
+            </p>
+          }
+          submitLabel="add selection"
+          onSubmit={(data) => {
+            commitAdd(claiming, data);
+            setClaiming(null);
+          }}
+          onClose={() => setClaiming(null)}
+        />
       )}
     </div>
   );

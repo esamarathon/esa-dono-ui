@@ -18,6 +18,7 @@ interface RewardShape {
   id: string;
   type: string;
   cost_cents: number;
+  custom_type_label?: string | null;
   channel_id?: string | null;
 }
 interface GoalShape {
@@ -76,6 +77,8 @@ export async function discover(baseUrl: string): Promise<Catalog> {
     channelOf,
     pledgeableRewards: [],
     rewardCostCents: {},
+    rewardType: {},
+    rewardCustomLabel: {},
   };
 
   channels.forEach((c, i) => {
@@ -93,6 +96,8 @@ export async function discover(baseUrl: string): Promise<Catalog> {
     resolve[ref] = r.id;
     channelOf[ref] = r.channel_id ? (channelIdToRef.get(r.channel_id) ?? null) : undefined;
     cat.rewardCostCents[ref] = r.cost_cents;
+    cat.rewardType[ref] = r.type;
+    cat.rewardCustomLabel[ref] = r.custom_type_label ?? null;
     if (r.type !== 'PHYSICAL') cat.pledgeableRewards.push(ref);
   });
   polls.forEach((p, i) => {

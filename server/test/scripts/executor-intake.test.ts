@@ -35,6 +35,8 @@ it('pays a pledge that needs new money through the real admin intake', async () 
     rewards: [],
     pledgeableRewards: [],
     rewardCostCents: {},
+    rewardType: {},
+    rewardCustomLabel: {},
     polls: [],
     goals: ['g'],
     auctions: [],

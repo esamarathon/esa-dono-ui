@@ -26,6 +26,7 @@ import { DraftPledgeProvider as CartProvider } from '../../src/context/DraftPled
 import PollList from '../../src/components/incentives/PollList';
 import GoalList from '../../src/components/incentives/GoalList';
 import RewardList from '../../src/components/incentives/RewardList';
+import { REWARD_TYPE_DEFINITIONS } from '../../src/lib/rewardTypeDefinitions';
 
 const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
 
@@ -516,5 +517,66 @@ describe('RewardList', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: 'add' }));
     expect(screen.getByText(/add: Shoutout/)).toBeInTheDocument();
+  });
+
+  it('requires the claim answer on a labeled CUSTOM reward and stages nothing on a blank one (#78)', async () => {
+    mocks.getRewards.mockResolvedValue([
+      {
+        ...reward,
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        title: 'Pick the Next Game',
+      },
+    ]);
+    render(
+      <Wrapper>
+        <RewardList />
+      </Wrapper>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
+    expect(screen.getByText('Your game pick')).toBeInTheDocument();
+    expect(screen.queryByText('(optional)')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('answer required');
+    expect(screen.getByText(/add: Pick the Next Game/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'add' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Your game pick'), { target: { value: 'Celeste' } });
+    expect(screen.getByText('7/200 characters')).toBeInTheDocument();
+    expect(screen.getByLabelText('Your game pick')).toHaveAttribute('maxLength', '200');
+
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+  });
+
+  it('keeps the fallback Additional Info answer optional when the Custom Label is empty (#78)', async () => {
+    mocks.getRewards.mockResolvedValue([
+      { ...reward, type: 'CUSTOM', custom_type_label: null, title: 'Mystery' },
+    ]);
+    render(
+      <Wrapper>
+        <RewardList />
+      </Wrapper>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
+    expect(screen.getByText(/Additional Info/)).toBeInTheDocument();
+    expect(screen.getByText('(optional)')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+  });
+
+  it('shows the reward type definition with a more-in-Help link on the badge (#78)', async () => {
+    render(
+      <Wrapper>
+        <RewardList />
+      </Wrapper>,
+    );
+    expect(await screen.findByText('T-shirt')).toBeInTheDocument();
+    expect(screen.getByText(REWARD_TYPE_DEFINITIONS.PHYSICAL)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'more in Help' })).toHaveAttribute(
+      'href',
+      '/help#reward-types',
+    );
   });
 });

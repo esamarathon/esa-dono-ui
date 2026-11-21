@@ -20,6 +20,8 @@ const catalog: Catalog = {
   channelOf: {},
   pledgeableRewards: ['reward', 'reward2'],
   rewardCostCents: { reward: 100, reward2: 200 },
+  rewardType: { reward: 'DIGITAL', reward2: 'CUSTOM' },
+  rewardCustomLabel: { reward: null, reward2: 'Your game pick' },
 };
 
 function decision(
@@ -408,4 +410,42 @@ describe('Simulator Executor', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
+
+  it('sends a claim answer for a labeled CUSTOM reward on a direct claim (#78)', async () => {
+    await fund();
+    fetchMock.mockResolvedValueOnce(response());
+    await executor.execute(decision('CLAIM_REWARD', { targetRef: { rewardRef: 'reward2' } }));
+    expectPost('/api/rewards/reward2-id/claim', {
+      claim_data: { data: 'Simulated pick' },
+      quantity: 1,
+    });
+  });
+
+  it('carries the claim answer on pledge reward items for labeled CUSTOM rewards (#78)', async () => {
+    await fund();
+    fetchMock.mockResolvedValueOnce(response({ balance_remaining: 5000 }));
+    fetchMock.mockResolvedValueOnce(
+      response([{ id: 'reward2-id', cost_cents: 200, type: 'CUSTOM' }]),
+    );
+    fetchMock.mockResolvedValueOnce(response({ pledge_token: 'confirmed', new_money_cents: 0 }));
+    fetchMock.mockResolvedValueOnce(response({ format: 'POOLED', status: 'FULFILLED' }));
+    await executor.execute(
+      decision('PLEDGE_CHECKOUT', {
+        targetRef: { channelRef: 'channel' },
+        items: [{ kind: 'REWARD', rewardRef: 'reward2', amountCents: 200, quantity: 1 }],
+      }),
+    );
+    expectPost('/api/pledge', {
+      channel_id: 'channel-id',
+      items: [
+        {
+          kind: 'REWARD',
+          target_id: 'reward2-id',
+          amount_cents: 200,
+          quantity: 1,
+          data: { data: 'Simulated pick' },
+        },
+      ],
+    });
+  });
 });

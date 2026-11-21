@@ -398,4 +398,86 @@ describe('pooled pledge creation on SQLite', () => {
       balance_held_cents: 0,
     });
   });
+
+  it('rejects a blank claim answer on a labeled CUSTOM reward item at staging, and stores a supplied one (#78)', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 500,
+      },
+    });
+    rewards.push(reward.id);
+    const planned = (data: unknown) =>
+      planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: [
+          {
+            kind: 'REWARD',
+            target_id: reward.id,
+            amount_cents: 500,
+            quantity: 1,
+            unit_price_cents: 500,
+            reward_type: 'CUSTOM',
+            insertion_order: 0,
+            data,
+          },
+        ],
+      });
+    const blankDraft = crypto.randomUUID();
+    drafts.push(blankDraft);
+    await expect(
+      createPledge({
+        draft_id: blankDraft,
+        pledge_amount_cents: 1000,
+        items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1, data: { data: '  ' } }],
+        channel_id: channel.id,
+        plan: planned(null),
+      }),
+    ).rejects.toMatchObject({ status: 400, message: 'answer is required' });
+    expect(await prisma.pendingPledge.count({ where: { draft_id: blankDraft } })).toBe(0);
+
+    const answeredDraft = crypto.randomUUID();
+    drafts.push(answeredDraft);
+    const answered = await createPledge({
+      draft_id: answeredDraft,
+      pledge_amount_cents: 1000,
+      items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1, data: { data: 'Outer Wilds' } }],
+      channel_id: channel.id,
+      plan: planned({ data: 'Outer Wilds' }),
+    });
+    expect(answered.items).toMatchObject([{ data: '{"data":"Outer Wilds"}' }]);
+
+    // Clearing the Custom Label makes the same answer field optional.
+    await prisma.reward.update({ where: { id: reward.id }, data: { custom_type_label: null } });
+    const optionalDraft = crypto.randomUUID();
+    drafts.push(optionalDraft);
+    const optional = await createPledge({
+      draft_id: optionalDraft,
+      pledge_amount_cents: 1000,
+      items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1 }],
+      channel_id: channel.id,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: [
+          {
+            kind: 'REWARD',
+            target_id: reward.id,
+            amount_cents: 500,
+            quantity: 1,
+            unit_price_cents: 500,
+            reward_type: 'CUSTOM',
+            insertion_order: 0,
+          },
+        ],
+      }),
+    });
+    expect(optional.items).toMatchObject([{ data: null }]);
+  });
 });
