@@ -200,3 +200,5 @@ The CI `container-test` job runs `scripts/smoke-test.sh` against the freshly bui
 
 Images publish to `ghcr.io/esamarathon/esa-dono-ui/{backend,frontend}` via
 `.github/workflows/docker-publish.yml` (buildx multiarch amd64/arm64 + Trivy CRITICAL gate) on push to `main`/`dev` and on PRs against `main`. Every push tags `:<sha>` and a sanitized `:<branch>` (e.g. `:dev`); `main` additionally gets `:latest`. PRs publish `:pr-<number>` (Trivy-scanned, but skip the smoke test since there's nothing to compose/deploy). `docker-compose.yml` image tags default to `latest`, overridable via `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG` env vars to run a specific branch/commit build.
+
+Version releases (the version bump, the `dev` → `main` integration merge, the immutable `:X.Y.Z` tag and image promotion, and the GitHub Release) follow the lifecycle in `docs/deployment.md` § Releases: one minor per planned change-list step (#251).
