@@ -107,17 +107,29 @@ function lockfileLocation(): VersionLocation {
         throw new Error(`${rel}: missing "packages"`);
       }
       // Only root ("") and workspace entries. Third-party packages can carry the
-      // same version string (e.g. asynckit@0.4.0) and must never be touched.
+      // same version string (e.g. asynckit@0.4.0) and must never be touched —
+      // and a workspace's own installs look like `client/node_modules/x`, so any
+      // `node_modules` segment excludes a key (installed or not).
       for (const [key, value] of Object.entries(packages as Record<string, unknown>)) {
         const isWorkspace =
           key !== '' &&
-          !key.startsWith('node_modules/') &&
+          !key.split('/').includes('node_modules') &&
           existsSync(join(ROOT, key, 'package.json'));
         if (key !== '' && !isWorkspace) continue;
         if (typeof value !== 'object' || value === null) continue;
         (value as Record<string, unknown>).version = version;
       }
+      const before = readJsonFile(rel);
       writeJsonFile(rel, data);
+      for (const [key, value] of Object.entries(before.packages as Record<string, unknown>)) {
+        const isWorkspace =
+          key === '' ||
+          (!key.split('/').includes('node_modules') && existsSync(join(ROOT, key, 'package.json')));
+        if (isWorkspace) continue;
+        const after = (data.packages as Record<string, unknown>)[key] as Record<string, unknown>;
+        if ((value as Record<string, unknown>).version !== after?.version)
+          throw new Error(`${rel}: refused to rewrite third-party version for ${key}`);
+      }
     },
   };
 }
