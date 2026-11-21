@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-21
+
 ### Added
 
 - **Email/privacy disclosure in checkout** (#81): the checkout email field gets an
