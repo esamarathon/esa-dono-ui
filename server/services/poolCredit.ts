@@ -8,7 +8,13 @@ import type {
   PoolCategory,
 } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
-import { claimRewardTx, contributeGoalTx, votePollTx, type CreditSpend } from './spend.js';
+import {
+  claimRewardTx,
+  contributeGoalTx,
+  goalRemainingCents,
+  votePollTx,
+  type CreditSpend,
+} from './spend.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 type Tx = Prisma.TransactionClient;
 const categories: PoolCategory[] = ['reward', 'poll', 'goal'];
@@ -264,7 +270,9 @@ export async function applyPoolCreditTx(
   )
     throw httpError(400, 'Select at least one incentive (maximum 100)');
   const spent = zero(),
-    seen = new Set<string>();
+    seen = new Set<string>(),
+    /** #201: the part of a goal pick its live remaining need can take. */
+    goalCents = new Map<string, number>();
   for (const pick of request.selections) {
     if (!pick || typeof pick.target_id !== 'string' || seen.has(`${pick.kind}:${pick.target_id}`))
       throw httpError(400, 'Invalid or duplicate credit selection');
@@ -292,9 +300,14 @@ export async function applyPoolCreditTx(
         )
       )
         throw httpError(409, 'Poll option closed or changed; refresh and review');
-      if (pick.kind === 'GOAL' && !state.catalog.goals.some((g) => g.id === pick.target_id))
-        throw httpError(409, 'Goal closed or changed; refresh and review');
-      spent[pick.kind === 'GOAL' ? 'goal' : 'poll'] += pick.amount_cents;
+      if (pick.kind === 'GOAL') {
+        const goal = state.catalog.goals.find((g) => g.id === pick.target_id);
+        if (!goal) throw httpError(409, 'Goal closed or changed; refresh and review');
+        // Cap at the pick, before the oldest-first draw: the capped amount is
+        // drawn and the remainder stays credit, never auto-allocated (#236 D2).
+        goalCents.set(goal.id, Math.min(pick.amount_cents, goalRemainingCents(goal)));
+        spent.goal += goalCents.get(goal.id)!;
+      } else spent.poll += pick.amount_cents;
     } else throw httpError(400, 'Invalid credit category');
   }
   if (
@@ -359,7 +372,10 @@ export async function applyPoolCreditTx(
         result.claim_ids.push(...claim.claim_ids);
       }
     } else {
-      const funding = draw(pick.kind === 'GOAL' ? 'goal' : 'poll', pick.amount_cents);
+      const cents = pick.kind === 'GOAL' ? (goalCents.get(pick.target_id) ?? 0) : pick.amount_cents;
+      // A goal that filled after review takes nothing; its credit stays credit.
+      if (cents <= 0) continue;
+      const funding = draw(pick.kind === 'GOAL' ? 'goal' : 'poll', cents);
       // Poll/goal rows stay source-linked. Multiple grants of one source can fund one row.
       for (const id of [
         ...new Set(funding.map((r) => grants.find((g) => g.id === r.credit_id)!.donation_id)),

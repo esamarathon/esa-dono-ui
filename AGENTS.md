@@ -25,6 +25,11 @@ cd server && npx prisma db seed
 # DB studio
 cd server && npx prisma studio
 
+# Prepare a release on the dev→main PR (version bump + changelog section)
+npm run release -- 0.5.0
+# Verify version fields + changelog (CI runs this on every PR)
+npm run release -- --check
+
 # Typecheck (tsc --noEmit per workspace)
 npm run typecheck
 
@@ -117,6 +122,14 @@ Issues and PRDs live as GitHub issues in `esamarathon/esa-dono-ui` (`origin`) �
 ### Triage labels
 
 Five canonical triage roles mapped to default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Release flow
+
+`dev` accumulates bullets under `## [Unreleased]` in `CHANGELOG.md` (per-PR, CI-enforced;
+`no-changelog` label exempts). The `dev` → `main` merge is the release gate: `npm run
+release` bumps all six version fields and turns Unreleased into a dated `## [x.y.z]`
+section; CI refuses the merge otherwise. Dependency patch PRs automerge into `dev`
+without version bumps. See `docs/agents/release.md`.
 
 ### Domain docs
 

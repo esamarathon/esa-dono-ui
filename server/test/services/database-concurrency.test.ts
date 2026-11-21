@@ -87,6 +87,56 @@ describe('database transaction serialization', () => {
     }
   });
 
+  it('never lets two clients overfill a goal target', async () => {
+    const event = await first.event.create({ data: { name: 'Goal cap', slug: randomUUID() } });
+    const donors = await Promise.all(
+      [0, 1].map(() =>
+        first.donor.create({
+          data: { email: `${randomUUID()}@example.com`, balance_remaining: 1000 },
+        }),
+      ),
+    );
+    const goal = await first.fundGoal.create({
+      data: { event_id: event.id, title: 'Goal cap', target_cents: 1000, current_cents: 900 },
+    });
+    try {
+      const results = await Promise.allSettled([
+        first.$transaction((tx) => contributeGoalTx(tx, donors[0]!.id, goal.id, 700)),
+        second.$transaction((tx) => contributeGoalTx(tx, donors[1]!.id, goal.id, 700)),
+      ]);
+      // The serialized read caps the first at the last $1.00; the second then
+      // sees a complete goal and places nothing.
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      expect(fulfilled).toHaveLength(1);
+      expect(fulfilled[0]!.status === 'fulfilled' && fulfilled[0]!.value.cost).toBe(100);
+      const rejected = results.find((r) => r.status === 'rejected');
+      expect(rejected?.status === 'rejected' && rejected.reason.message).toContain(
+        'Goal not found, inactive, or complete',
+      );
+      expect(await first.fundGoal.findUniqueOrThrow({ where: { id: goal.id } })).toMatchObject({
+        current_cents: 1000,
+      });
+      expect(
+        (
+          await first.fundContribution.aggregate({
+            where: { goal_id: goal.id },
+            _sum: { amount_cents: true },
+          })
+        )._sum.amount_cents,
+      ).toBe(100);
+      expect(
+        (await first.donor.findMany({ where: { id: { in: donors.map((d) => d.id) } } }))
+          .map((d) => d.balance_remaining)
+          .sort((a, b) => a - b),
+      ).toEqual([900, 1000]);
+    } finally {
+      await first.fundContribution.deleteMany({ where: { goal_id: goal.id } });
+      await first.fundGoal.delete({ where: { id: goal.id } });
+      await first.donor.deleteMany({ where: { id: { in: donors.map((d) => d.id) } } });
+      await first.event.delete({ where: { id: event.id } });
+    }
+  });
+
   it('rolls back array transactions and releases the transaction lock', async () => {
     const email = `${randomUUID()}@example.com`;
     await expect(

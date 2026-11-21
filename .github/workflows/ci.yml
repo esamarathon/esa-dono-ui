@@ -231,6 +231,60 @@ jobs:
           curl --fail --silent --show-error http://localhost:3001/api/admin/stats \
             -H "Authorization: Bearer key_admin_${ADMIN_API_KEY}" | jq -e '.donors == 1'
 
+  changelog:
+    name: Changelog
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require an Unreleased changelog bullet for code changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          case ",$LABELS," in
+            *,no-changelog,*|*,dependencies,*)
+              echo "Labelled no-changelog/dependencies — skipping."
+              exit 0
+              ;;
+          esac
+          if [ -z "$(git diff --name-only "$BASE_SHA"...HEAD -- server client packages)" ]; then
+            echo "No code changes — skipping."
+            exit 0
+          fi
+          if ! git diff "$BASE_SHA"...HEAD -- CHANGELOG.md | grep -Eq '^\+[[:space:]]*- '; then
+            echo "::error::Code changed but CHANGELOG.md gained no bullet. Add one under '## [Unreleased]', or label the PR 'no-changelog'."
+            exit 1
+          fi
+          echo "CHANGELOG.md gained a bullet."
+
+  release-guard:
+    name: Release gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check version fields and changelog
+        if: github.base_ref != 'main'
+        run: npm run release -- --check
+
+      - name: Enforce the release gate (PRs to main)
+        if: github.base_ref == 'main'
+        run: npm run release -- --check --expect-release
+
   gitleaks:
     name: Secret Scanning
     runs-on: ubuntu-latest

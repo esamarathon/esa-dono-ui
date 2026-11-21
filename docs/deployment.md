@@ -275,6 +275,71 @@ network with the backend and list that network's subnet
 
 ---
 
+## Releases
+
+Versioning is Semantic Versioning; before 1.0.0 a minor release may contain breaking
+changes. The version lives in four manifests (root, `client`, `server`, `packages/shared`
+`package.json`), their `package-lock.json` entries, and `server/openapi.yaml`
+`info.version`. `CHANGELOG.md` follows Keep a Changelog and is the single source of the
+GitHub Release notes.
+
+### Planned lifecycle
+
+The donation-experience change list (map #72) ships one step per minor release, in the
+order settled by #251. Each step must leave `dev` in a complete, deployable state; a step
+never rides another step's release.
+
+| Version | Step                                                              | Tickets  |
+| ------- | ----------------------------------------------------------------- | -------- |
+| 0.5.0   | Cap goal contributions at the remaining target                    | #201     |
+| 0.6.0   | Email/privacy disclosure in checkout                              | #81      |
+| 0.7.0   | Reward claim required fields and keyword definitions              | #78      |
+| 0.8.0   | Poll flow redesign                                                | #76      |
+| 0.9.0   | Terminology and copy/typography pass                              | #73, #80 |
+| 0.10.0  | Public fundraising total, progress bar, live-activity replacement | #148     |
+| 0.11.0  | Donation acknowledgements in the donor strip                      | #250     |
+
+- **Implementation order is not release granularity.** #78 and #76 may be implemented in
+  parallel; they still land and release one at a time. #73 has no implementation step of
+  its own and shares the #80 release.
+- **A patch release between steps does not consume a minor.** `0.5.1` leaves the next
+  step on `0.6.0`.
+- **To change this granularity, amend the decision in #251** rather than regrouping
+  releases implicitly. The GitHub issues remain the source of truth for ticket scope and
+  status; this table records only the planned release mapping.
+
+### Cutting a release
+
+The mechanics are owned by `docs/agents/release.md`; for the planned steps above:
+
+1. Each feature PR against `dev` carries one bullet under `## [Unreleased]` in
+   `CHANGELOG.md` (CI's Changelog job; `no-changelog` for docs/CI-only PRs).
+2. After the step's last feature PR is merged and green, open the `dev` → `main` release
+   PR and run `npm run release -- X.Y.Z`. Pass the version explicitly: the script
+   otherwise derives the bump from commit types, which does not encode the planned mapping
+   above. It rewrites all six version fields and turns `[Unreleased]` into
+   `## [X.Y.Z] — YYYY-MM-DD`.
+3. The `release-guard` CI job must pass: every version field agrees, the version is
+   greater than the latest bare tag, the dated section has bullets, and `[Unreleased]` is
+   empty again.
+4. Merge to `main`. The `main` push's `tag-version` job creates the bare `X.Y.Z` tag,
+   promotes the `<sha>` images of that merge commit to `:X.Y.Z`, and publishes the GitHub
+   Release from the matching changelog section. `dev` pushes only ever get `X.Y.Z-dev`.
+
+### Release rules
+
+- **Immutable, one tag per version.** The `release-tags-immutable` ruleset and the
+  workflow both refuse to reuse a published version; bump instead. An existing tag means
+  "already tagged; skip", so a re-push cannot move a release.
+- **Immutable release images.** `:X.Y.Z` is created once from the exact `:<sha>` image
+  that passed the smoke test and never overwritten; `:latest` follows `main` only.
+- **The CHANGELOG section must exist before the `main` merge.** The workflow extracts
+  `## [X.Y.Z]` from `CHANGELOG.md` for the Release page and fails on an empty section.
+- **A release tag is not a deployment.** Deploying a pinned release (with its append-only
+  migrations) and the runtime acceptance holds are separate, see Operations below.
+
+---
+
 ## Configuration reference
 
 | Variable                            | Required       | Default                                                    | Purpose                                                            |

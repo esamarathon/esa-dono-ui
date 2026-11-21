@@ -21,6 +21,7 @@ import { getPledge, reconcileCheckoutNotification } from '../../services/checkou
 import { createDonationPublisher } from '../../services/webhooks/donationPublisher.js';
 import type { TiltifyMessage } from '../../services/webhooks/tiltifyPayload.js';
 import { sendMagicLink } from '../../services/email.js';
+import { readDonationAccountingTx } from '../../services/poolAccounting.js';
 import { drainDestination } from '../../services/webhooks/dispatcher.js';
 import {
   createTestChannel,
@@ -235,7 +236,7 @@ describe('Donation intake on SQLite', () => {
     },
   );
   it.each(['own-list', 'primary-list', 'closest-own', 'closest-shared', 'none'] as const)(
-    'routes an unselected goal Pool through %s, never defaults polls, and permits overshoot',
+    'caps an unselected goal Pool at each target through %s, never defaults polls, and leaves the rest Unused',
     async (stage) => {
       const email = `${crypto.randomUUID()}@example.com`;
       emails.push(email);
@@ -326,20 +327,28 @@ describe('Donation intake on SQLite', () => {
       if ('duplicate' in result) throw new Error('Unexpected duplicate');
       const rows = await prisma.fundContribution.findMany({
         where: { donation_id: result.donation.id },
+        orderBy: { amount_cents: 'asc' },
       });
-      if (stage === 'none') expect(rows).toEqual([]);
-      else {
-        expect(rows).toMatchObject([
-          {
-            amount_cents: 1000,
-            source: 'auto',
-            goal_id: stage === 'primary-list' || stage === 'closest-shared' ? shared.id : own.id,
-          },
-        ]);
-        expect(await prisma.fundGoal.findUnique({ where: { id: rows[0]!.goal_id } })).toMatchObject(
-          { current_cents: 1000, is_complete: true },
+      expect(rows).toMatchObject(
+        stage === 'none'
+          ? []
+          : stage === 'closest-shared'
+            ? [{ amount_cents: 100, source: 'auto', goal_id: shared.id }]
+            : [
+                { amount_cents: 100, source: 'auto', goal_id: shared.id },
+                { amount_cents: 200, source: 'auto', goal_id: own.id },
+              ],
+      );
+      // #201: no goal is funded past its target; the remainder stays Unused
+      // pool money and the donation's Money total does not change.
+      for (const goalId of stage === 'none' ? [] : [own.id, shared.id])
+        expect(await prisma.fundGoal.findUnique({ where: { id: goalId } })).toMatchObject(
+          goalId === own.id && stage === 'closest-shared'
+            ? { current_cents: 0, is_complete: false }
+            : { current_cents: goalId === own.id ? 200 : 100, is_complete: true },
         );
-      }
+      expect(result.donation).toMatchObject({ amount_cents: 1000, pledge_amount_cents: 1000 });
+      expect(rows.reduce((sum, row) => sum + row.amount_cents, 0)).toBeLessThan(1000);
       expect(await prisma.pollVote.count({ where: { donation_id: result.donation.id } })).toBe(0);
       expect(await prisma.donor.findUnique({ where: { id: result.donor.id } })).toMatchObject({
         balance_remaining: 0,
@@ -591,6 +600,163 @@ describe('Donation intake on SQLite', () => {
     expect(await prisma.fundGoal.findUnique({ where: { id: b.id } })).toMatchObject({
       current_cents: 667,
     });
+  });
+
+  it('caps a donor-directed goal at its target and continues into the other goal selections', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const small = await prisma.fundGoal.create({
+      data: {
+        event_id: channel.event_id,
+        title: 'Small',
+        channel_id: channel.id,
+        target_cents: 300,
+      },
+    });
+    goals.push(small.id);
+    const large = await prisma.fundGoal.create({
+      data: {
+        event_id: channel.event_id,
+        title: 'Large',
+        channel_id: channel.id,
+        target_cents: 10000,
+      },
+    });
+    goals.push(large.id);
+    const selections = [
+      { kind: 'GOAL' as const, target_id: small.id, amount_cents: 600, insertion_order: 0 },
+      { kind: 'GOAL' as const, target_id: large.id, amount_cents: 400, insertion_order: 1 },
+    ];
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channel.id,
+      items: selections,
+      plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+    });
+    pledges.push(pledge_token);
+    const externalId = crypto.randomUUID();
+    await prisma.pendingPledge.update({
+      where: { pledge_token },
+      data: { checkout_session_id: externalId },
+    });
+    const result = await intakeDonation({
+      source: 'stripe',
+      externalId,
+      email,
+      donorName: 'Reader',
+      amountCents: 1000,
+      pledgeToken: pledge_token,
+    });
+    if ('duplicate' in result) throw new Error('Unexpected duplicate');
+    const rows = await prisma.fundContribution.findMany({
+      where: { donation_id: result.donation.id },
+      orderBy: { amount_cents: 'desc' },
+    });
+    const placedOn = (goalId: string) =>
+      rows.filter((row) => row.goal_id === goalId).reduce((sum, row) => sum + row.amount_cents, 0);
+    expect(placedOn(small.id)).toBe(300);
+    expect(placedOn(large.id)).toBe(700);
+    // Only the donor's original cents keep the donor mark; the continuation is auto.
+    expect(
+      rows
+        .filter((row) => row.source === 'donor')
+        .map((row) => row.amount_cents)
+        .sort((a, b) => a - b),
+    ).toEqual([300, 400]);
+    expect(rows.filter((row) => row.source === 'auto').map((row) => row.amount_cents)).toEqual([
+      300,
+    ]);
+    expect(await prisma.fundGoal.findUnique({ where: { id: small.id } })).toMatchObject({
+      current_cents: 300,
+      is_complete: true,
+    });
+    expect(await prisma.fundGoal.findUnique({ where: { id: large.id } })).toMatchObject({
+      current_cents: 700,
+      is_complete: false,
+    });
+    expect(result.donation).toMatchObject({ amount_cents: 1000, pledge_amount_cents: 1000 });
+  });
+
+  it('re-resolves a goal that filled between review and paid fulfillment', async () => {
+    const email = `${crypto.randomUUID()}@example.com`;
+    emails.push(email);
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const reviewed = await prisma.fundGoal.create({
+      data: {
+        event_id: channel.event_id,
+        title: 'Reviewed',
+        channel_id: channel.id,
+        target_cents: 1000,
+      },
+    });
+    goals.push(reviewed.id);
+    const next = await prisma.fundGoal.create({
+      data: {
+        event_id: channel.event_id,
+        title: 'Next',
+        channel_id: channel.id,
+        target_cents: 500,
+      },
+    });
+    goals.push(next.id);
+    const selections = [
+      { kind: 'GOAL' as const, target_id: reviewed.id, amount_cents: 1000, insertion_order: 0 },
+    ];
+    const { pledge_token } = await createPooledPledge({
+      draft_id: crypto.randomUUID(),
+      pledge_amount_cents: 1000,
+      channel_id: channel.id,
+      items: selections,
+      plan: planPledge({ pledge_amount_cents: 1000, selections, available_wallet_cents: null }),
+    });
+    pledges.push(pledge_token);
+    // A concurrent donation fills most of the reviewed goal after confirmation.
+    await prisma.fundGoal.update({
+      where: { id: reviewed.id },
+      data: { current_cents: 900 },
+    });
+    const externalId = crypto.randomUUID();
+    await prisma.pendingPledge.update({
+      where: { pledge_token },
+      data: { checkout_session_id: externalId },
+    });
+    const result = await intakeDonation({
+      source: 'stripe',
+      externalId,
+      email,
+      donorName: 'Reader',
+      amountCents: 1000,
+      pledgeToken: pledge_token,
+    });
+    if ('duplicate' in result) throw new Error('Unexpected duplicate');
+    const rows = await prisma.fundContribution.findMany({
+      where: { donation_id: result.donation.id },
+    });
+    expect(new Map(rows.map((row) => [row.goal_id, row])).get(reviewed.id)).toMatchObject({
+      amount_cents: 100,
+      source: 'donor',
+    });
+    expect(new Map(rows.map((row) => [row.goal_id, row])).get(next.id)).toMatchObject({
+      amount_cents: 500,
+      source: 'auto',
+    });
+    expect(await prisma.fundGoal.findUnique({ where: { id: reviewed.id } })).toMatchObject({
+      current_cents: 1000,
+      is_complete: true,
+    });
+    expect(await prisma.fundGoal.findUnique({ where: { id: next.id } })).toMatchObject({
+      current_cents: 500,
+      is_complete: true,
+    });
+    const accounting = await prisma.$transaction((tx) =>
+      readDonationAccountingTx(tx, result.donation.id),
+    );
+    expect(accounting.pools.goal.unused_cents).toBe(400);
+    expect(result.donation).toMatchObject({ amount_cents: 1000, pledge_amount_cents: 1000 });
   });
 
   it('fulfills independent $10 Pools with $6 new money, separate $2 shipping and zero Wallet credit', async () => {

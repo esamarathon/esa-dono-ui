@@ -1,19 +1,26 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
+  "baseBranches": ["dev"],
   "schedule": ["before 5am on Monday"],
   "timezone": "Europe/Stockholm",
-  "labels": ["dependencies"],
-  "hostRules": [
-    {
-      "hostType": "github",
-      "matchHost": "github.com",
-      "token": "{{ env.RENOVATE_TOKEN }}"
-    }
-  ],
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "enabled": false
+  },
+  "osvVulnerabilityAlerts": true,
+  "rebaseWhen": "behind-base-branch",
+  "platformAutomerge": true,
+  "labels": ["dependencies", "no-changelog"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
   "packageRules": [
     {
-      "matchUpdateTypes": ["patch"],
+      "description": "Patch/digest/pin updates: one grouped, automergeable PR per run",
+      "matchUpdateTypes": ["patch", "digest", "pin"],
+      "groupName": "patch dependencies",
       "automerge": true
     }
   ]

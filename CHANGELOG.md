@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, a minor version can contain
 breaking changes.
 
+## [Unreleased]
+
+## [0.5.0] — 2026-11-21
+
+### Changed
+
+- **Goals** (#201, #252): every goal write is capped at the goal's live remaining
+  target amount. The surplus follows a waterfall: the donor's other goal
+  selections in proportion, the Default goal list, the primary Channel's list,
+  the eligible goal closest to completion, then Unused pool money. Pool-credit
+  fulfillment caps at the pick (the remainder stays credit), moderator
+  assignment caps at the target (the remainder stays Unused pool money), and
+  Wallet spend caps so the remainder never leaves the wallet.
+
+### Fixed
+
+- Release machinery: `tag-version` promotes the release images itself on main,
+  resolves the release tag locally before promotion, and publishes the GitHub
+  Release for the version tag (#244, #246, #248).
+- Frontend image: bump the libxml2 floor to 2.13.9-r3 (CVE-2026-86144, HIGH).
+
 ## [0.4.0] — 2026-11-16
 
 ### Added

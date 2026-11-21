@@ -918,7 +918,7 @@ it('source-local native accounting projects 600/400, not two whole entitlements'
   ]);
   expect(b.allocations.reward).toMatchObject([{ id: result.claim_ids[0], amount_cents: 400 }]);
 });
-it('cross-Channel poll cents, shared rewards and goal overshoot split sources; reversing restores original grants only', async () => {
+it('caps a goal credit pick at its target and keeps the remainder as credit; reversing restores original grants only', async () => {
   const f = await fixture({
     sourceGrants: [600, 400],
     rewardPrice: 1000,
@@ -943,8 +943,8 @@ it('cross-Channel poll cents, shared rewards and goal overshoot split sources; r
   const result = await withWebhooks((tx, _emit, publisher) =>
     applyPoolCreditTx(tx, f.donor.id, f.event.id, request, publisher),
   );
-  expect(result).toMatchObject({ spent_cents: { reward: 0, poll: 601, goal: 1000 } });
-  expect(await f.read()).toMatchObject({ available_cents: { reward: 1000, poll: 399, goal: 0 } });
+  expect(result).toMatchObject({ spent_cents: { reward: 0, poll: 601, goal: 1 } });
+  expect(await f.read()).toMatchObject({ available_cents: { reward: 1000, poll: 399, goal: 999 } });
   await withWebhooks(async (tx, _emit, publisher) => {
     for (const id of result.vote_ids)
       await reverseSpendTx(tx, f.donor.id, 'vote', id, 'admin', publisher);
@@ -954,6 +954,38 @@ it('cross-Channel poll cents, shared rewards and goal overshoot split sources; r
   expect(await f.read()).toMatchObject({ available_cents: { poll: 1000, goal: 1000 } });
   expect(await prisma.poolCredit.count({ where: { donation: { donor_id: f.donor.id } } })).toBe(6);
 });
+it('caps a goal that filled after review instead of a changed-state 409, keeping the rest as credit', async () => {
+  const f = await fixture({
+    sourceGrants: [600, 400],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 0,
+    reviewedRewardCents: 1000,
+  });
+  const { goal } = await extraCredits(f, { goalTarget: 500 });
+  f.request.reviewed_credit_cents = { reward: 1000, poll: 1000, goal: 1000 };
+  f.request.selections = [
+    { kind: 'GOAL', target_id: goal.id, amount_cents: 1000 },
+  ] as unknown as typeof f.request.selections;
+  // Another contribution filled $400 of the goal between review and apply.
+  await prisma.fundGoal.update({ where: { id: goal.id }, data: { current_cents: 400 } });
+  const result = await f.apply();
+  expect(result.spent_cents).toMatchObject({ goal: 100 });
+  expect(await prisma.fundGoal.findUnique({ where: { id: goal.id } })).toMatchObject({
+    current_cents: 500,
+    is_complete: true,
+  });
+  // The unspent $900 stays credit; it is never auto-allocated.
+  expect(await f.read()).toMatchObject({ available_cents: { goal: 900 } });
+  expect(
+    (
+      await prisma.fundContribution.findMany({
+        where: { goal_id: goal.id, reversed_at: null, source: { in: ['donor', 'auto'] } },
+      })
+    ).reduce((sum, row) => sum + row.amount_cents, 0),
+  ).toBe(100);
+});
+
 it('A600+B400 buys one C1000 entitlement, stock once, and reversal restores original grants repeatedly', async () => {
   const f = await fixture({
     sourceGrants: [600, 400],
