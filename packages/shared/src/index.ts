@@ -3,6 +3,7 @@ export * from './stripe.js';
 export * from './claim.js';
 export * from './auction.js';
 export * from './pledgePlan.js';
+export * from './goalCap.js';
 export * from './poolCredit.js';
 export * from './incentiveScope.js';
 export * from './feedback.js';

@@ -396,6 +396,87 @@ export async function proposeCustomEntryTx(
   return { cost: cents, option, entry, status: optionStatus };
 }
 
+/** Live money a goal can still take. Never negative, never from a stale flag (#201). */
+export function goalRemainingCents(goal: { target_cents: number; current_cents: number }) {
+  return Math.max(0, goal.target_cents - goal.current_cents);
+}
+
+export interface GoalSplit {
+  donor: number;
+  auto: number;
+}
+
+/**
+ * Write one goal contribution with an exact donor/auto split. The amount is
+ * capped at the goal's live remaining need inside this write, so no caller can
+ * overfill a goal (#201). Returns the cents actually placed; money that did not
+ * fit stays with the caller (Unused pool money, Pool credit, or the chain).
+ */
+export async function contributeGoalSplitTx(
+  tx: Tx,
+  donorId: string,
+  goalId: string,
+  split: GoalSplit,
+  donationId: string | null = null,
+  pool?: SpendFunding,
+) {
+  const cents = split.donor + split.auto;
+  if (
+    !Number.isSafeInteger(split.donor) ||
+    !Number.isSafeInteger(split.auto) ||
+    split.donor < 0 ||
+    split.auto < 0
+  )
+    throw httpError(400, 'Invalid goal allocation');
+  if (cents === 0) return { cost: 0, contribution_ids: [] };
+  validateCents(cents, pool);
+  const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
+  // Credit batches validate the WHOLE selection against open goals before
+  // mutation. An earlier source component may complete this same selection.
+  if (!goal || !goal.is_active || (goal.is_complete && pool?.mode !== 'credit'))
+    throw httpError(404, 'Goal not found, inactive, or complete');
+  const placed = Math.min(cents, goalRemainingCents(goal));
+  if (placed === 0) return { cost: 0, contribution_ids: [] };
+  // Donor-chosen money is placed before automatic money; the dropped auto money
+  // is returned to the pool, where the chain decides where it continues.
+  const auto = Math.max(0, placed - Math.min(split.donor, placed));
+  const funding: SpendFunding | undefined =
+    pool?.mode === 'credit'
+      ? { ...pool, funding: truncateFunding(pool.funding, placed) }
+      : pool && { ...pool, auto_cents: auto };
+  await fundSpend(tx, donorId, donationId, 'goal', placed, goal, funding);
+  const contributionIds: string[] = [];
+  for (const row of allocationRows(placed, funding)) {
+    const contribution = await tx.fundContribution.create({
+      data: { ...row, goal_id: goal.id, donor_id: donorId, donation_id: donationId },
+    });
+    contributionIds.push(contribution.id);
+    await linkCreditTx(tx, funding, { contribution_id: contribution.id });
+  }
+  await tx.fundGoal.update({
+    where: { id: goal.id },
+    data: {
+      current_cents: { increment: placed },
+      is_complete: goal.current_cents + placed >= goal.target_cents,
+    },
+  });
+  return { cost: placed, contribution_ids: contributionIds };
+}
+
+/** Oldest-first credit is drawn by the caller; drop the tail that this write cannot take. */
+function truncateFunding(funding: CreditSpend['funding'], cents: number) {
+  const rows: CreditSpend['funding'] = [];
+  let left = cents;
+  for (const component of funding) {
+    if (left <= 0) break;
+    const amount = Math.min(left, component.amount_cents);
+    rows.push({ ...component, amount_cents: amount });
+    left -= amount;
+  }
+  return rows;
+}
+
+/** A pool or Wallet goal spend, split by its optional automatic part. */
 export async function contributeGoalTx(
   tx: Tx,
   donorId: string,
@@ -404,27 +485,13 @@ export async function contributeGoalTx(
   donationId: string | null = null,
   pool?: SpendFunding,
 ) {
-  validateCents(cents, pool);
-  const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
-  // Credit batches validate the WHOLE selection against open goals before
-  // mutation. An earlier source component may complete this same selection.
-  if (!goal || !goal.is_active || (goal.is_complete && pool?.mode !== 'credit'))
-    throw httpError(404, 'Goal not found, inactive, or complete');
-  await fundSpend(tx, donorId, donationId, 'goal', cents, goal, pool);
-  const contributionIds: string[] = [];
-  for (const row of allocationRows(cents, pool)) {
-    const contribution = await tx.fundContribution.create({
-      data: { ...row, goal_id: goal.id, donor_id: donorId, donation_id: donationId },
-    });
-    contributionIds.push(contribution.id);
-    await linkCreditTx(tx, pool, { contribution_id: contribution.id });
-  }
-  await tx.fundGoal.update({
-    where: { id: goal.id },
-    data: {
-      current_cents: { increment: cents },
-      is_complete: goal.current_cents + cents >= goal.target_cents,
-    },
-  });
-  return { cost: cents, contribution_ids: contributionIds };
+  const auto = pool?.auto_cents ?? 0;
+  return contributeGoalSplitTx(
+    tx,
+    donorId,
+    goalId,
+    { donor: cents - auto, auto },
+    donationId,
+    pool,
+  );
 }

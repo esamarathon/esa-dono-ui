@@ -18,7 +18,7 @@ export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
     channels.map(async (channel) => ({
       ...channelResponse(channel),
       default_goal: await goal(await defaultGoal(tx, channel.id)),
-      fallback_goal: await goal(await defaultGoal(tx, channel.id, true)),
+      fallback_goal: await goal(await defaultGoal(tx, channel.id, { skipOwnList: true })),
       has_eligible_default: channel.default_goals.some(
         ({ goal }) => goal.is_active && !goal.is_complete && isAvailableOn(goal, channel),
       ),

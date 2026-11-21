@@ -655,7 +655,9 @@ paths:
       summary: Contribute to a fund goal
       description: >-
         Spends Wallet credit on one Channel (ADR-0012). The goal must be available on
-        `channel_id`: owned by that Channel, or shared by the Channel's Event.
+        `channel_id`: owned by that Channel, or shared by the Channel's Event. A goal
+        takes at most its live remaining need (#201); money that does not fit stays in
+        the wallet.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -676,7 +678,17 @@ paths:
                 amount_cents: { type: integer, minimum: 100 }
       responses:
         '200':
-          description: Contribution recorded
+          description: Contribution recorded, capped at the goal's remaining need
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, cost]
+                properties:
+                  success: { type: boolean }
+                  cost:
+                    type: integer
+                    description: Cents actually placed. 0 means the goal already reached its target; the wallet is not debited.
         '400':
           description: Validation error / insufficient balance; `channel_id is required`; or the goal is not available on this Channel (nothing is debited or written)
         '404':
@@ -1213,7 +1225,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [goal]
+                required: [goal, chain]
                 properties:
                   goal:
                     type: object
@@ -1222,6 +1234,17 @@ paths:
                     properties:
                       id: { type: string }
                       title: { type: string }
+                  chain:
+                    type: array
+                    maxItems: 5
+                    description: Up to five goals that would take goal-Pool money, in resolver order, each with its live remaining need.
+                    items:
+                      type: object
+                      required: [id, title, remaining_cents]
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        remaining_cents: { type: integer, minimum: 0 }
         '404':
           description: Unknown or inactive Channel
         '429':
@@ -4601,7 +4624,7 @@ paths:
           }
       responses:
         '200':
-          description: All category unused cents and eligible targets; positive cents, overshoot and no age limit
+          description: All category unused cents and eligible targets; positive cents, goals capped at their remaining need, no age limit
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UnusedPicker' }
