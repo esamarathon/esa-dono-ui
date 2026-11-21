@@ -38,6 +38,9 @@ The seed script creates:
 - **Moderator account** (`moderator@localhost`) with role `MODERATOR`
 - **Admin account** (`admin@localhost`) with role `ADMIN`
 - **Banner** at the top of the app displaying the moderator and admin API keys
+- **Default feature flags** (`feedback`, `auctions`), installed disabled so they
+  show up under `/admin/feature-flags`; re-seeding preserves an operator's
+  toggles (see `docs/admin-event-setup.md` § Feature flags)
 - One active Event and an active primary Channel. Newly created Default goal lists
   are empty; re-seeding does not overwrite an operator's ordered list.
 
