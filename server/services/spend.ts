@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import {
+  DEFAULT_MAX_ENTRY_CHARS,
   MIN_SPEND_CENTS,
   claimAnswerError,
   isAvailableOn,
@@ -339,8 +340,8 @@ export async function customEntryTextErrorTx(
   text: string,
   maxEntryChars: number | null,
 ): Promise<string | null> {
-  if (maxEntryChars && text.length > maxEntryChars)
-    return `Entry exceeds maximum of ${maxEntryChars} characters`;
+  const effectiveMax = maxEntryChars ?? DEFAULT_MAX_ENTRY_CHARS;
+  if (text.length > effectiveMax) return `Entry exceeds maximum of ${effectiveMax} characters`;
   const blockedWords = await tx.blockedWord.findMany();
   const words = textWordTokens(text);
   for (const blocked of blockedWords) {

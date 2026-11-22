@@ -5,7 +5,7 @@ import { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '@dono/shared';
 
 export { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS };
 
-/** Prefilled amount for a new poll vote / custom write-in input. */
+/** Default amount when a poll share link prefills a vote without ?amount= (#76). */
 export const DEFAULT_VOTE_AMOUNT = '1.00';
 
 /** Prefilled amount for a new fund-goal contribution input. */

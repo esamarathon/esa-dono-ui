@@ -382,6 +382,61 @@ describe('proposeCustomEntryTx', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
   }, 10000);
 
+  it('defaults to a 40-character cap when max_entry_chars is null (#76)', async () => {
+    const donor = await makeDonor(1000);
+    const poll = await prisma.poll.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Default cap poll',
+        is_active: true,
+        allow_custom_entries: true,
+      },
+    });
+
+    try {
+      const result = await prisma.$transaction((tx) =>
+        proposeCustomEntryTx(tx, donor.id, poll.id, 'x'.repeat(40), 500),
+      );
+      expect(result.status).toBe('ACTIVE');
+
+      await expect(
+        prisma.$transaction((tx) =>
+          proposeCustomEntryTx(tx, donor.id, poll.id, 'x'.repeat(41), 500),
+        ),
+      ).rejects.toThrow('Entry exceeds maximum of 40 characters');
+    } finally {
+      await cleanup(donor.id, poll.id);
+    }
+  }, 10000);
+
+  it('lets an explicit max_entry_chars override the 40-character default (#76)', async () => {
+    const donor = await makeDonor(1000);
+    const poll = await prisma.poll.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Longer cap poll',
+        is_active: true,
+        allow_custom_entries: true,
+        max_entry_chars: 50,
+      },
+    });
+
+    try {
+      const result = await prisma.$transaction((tx) =>
+        proposeCustomEntryTx(tx, donor.id, poll.id, 'x'.repeat(45), 500),
+      );
+      expect(result.status).toBe('ACTIVE');
+
+      await expect(
+        prisma.$transaction((tx) =>
+          proposeCustomEntryTx(tx, donor.id, poll.id, 'x'.repeat(51), 500),
+        ),
+      ).rejects.toThrow('Entry exceeds maximum of 50 characters');
+    } finally {
+      await cleanup(donor.id, poll.id);
+    }
+  }, 10000);
+
   it('rejects blocked words', async () => {
     const donor = await makeDonor(1000);
     const poll = await prisma.poll.create({
