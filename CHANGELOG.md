@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-21
+
 ### Changed
 
 - **Poll flow redesign** (#76): poll option amounts start empty (placeholder `0.00`,
