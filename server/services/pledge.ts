@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { Prisma } from '@prisma/client';
 import {
   MIN_SPEND_CENTS,
+  claimAnswerError,
   planPledge,
   type PledgePlan,
   type PledgeItemKind,
@@ -225,6 +226,9 @@ export async function createPledge(input: CreatePledgeInput) {
                   Math.max(0, reward.quantity_total - reward.quantity_claimed - already),
                 );
           if (quantity === 0) continue;
+          // A labeled CUSTOM reward requires its claim answer (#78), at staging.
+          const answerError = claimAnswerError(item.data, reward);
+          if (answerError) throw httpError(400, answerError);
           quantities.set(reward.id, already + quantity);
           selection = {
             ...selection,

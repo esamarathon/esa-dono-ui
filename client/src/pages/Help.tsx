@@ -1,4 +1,5 @@
 import Card from '../components/Card';
+import { REWARD_TYPE_DEFINITIONS } from '../lib/rewardTypeDefinitions';
 
 function Section({
   title,
@@ -26,7 +27,7 @@ export default function Help() {
     <div className="max-w-2xl mx-auto p-8">
       <h1 className="font-display text-4xl uppercase mb-6">help</h1>
 
-      <Section title="incentive types & categories">
+      <Section title="incentive types & categories" id="reward-types">
         <p>
           The contribute flow is organized into three categories: <Term>rewards</Term>,{' '}
           <Term>polls</Term>, and <Term>fund goals</Term>.
@@ -37,17 +38,16 @@ export default function Help() {
         </p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <Term>digital</Term> — delivered electronically (a code, art, etc.); no shipping.
+            <Term>digital</Term> — {REWARD_TYPE_DEFINITIONS.DIGITAL}.
           </li>
           <li>
-            <Term>physical</Term> — a shipped item; shipping is arranged through Stripe, and this
-            platform never collects or stores your shipping address.
+            <Term>physical</Term> — {REWARD_TYPE_DEFINITIONS.PHYSICAL}.
           </li>
           <li>
-            <Term>shoutout</Term> — a shoutout, with an optional message you can attach.
+            <Term>shoutout</Term> — {REWARD_TYPE_DEFINITIONS.SHOUTOUT}.
           </li>
           <li>
-            <Term>custom</Term> — anything else, described by its own label.
+            <Term>custom</Term> — {REWARD_TYPE_DEFINITIONS.CUSTOM}.
           </li>
         </ul>
         <p>Rewards may have a limited quantity and can sell out.</p>

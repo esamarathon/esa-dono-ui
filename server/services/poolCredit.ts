@@ -1,11 +1,12 @@
 import type { Prisma } from '@prisma/client';
-import type {
-  CreditAmounts,
-  CreditApplyRequest,
-  CreditApplyResult,
-  CreditEvent,
-  CreditEventSummary,
-  PoolCategory,
+import {
+  claimAnswerError,
+  type CreditAmounts,
+  type CreditApplyRequest,
+  type CreditApplyResult,
+  type CreditEvent,
+  type CreditEventSummary,
+  type PoolCategory,
 } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
 import {
@@ -112,6 +113,7 @@ export async function readPoolCreditEventTx(
         channel,
         cost_cents: true,
         type: true,
+        custom_type_label: true,
         quantity_total: true,
         quantity_claimed: true,
       },
@@ -289,6 +291,9 @@ export async function applyPoolCreditTx(
         (reward.remaining !== null && pick.quantity > reward.remaining)
       )
         throw httpError(409, 'Reward price, type or stock changed; refresh and review');
+      // A labeled CUSTOM reward requires its claim answer (#78), before any draw.
+      const answerError = claimAnswerError(pick.claim_data, reward);
+      if (answerError) throw httpError(400, answerError);
       spent.reward += pick.quantity * pick.unit_price_cents;
     } else if (pick.kind === 'POLL_VOTE' || pick.kind === 'GOAL') {
       if (!Number.isSafeInteger(pick.amount_cents) || pick.amount_cents <= 0)
@@ -364,11 +369,19 @@ export async function applyPoolCreditTx(
     if (pick.kind === 'REWARD') {
       for (let unit = 0; unit < pick.quantity; unit++) {
         const funded = mode(draw('reward', pick.unit_price_cents));
-        const claim = await claimRewardTx(tx, donorId, pick.target_id, null, 1, null, {
-          ...funded,
-          unit_price_cents: pick.unit_price_cents,
-          confirmed_reward_type: pick.reward_type,
-        });
+        const claim = await claimRewardTx(
+          tx,
+          donorId,
+          pick.target_id,
+          pick.claim_data ?? null,
+          1,
+          null,
+          {
+            ...funded,
+            unit_price_cents: pick.unit_price_cents,
+            confirmed_reward_type: pick.reward_type,
+          },
+        );
         result.claim_ids.push(...claim.claim_ids);
       }
     } else {

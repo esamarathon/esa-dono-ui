@@ -188,6 +188,19 @@ one of the three pledge Pools. Leave the flag disabled if auctions are not used.
 Staff roles, feature flags, blocked words and the broadcast banner are site-wide.
 Check the effect on other Events before changing them.
 
+### Feature flags
+
+Flags are site-wide and toggled under **feature flags** (`/admin/feature-flags`).
+The seed installs the default flags below, disabled; re-seeding keeps your
+toggles. A flag that does not exist in the list behaves exactly like a disabled
+one. Flags created in the admin UI do nothing until code checks them — only the
+flags listed here have an effect.
+
+| Flag       | Use and purpose                                                                                                                                                                                                                                                                  | Default  |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `feedback` | Floating donor widget that captures the page and sends a screenshot + free-text message to the team (staff email and/or Discord, per `FEEDBACK_RECIPIENTS` / `DISCORD_FEEDBACK_WEBHOOK_URL`). Enable only when someone monitors the queue; submissions otherwise 404 for donors. | Disabled |
+| `auctions` | Silent auctions: donor bidding, closing items and winner payment (`/admin/auctions`). Auctions are **not** one of the three pledge Pools. Leave disabled when the Event has no auctions.                                                                                         | Disabled |
+
 ## 6. Connect the donation reader and stream overlay
 
 Skip this section only if the Event will not use external stream tools.

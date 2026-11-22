@@ -404,4 +404,152 @@ describe('proposeCustomEntryTx', () => {
     await prisma.poll.delete({ where: { id: poll.id } });
     await prisma.donor.delete({ where: { id: donor.id } });
   }, 10000);
+
+  it('rejects a blank claim answer on a labeled CUSTOM reward with 400, without taking funds or stock (#78)', async () => {
+    const donor = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 1000,
+        quantity_total: 2,
+      },
+    });
+    try {
+      for (const claimData of [undefined, null, {}, { data: '   ' }]) {
+        await expect(
+          prisma.$transaction((tx) => claimRewardTx(tx, donor.id, reward.id, claimData)),
+        ).rejects.toMatchObject({ status: 400, message: 'answer is required' });
+      }
+      expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
+        balance_remaining: 5000,
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+      expect(await prisma.reward.findUnique({ where: { id: reward.id } })).toMatchObject({
+        quantity_claimed: 0,
+      });
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
+  it('stores a supplied claim answer on a labeled CUSTOM claim (#78)', async () => {
+    const donor = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 1000,
+      },
+    });
+    try {
+      await prisma.$transaction((tx) =>
+        claimRewardTx(tx, donor.id, reward.id, { data: 'Outer Wilds' }),
+      );
+      expect(await prisma.rewardClaim.findMany({ where: { donor_id: donor.id } })).toMatchObject([
+        { claim_data: '{"data":"Outer Wilds"}', amount_cents: 1000 },
+      ]);
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
+  it('accepts blank claim answers when the Custom Label is empty and for shoutout/digital/physical rewards (#78)', async () => {
+    const donor = await makeDonor(5000);
+    const custom = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Optional answer',
+        type: 'CUSTOM',
+        cost_cents: 500,
+      },
+    });
+    const shoutout = await prisma.reward.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Shoutout', type: 'SHOUTOUT', cost_cents: 500 },
+    });
+    const digital = await prisma.reward.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Code', type: 'DIGITAL', cost_cents: 500 },
+    });
+    const physical = await prisma.reward.create({
+      data: { event_id: DEFAULT_EVENT_ID, title: 'Shirt', type: 'PHYSICAL', cost_cents: 500 },
+    });
+    const donation = await prisma.donation.create({
+      data: {
+        external_id: `answer-${Math.random()}`,
+        event_id: DEFAULT_EVENT_ID,
+        donor_id: donor.id,
+        amount_cents: 500,
+        pledge_amount_cents: 500,
+      },
+    });
+    try {
+      await prisma.$transaction(async (tx) => {
+        await claimRewardTx(tx, donor.id, custom.id, {});
+        await claimRewardTx(tx, donor.id, shoutout.id, {});
+        await claimRewardTx(tx, donor.id, digital.id, {});
+        await claimRewardTx(tx, donor.id, physical.id, {}, 1, donation.id, {
+          mode: 'pool',
+          source: 'donor',
+          unit_price_cents: 500,
+          confirmed_reward_type: 'PHYSICAL',
+        });
+      });
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(4);
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.donation.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.deleteMany({
+        where: { id: { in: [custom.id, shoutout.id, digital.id, physical.id] } },
+      });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
+  it('caps claim answers at 200 characters, optional or required (#78)', async () => {
+    const donor = await makeDonor(5000);
+    const required = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 1000,
+      },
+    });
+    const optional = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Optional answer',
+        type: 'CUSTOM',
+        cost_cents: 1000,
+      },
+    });
+    try {
+      await prisma.$transaction((tx) =>
+        claimRewardTx(tx, donor.id, required.id, { data: 'x'.repeat(200) }),
+      );
+      for (const reward of [required, optional]) {
+        await expect(
+          prisma.$transaction((tx) =>
+            claimRewardTx(tx, donor.id, reward.id, { data: 'x'.repeat(201) }),
+          ),
+        ).rejects.toMatchObject({
+          status: 400,
+          message: 'answer exceeds maximum of 200 characters',
+        });
+      }
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.deleteMany({ where: { id: { in: [required.id, optional.id] } } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
 });

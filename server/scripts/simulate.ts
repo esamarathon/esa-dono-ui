@@ -85,6 +85,8 @@ function mockCatalog(): Awaited<ReturnType<typeof discover>> {
     channelOf: {},
     pledgeableRewards: ['r1', 'r2', 'r3'],
     rewardCostCents: { r1: 500, r2: 1000, r3: 1500 },
+    rewardType: { r1: 'DIGITAL', r2: 'SHOUTOUT', r3: 'CUSTOM' },
+    rewardCustomLabel: { r3: null },
     resolve: {},
   };
 }

@@ -7,6 +7,23 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-21
+
+### Added
+
+- **Feature flags**: the seed installs the default flags (`feedback`, `auctions`)
+  disabled, so they are visible and toggleable under `/admin/feature-flags`;
+  re-seeding preserves operator toggles. Every flag's use and purpose is now
+  documented in `docs/admin-event-setup.md` § Feature flags.
+- **Reward claim required fields and keyword definitions** (#78): a CUSTOM reward whose
+  staff set a Custom Label requires a non-blank claim answer (200-character cap, live
+  counter), enforced inline in the reward modal and with a 400 at every claim entry
+  point (pledge staging, direct claim, Pool-credit spend). Pool-credit reward picks
+  carry the answer per claim (`CreditSelection.claim_data`). The reward card's type
+  badge shows the shared digital/physical/shoutout/custom definitions with a "more in
+  Help" link; the definitions live in one client constant shared with the Help page.
+  The simulator sends answers for labeled CUSTOM rewards.
+
 ## [0.6.0] — 2026-11-21
 
 ### Added

@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.6.0'
+  version: '0.7.0'
 
 servers:
   - url: /api
@@ -527,7 +527,13 @@ paths:
                 channel_id:
                   type: string
                   description: Active Channel the donor spends on. Required.
-                claim_data: {}
+                claim_data:
+                  description: >-
+                    The claim answer, keyed by the collecting client (e.g. the answer
+                    field or the shoutout message). A CUSTOM reward whose Custom Label
+                    (`custom_type_label`) is set requires a non-blank answer; the answer
+                    is capped at 200 characters. The same answer is stored on every
+                    unit row of a multi-unit claim.
                 quantity:
                   type: integer
                   minimum: 1
@@ -537,7 +543,7 @@ paths:
         '200':
           description: Claim created
         '400':
-          description: Insufficient balance / sold out / physical reward; `channel_id is required`; or the reward is not available on this Channel (nothing is debited or written)
+          description: Insufficient balance / sold out / physical reward; blank claim answer on a labeled CUSTOM reward, or a claim answer over 200 characters; `channel_id is required`; or the reward is not available on this Channel (nothing is debited or written)
         '404':
           description: Reward not found or inactive; Channel not found or inactive
         '401':
@@ -5222,6 +5228,12 @@ components:
                           cost_cents: { type: integer, minimum: 1 }
                           type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
                           remaining: { type: integer, minimum: 1, nullable: true }
+                          custom_type_label:
+                            type: string
+                            nullable: true
+                            description: >-
+                              The CUSTOM answer field's label; when set, the claim
+                              answer is required (maximum 200 characters).
                 polls:
                   type: array
                   items:
@@ -5324,6 +5336,10 @@ components:
             quantity: { type: integer, minimum: 1, maximum: 1000 }
             unit_price_cents: { type: integer, minimum: 1 }
             reward_type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
+            claim_data:
+              description: >-
+                The claim answer for this pick, required when the reward's Custom Label
+                is set (maximum 200 characters); shared across whole units.
         - type: object
           required: [kind, target_id, poll_id, amount_cents]
           properties:

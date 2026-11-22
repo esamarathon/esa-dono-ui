@@ -39,6 +39,9 @@ function creditScenario({
   rewardPriceCents,
   rewardStock,
   pollHistoryCents,
+  rewardType = 'DIGITAL',
+  customTypeLabel = null,
+  rewardTitle = 'Digital reward',
 }: Readonly<{
   walletCents: number;
   outstandingCents: CreditAmounts;
@@ -46,6 +49,9 @@ function creditScenario({
   rewardPriceCents: number;
   rewardStock: number;
   pollHistoryCents: number;
+  rewardType?: string;
+  customTypeLabel?: string | null;
+  rewardTitle?: string;
 }>) {
   const event: CreditEvent = {
     event: { id: 'e1', name: 'ESA Summer', slug: 'summer', ended_at: null },
@@ -56,10 +62,11 @@ function creditScenario({
       rewards: [
         {
           id: 'r1',
-          title: 'Digital reward',
+          title: rewardTitle,
           cost_cents: rewardPriceCents,
-          type: 'DIGITAL',
+          type: rewardType,
           remaining: rewardStock,
+          custom_type_label: customTypeLabel,
           channel: null,
         },
       ],
@@ -376,4 +383,53 @@ it('routed real provider: visible set/max and whole units, one review/apply, his
   expect(await screen.findByText(/Credits applied/)).toBeInTheDocument();
   fireEvent.click(screen.getByText('Where your credit came from'));
   expect(screen.getByText(/Old poll/)).toBeInTheDocument();
+});
+
+it('collects the claim answer for a labeled CUSTOM reward and carries it per claim (#78)', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 0, goal: 0 },
+    availableCents: { reward: 1000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 2,
+    pollHistoryCents: 0,
+    rewardType: 'CUSTOM',
+    customTypeLabel: 'Your game pick',
+    rewardTitle: 'Pick the Next Game',
+  });
+  vi.mocked(applyPoolCredits).mockResolvedValue({
+    batch_id: 'batch1',
+    spent_cents: { reward: 1000, poll: 0, goal: 0 },
+    claim_ids: ['claim1'],
+    vote_ids: [],
+    contribution_ids: [],
+    donation_ids: [],
+  });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Pick the Next Game' }));
+  expect(screen.getByText('Your game pick')).toBeInTheDocument();
+  expect(screen.queryByText('(optional)')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('answer required');
+  expect(screen.getByText(/add: Pick the Next Game/)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Your game pick'), { target: { value: 'Celeste' } });
+  expect(screen.getByText('7/200 characters')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+
+  fireEvent.click(await screen.findByRole('button', { name: /Review/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply credits' }));
+  await waitFor(() => expect(applyPoolCredits).toHaveBeenCalledTimes(1));
+  const request = vi.mocked(applyPoolCredits).mock.calls[0]![1];
+  expect(request.selections).toEqual([
+    {
+      kind: 'REWARD',
+      target_id: 'r1',
+      quantity: 1,
+      unit_price_cents: 1000,
+      reward_type: 'CUSTOM',
+      claim_data: { data: 'Celeste' },
+    },
+  ]);
 });
