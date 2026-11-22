@@ -7,6 +7,19 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Poll flow redesign** (#76): poll option amounts start empty (placeholder `0.00`,
+  plain money text input without number spinners) and stage locally — typing an
+  amount selects an option, clearing it stages a removal, and the per-option add
+  button is gone. Each poll card has one "confirm this poll" button (working label)
+  that commits adds, edits and removals together; staged edits are ephemeral, show
+  an "unsaved changes" marker, and are discarded when leaving the polls tab after a
+  warning at "review →". Write-in label and amount stage through the same confirm.
+  Poll write-ins now default to a 40-character maximum when `max_entry_chars` is
+  unset (shared `DEFAULT_MAX_ENTRY_CHARS`; the write-in form and the server both
+  fall back to it, and a moderator-set value still overrides).
+
 ## [0.7.0] — 2026-11-21
 
 ### Added

@@ -571,6 +571,79 @@ describe('amount-first donate through the routed flow', () => {
     expect(await screen.findByTestId('progress-preview')).toHaveStyle({ width: '30%' });
   });
 
+  it('keeps staged poll edits out of the pool meter until the per-poll confirm (#76)', async () => {
+    save(saved({ amountCents: 1000, lastStep: 'browse', tab: 'polls' }));
+    vi.mocked(getPolls).mockResolvedValue([
+      {
+        event_id: 'e1',
+        id: 'p1',
+        title: 'Poll',
+        total_votes_cents: 1000,
+        options: [{ id: 'o1', label: 'Runner', votes_cents: 100 }],
+      },
+    ]);
+    renderAt('/donate');
+
+    fireEvent.change(await screen.findByPlaceholderText('0.00'), { target: { value: '2.00' } });
+    expect(screen.getByRole('meter', { name: 'poll Pool' })).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    expect(screen.getByRole('meter', { name: 'poll Pool' })).toHaveAttribute(
+      'aria-valuenow',
+      '200',
+    );
+    expect(screen.queryByText('unsaved changes')).toBeNull();
+  });
+
+  it('warns at review → and discards staged poll edits when leaving the polls tab (#76)', async () => {
+    save(saved({ amountCents: 1000, lastStep: 'browse', tab: 'polls' }));
+    vi.mocked(getPolls).mockResolvedValue([
+      {
+        event_id: 'e1',
+        id: 'p1',
+        title: 'Poll',
+        total_votes_cents: 1000,
+        options: [{ id: 'o1', label: 'Runner', votes_cents: 100 }],
+      },
+    ]);
+    renderAt('/donate');
+
+    fireEvent.change(await screen.findByPlaceholderText('0.00'), { target: { value: '2.00' } });
+
+    // The warning at "review →" names the discard; cancelling keeps the staged edit.
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => false),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('discard'));
+    expect(await screen.findByPlaceholderText('0.00')).toHaveValue('2.00');
+    vi.unstubAllGlobals();
+
+    // Leaving the polls tab discards the staged edit.
+    fireEvent.click(screen.getByRole('tab', { name: 'rewards' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'polls' }));
+    expect(await screen.findByPlaceholderText('0.00')).toHaveValue('');
+    expect(screen.queryByText('unsaved changes')).toBeNull();
+
+    // Proceeding through the warning reaches review with only committed rows.
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '3.00' } });
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
+    const pollsReview = await screen.findByRole('region', { name: 'polls review' });
+    expect(pollsReview).not.toHaveTextContent('Runner');
+    vi.unstubAllGlobals();
+
+    // The discarded edit is gone when returning to the polls tab.
+    fireEvent.click(screen.getByRole('button', { name: 'edit selections' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'polls' }));
+    expect(await screen.findByPlaceholderText('0.00')).toHaveValue('');
+  });
+
   it('requires explicit reconfirmation of a corrected server plan, with no automatic second checkout', async () => {
     save(saved({ amountCents: 1000 }));
     const corrected = planPledge({

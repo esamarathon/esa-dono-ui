@@ -42,6 +42,8 @@ export default function DonateFlow() {
   const [confirmation, setConfirmation] = useState<NonNullable<typeof success>['receipt'] | null>(
     null,
   );
+  /** Uncommitted poll edits staged in PollList (#76); leaving the polls tab discards them. */
+  const [pollEditsStaged, setPollEditsStaged] = useState(false);
   const location = useLocation();
   const { eventSlug, channelSlug } = useParams<{ eventSlug?: string; channelSlug?: string }>();
   const [amount, setAmount] = useState(draft ? (draft.amountCents / 100).toFixed(2) : '10');
@@ -435,7 +437,16 @@ export default function DonateFlow() {
               <button
                 className="btrl-button"
                 disabled={over || !plan || busy || !selectedChannelId}
-                onClick={() => void flow.review()}
+                onClick={() => {
+                  // Staged poll edits are ephemeral and never enter the review (#76).
+                  // Warn before discarding them; copy is a working label (#80).
+                  if (
+                    pollEditsStaged &&
+                    !window.confirm('You have unsaved poll changes. Continue and discard them?')
+                  )
+                    return;
+                  void flow.review();
+                }}
               >
                 review →
               </button>
@@ -482,7 +493,13 @@ export default function DonateFlow() {
               </button>
             ))}
           </div>
-          {tab === 'rewards' ? <RewardList /> : tab === 'polls' ? <PollList /> : <GoalList />}
+          {tab === 'rewards' ? (
+            <RewardList />
+          ) : tab === 'polls' ? (
+            <PollList onStagedChange={setPollEditsStaged} />
+          ) : (
+            <GoalList />
+          )}
         </>
       ) : (
         <form
