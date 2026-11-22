@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-21
+
 ### Added
 
 - **Feature flags**: the seed installs the default flags (`feedback`, `auctions`)
