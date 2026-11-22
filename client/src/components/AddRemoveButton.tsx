@@ -1,5 +1,5 @@
 /**
- * Fixed-size add/remove toggle button (#52 follow-up). "add" and "remove"
+ * Fixed-size add/remove toggle button (#52 follow-up). "Add" and "Remove"
  * are different lengths, and the previous inline buttons sized to their own
  * text — causing the layout next to them (poll option progress bars sharing
  * a flex row with the button) to shift width depending on which word was
@@ -15,7 +15,7 @@ export interface AddRemoveButtonProps {
   flash?: boolean;
 }
 
-const FIXED_SIZE = 'w-20 px-1 text-center text-xs shrink-0';
+const FIXED_SIZE = 'w-20 px-1 text-center text-sm shrink-0';
 
 export default function AddRemoveButton({
   added,
@@ -30,13 +30,13 @@ export default function AddRemoveButton({
         onClick={onRemove}
         className={`btrl-button btrl-button-outline ${FIXED_SIZE} ${flash ? 'animate-add-flash' : ''}`}
       >
-        remove
+        Remove
       </button>
     );
   }
   return (
     <button onClick={onAdd} disabled={disabled} className={`btrl-button ${FIXED_SIZE}`}>
-      add
+      Add
     </button>
   );
 }

@@ -38,10 +38,10 @@ export default function GlobalProgressBar() {
           max={goalCents}
           label={
             <>
-              <span className="font-data font-bold text-xs uppercase tracking-wider text-off-white/70">
+              <span className="font-data font-bold text-sm uppercase tracking-wider text-off-white/70">
                 Campaign Progress
               </span>
-              <span className="font-data font-bold text-xs text-d-yellow">
+              <span className="font-data font-bold text-sm text-d-yellow">
                 {fmt(raisedCents)} / {fmt(goalCents)} ({pct}%)
               </span>
             </>
