@@ -9,6 +9,7 @@ The seed script (`server/prisma/seed.ts`) creates:
 - ✅ Moderator account at `moderator@localhost`
 - ✅ Admin account at `admin@localhost`
 - ✅ Broadcast banner displaying current API keys from env vars
+- ✅ Default feature flags (`feedback`, `auctions`), installed disabled; toggles survive re-seeding
 
 These accounts and the banner persist across database restarts, including staging's daily resets.
 
