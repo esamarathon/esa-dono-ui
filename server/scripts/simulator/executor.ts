@@ -17,6 +17,8 @@ type CheckoutItem = {
   amount_cents: number;
   poll_id?: string;
   quantity?: number;
+  /** The claim answer for a labeled CUSTOM reward (#78); omitted otherwise. */
+  data?: Record<string, string>;
 };
 
 export interface ExecutorOptions {
@@ -66,6 +68,17 @@ export class Executor {
     return id;
   }
 
+  /**
+   * The claim answer for a reward ref (#78): a labeled CUSTOM reward requires a
+   * non-blank answer at every claim entry point, so send one; every other reward
+   * keeps no answer.
+   */
+  private claimAnswer(rewardRef: string): Record<string, string> | undefined {
+    if (this.opts.catalog.rewardType[rewardRef] !== 'CUSTOM') return undefined;
+    if (!(this.opts.catalog.rewardCustomLabel[rewardRef] ?? '').trim()) return undefined;
+    return { data: 'Simulated pick' };
+  }
+
   /** Direct Wallet spends target one Channel (ADR-0012). Older logs have none; the server rejects them. */
   private spendChannelId(entry: DecisionEntry): string | undefined {
     const channelRef = entry.targetRef?.channelRef;
@@ -106,12 +119,14 @@ export class Executor {
         return { status: res.status, accepted: res.ok };
       }
 
-      case 'CLAIM_REWARD':
-        return this.spend(donorRef, `/api/rewards/${this.ref(entry.targetRef!.rewardRef!)}/claim`, {
+      case 'CLAIM_REWARD': {
+        const rewardRef = entry.targetRef!.rewardRef!;
+        return this.spend(donorRef, `/api/rewards/${this.ref(rewardRef)}/claim`, {
           channel_id: this.spendChannelId(entry),
-          claim_data: {},
+          claim_data: this.claimAnswer(rewardRef) ?? {},
           quantity: p.quantity ?? 1,
         });
+      }
 
       case 'VOTE_POLL':
         return this.spend(donorRef, `/api/polls/${this.ref(entry.targetRef!.pollRef!)}/vote`, {
@@ -155,6 +170,7 @@ export class Executor {
                   target_id: this.ref(item.rewardRef),
                   amount_cents: item.amountCents,
                   quantity: item.quantity,
+                  data: this.claimAnswer(item.rewardRef),
                 };
               case 'POLL_VOTE':
                 return {
@@ -182,6 +198,7 @@ export class Executor {
             kind: 'REWARD',
             target_id: this.ref(entry.targetRef!.rewardRef!),
             amount_cents: p.amountCents as number,
+            data: this.claimAnswer(entry.targetRef!.rewardRef!),
           };
         } else if (itemKind === 'POLL_VOTE') {
           item = {

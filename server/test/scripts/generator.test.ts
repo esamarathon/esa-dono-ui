@@ -8,6 +8,8 @@ const catalog: Catalog = {
   rewards: ['r1', 'r2', 'r3'],
   pledgeableRewards: ['r1', 'r2'],
   rewardCostCents: { r1: 500, r2: 1500, r3: 2000 },
+  rewardType: {},
+  rewardCustomLabel: {},
   polls: [
     { pollRef: 'empty', options: [] },
     { pollRef: 'p1', options: ['p1o1', 'p1o2'] },

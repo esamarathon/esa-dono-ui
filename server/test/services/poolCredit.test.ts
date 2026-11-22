@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import express from 'express';
 import requestHttp from 'supertest';
-import type { CreditApplyRequest } from '@dono/shared';
+import type { CreditApplyRequest, CreditSelection } from '@dono/shared';
 import donorRouter from '../../routes/donor.js';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
@@ -102,12 +102,20 @@ async function fixture({
   stock,
   availableWallet,
   reviewedRewardCents,
+  rewardType = 'DIGITAL',
+  customTypeLabel = null,
+  quantity = 1,
+  claimData,
 }: Readonly<{
   sourceGrants: readonly number[];
   rewardPrice: number;
   stock: number;
   availableWallet: number;
   reviewedRewardCents: number;
+  rewardType?: string;
+  customTypeLabel?: string | null;
+  quantity?: number;
+  claimData?: Record<string, unknown>;
 }>) {
   const donor = await prisma.donor.create({
     data: { email: `${crypto.randomUUID()}@example.com`, balance_remaining: availableWallet },
@@ -122,7 +130,8 @@ async function fixture({
     data: {
       event_id: event.id,
       title: 'One entitlement',
-      type: 'DIGITAL',
+      type: rewardType,
+      custom_type_label: customTypeLabel,
       cost_cents: rewardPrice,
       quantity_total: stock,
     },
@@ -163,16 +172,19 @@ async function fixture({
     });
     sources.push({ donation, grant });
   }
-  const request = {
+  const request: Omit<CreditApplyRequest, 'selections'> & {
+    selections: Extract<CreditSelection, { kind: 'REWARD' }>[];
+  } = {
     idempotency_key: crypto.randomUUID(),
     reviewed_credit_cents: { reward: reviewedRewardCents, poll: 0, goal: 0 },
     selections: [
       {
-        kind: 'REWARD' as const,
+        kind: 'REWARD',
         target_id: reward.id,
-        quantity: 1,
+        quantity,
         unit_price_cents: rewardPrice,
-        reward_type: 'DIGITAL',
+        reward_type: rewardType,
+        ...(claimData === undefined ? {} : { claim_data: claimData }),
       },
     ],
   };
@@ -1017,4 +1029,42 @@ it('A600+B400 buys one C1000 entitlement, stock once, and reversal restores orig
       balance_remaining: 123,
     });
   }
+});
+
+it('rejects a blank claim answer on a labeled CUSTOM credit pick with 400 before any draw (#78)', async () => {
+  const f = await fixture({
+    sourceGrants: [1000],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 0,
+    reviewedRewardCents: 1000,
+    rewardType: 'CUSTOM',
+    customTypeLabel: 'Your game pick',
+    claimData: {},
+  });
+  await expect(f.apply()).rejects.toMatchObject({ status: 400, message: 'answer is required' });
+  expect(
+    await prisma.rewardClaim.count({ where: { donor_id: f.donor.id, status: 'PENDING' } }),
+  ).toBe(0);
+  expect(await f.read()).toMatchObject({ available_cents: { reward: 1000 } });
+});
+
+it('stores the claim answer on every whole unit of a labeled CUSTOM credit pick (#78)', async () => {
+  const f = await fixture({
+    sourceGrants: [2000],
+    rewardPrice: 1000,
+    stock: 3,
+    availableWallet: 0,
+    reviewedRewardCents: 2000,
+    rewardType: 'CUSTOM',
+    customTypeLabel: 'Your game pick',
+    quantity: 2,
+    claimData: { data: 'Celeste' },
+  });
+  const applied = await f.apply();
+  expect(applied.claim_ids).toHaveLength(2);
+  const claims = await prisma.rewardClaim.findMany({
+    where: { donor_id: f.donor.id, status: 'PENDING' },
+  });
+  expect(claims.map((c) => c.claim_data)).toEqual(['{"data":"Celeste"}', '{"data":"Celeste"}']);
 });

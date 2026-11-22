@@ -1,4 +1,5 @@
 import type { PoolCategory } from './pledgePlan.js';
+import type { ClaimData } from './claim.js';
 export type CreditAmounts = Record<PoolCategory, number>;
 export type CreditSelection =
   | {
@@ -7,6 +8,8 @@ export type CreditSelection =
       quantity: number;
       unit_price_cents: number;
       reward_type: string;
+      /** The claim answer, carried per claim (#78); shared across whole units. */
+      claim_data?: ClaimData;
     }
   | { kind: 'POLL_VOTE'; target_id: string; poll_id: string; amount_cents: number }
   | { kind: 'GOAL'; target_id: string; amount_cents: number };
@@ -40,6 +43,8 @@ export interface CreditEvent extends CreditEventSummary {
       cost_cents: number;
       type: string;
       remaining: number | null;
+      /** The CUSTOM answer field's label (#78); its presence makes the answer required. */
+      custom_type_label?: string | null;
     })[];
     polls: (CreditCatalogTarget & {
       options: { id: string; label: string; votes_cents: number }[];

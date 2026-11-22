@@ -94,6 +94,41 @@ describe('Rewards routes', () => {
     await prisma.donor.delete({ where: { id: donor.id } });
   });
 
+  it('POST /:id/claim rejects a blank claim answer on a labeled CUSTOM reward (#78)', async () => {
+    const { donor, token } = await makeDonor(5000);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 500,
+      },
+    });
+    try {
+      const blank = await request(createApp())
+        .post(`/api/rewards/${reward.id}/claim`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ channel_id: channelId, claim_data: { data: ' ' } });
+      expect(blank.status).toBe(400);
+      expect(blank.body.error).toBe('answer is required');
+      expect(await prisma.rewardClaim.count({ where: { donor_id: donor.id } })).toBe(0);
+
+      const answered = await request(createApp())
+        .post(`/api/rewards/${reward.id}/claim`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ channel_id: channelId, claim_data: { data: 'Outer Wilds' } });
+      expect(answered.status).toBe(200);
+      expect(await prisma.rewardClaim.findMany({ where: { donor_id: donor.id } })).toMatchObject([
+        { claim_data: '{"data":"Outer Wilds"}' },
+      ]);
+    } finally {
+      await prisma.rewardClaim.deleteMany({ where: { donor_id: donor.id } });
+      await prisma.reward.delete({ where: { id: reward.id } });
+      await prisma.donor.delete({ where: { id: donor.id } });
+    }
+  });
+
   it('POST /:id/claim rejects physical rewards funded by Wallet credit without changing funds or stock', async () => {
     const { donor, token } = await makeDonor(5000);
     const reward = await prisma.reward.create({

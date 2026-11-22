@@ -86,4 +86,10 @@ export interface Catalog {
    * creation stores confirmed line totals, not a replay log's old estimate.
    */
   rewardCostCents: Record<string, number>;
+  /**
+   * rewardRef -> reward type and Custom Label (#78). A labeled CUSTOM reward
+   * requires a claim answer, so the executor sends one on its claims.
+   */
+  rewardType: Record<string, string>;
+  rewardCustomLabel: Record<string, string | null>;
 }
