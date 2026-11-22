@@ -165,7 +165,7 @@ describe('AdminPolls', () => {
       screen.getByLabelText('auto-approve write-ins (off = review before funds count)'),
     );
     // Fill max_entry_chars
-    fireEvent.change(screen.getByPlaceholderText('No limit'), { target: { value: '100' } });
+    fireEvent.change(screen.getByPlaceholderText('40 (default)'), { target: { value: '100' } });
     // Toggle active off then back on
     fireEvent.click(screen.getByLabelText('active'));
 

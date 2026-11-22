@@ -9,6 +9,7 @@ import { reversalText } from '../../utils/money';
 import { apiErrorMessage, type Poll, type Channel } from '../../types';
 import { IncentiveOwnerSelect } from '../../components/IncentiveOwnerSelect';
 import { defaultOwner, ownerLabel, ownerPayload, useStaffEvents } from '../../utils/incentiveOwner';
+import { DEFAULT_MAX_ENTRY_CHARS } from '@dono/shared';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -377,7 +378,7 @@ export default function AdminPolls() {
                 className="w-full px-3 py-2 text-sm"
                 value={form.max_entry_chars ?? ''}
                 onChange={(e) => setForm((d) => ({ ...d, max_entry_chars: e.target.value }))}
-                placeholder="No limit"
+                placeholder={`${DEFAULT_MAX_ENTRY_CHARS} (default)`}
               />
             </div>
           )}

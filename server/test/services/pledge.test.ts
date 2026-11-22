@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import prisma from '../../lib/prisma.js';
-import { planPledge, type PledgePlan } from '@dono/shared';
+import { DEFAULT_MAX_ENTRY_CHARS, planPledge, type PledgePlan } from '@dono/shared';
 import { createPledge, type PledgeItemInput } from '../../services/pledge.js';
 import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
@@ -19,14 +19,22 @@ const donors: string[] = [];
 const drafts: string[] = [];
 const rewards: string[] = [];
 const goals: string[] = [];
+const polls: string[] = [];
 afterEach(async () => {
   await dropFailTrigger(prisma, 'reject_pledge_hold');
   await prisma.pendingPledge.deleteMany({ where: { draft_id: { in: drafts } } });
   await prisma.donor.deleteMany({ where: { id: { in: donors } } });
   await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goals } } });
+  await prisma.poll.deleteMany({ where: { id: { in: polls } } });
   await prisma.channel.deleteMany({ where: { id: { in: channels } } });
-  channels.length = donors.length = drafts.length = rewards.length = goals.length = 0;
+  channels.length =
+    donors.length =
+    drafts.length =
+    rewards.length =
+    goals.length =
+    polls.length =
+      0;
 });
 afterAll(() => prisma.$disconnect());
 
@@ -479,5 +487,76 @@ describe('pooled pledge creation on SQLite', () => {
       }),
     });
     expect(optional.items).toMatchObject([{ data: null }]);
+  });
+
+  it('caps a POLL_CUSTOM label at the shared default when max_entry_chars is null (#76)', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const poll = await prisma.poll.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-in',
+        allow_custom_entries: true,
+        max_entry_chars: null,
+      },
+    });
+    polls.push(poll.id);
+    const selections = (label: string) => [
+      {
+        kind: 'POLL_CUSTOM' as const,
+        target_id: poll.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        insertion_order: 0,
+        data: { label },
+      },
+    ];
+    const planFor = (label: string) =>
+      planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: selections(label),
+      });
+    const items = (label: string) => [
+      {
+        kind: 'POLL_CUSTOM' as const,
+        target_id: poll.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        data: { label },
+      },
+    ];
+
+    const tooLongDraft = crypto.randomUUID();
+    drafts.push(tooLongDraft);
+    const tooLong = 'x'.repeat(DEFAULT_MAX_ENTRY_CHARS + 1);
+    await expect(
+      createPledge({
+        draft_id: tooLongDraft,
+        pledge_amount_cents: 1000,
+        items: items(tooLong),
+        channel_id: channel.id,
+        plan: planFor(tooLong),
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: `Entry exceeds maximum of ${DEFAULT_MAX_ENTRY_CHARS} characters`,
+    });
+    expect(await prisma.pendingPledge.count({ where: { draft_id: tooLongDraft } })).toBe(0);
+
+    const exactDraft = crypto.randomUUID();
+    drafts.push(exactDraft);
+    const exact = 'y'.repeat(DEFAULT_MAX_ENTRY_CHARS);
+    const created = await createPledge({
+      draft_id: exactDraft,
+      pledge_amount_cents: 1000,
+      items: items(exact),
+      channel_id: channel.id,
+      plan: planFor(exact),
+    });
+    expect(created.items[0]).toMatchObject({
+      source: 'donor',
+      data: JSON.stringify({ label: exact }),
+    });
   });
 });

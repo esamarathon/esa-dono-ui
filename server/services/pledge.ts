@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { Prisma } from '@prisma/client';
 import {
+  DEFAULT_MAX_ENTRY_CHARS,
   MIN_SPEND_CENTS,
   claimAnswerError,
   planPledge,
@@ -262,7 +263,7 @@ export async function createPledge(input: CreatePledgeInput) {
               tx,
               data.label,
               'Entry',
-              poll.max_entry_chars ?? 2147483647,
+              poll.max_entry_chars ?? DEFAULT_MAX_ENTRY_CHARS,
             );
             if (!label) throw httpError(400, 'POLL_CUSTOM requires a label');
             corrected = { ...item, data: { label } };

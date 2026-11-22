@@ -67,7 +67,13 @@ const reward = {
   event_id: 'e1',
 };
 
-function Wrapper({ children }: { children: React.ReactNode }) {
+function Wrapper({
+  children,
+  draft,
+}: {
+  children: React.ReactNode;
+  draft?: Record<string, unknown>;
+}) {
   localStorage.setItem(
     'donation_draft_v1',
     JSON.stringify({
@@ -83,6 +89,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
       lastStep: 'browse',
       tab: 'rewards',
       pendingToken: null,
+      ...draft,
     }),
   );
   return <CartProvider>{children}</CartProvider>;
@@ -121,7 +128,7 @@ describe('PollList', () => {
     mocks.trackAsync.mockImplementation((_n: string, fn: () => unknown) => fn());
   });
 
-  it('renders the poll with options and adds a vote', async () => {
+  it('renders option rows as empty money inputs with no spinner and no add/remove buttons (#76)', async () => {
     render(
       <Wrapper>
         <PollList />
@@ -129,15 +136,37 @@ describe('PollList', () => {
     );
 
     expect(await screen.findByText('Best Runner')).toBeInTheDocument();
-    expect(screen.getByText(/Runner A/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    const input = screen.getByPlaceholderText('0.00') as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.type).toBe('text');
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'add' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'remove' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeDisabled();
+    expect(screen.queryByText('unsaved changes')).toBeNull();
   });
 
   it('clears the vote flash timeout on unmount', async () => {
-    await expectFlashTimerClearedOnUnmount(<PollList />, 'Best Runner');
+    const setSpy = vi.spyOn(globalThis, 'setTimeout');
+    const { unmount } = render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+    await screen.findByText('Best Runner');
+
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    const flashIndex = setSpy.mock.calls.findIndex((call) => call[1] === 300);
+    expect(flashIndex).toBeGreaterThanOrEqual(0);
+    const flashTimer = setSpy.mock.results[flashIndex]!.value;
+
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    unmount();
+
+    expect(clearSpy).toHaveBeenCalledWith(flashTimer);
+    setSpy.mockRestore();
+    clearSpy.mockRestore();
   });
 
   it('shows the empty state when there are no polls', async () => {
@@ -174,8 +203,8 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My idea' },
     });
-    // change amount to 0
-    const amountInputs = screen.getAllByRole('spinbutton');
+    // change amount to 0 (the last 0.00 input is the write-in modal's amount)
+    const amountInputs = screen.getAllByPlaceholderText('0.00');
     fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '0' } });
     fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
     expect(screen.getByText(/Minimum amount/)).toBeInTheDocument();
@@ -192,7 +221,7 @@ describe('PollList', () => {
     expect(screen.getByText('add your own option')).toBeInTheDocument();
   });
 
-  it('adds a write-in option to the cart', async () => {
+  it('stages a write-in and commits it with the per-poll confirm (#76)', async () => {
     mocks.getPolls.mockResolvedValue([{ ...poll, allow_custom_entries: true, auto_approve: true }]);
     render(
       <Wrapper>
@@ -204,31 +233,52 @@ describe('PollList', () => {
     fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
       target: { value: 'My runner' },
     });
+    const amountInputs = screen.getAllByPlaceholderText('0.00');
+    fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '2.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
-    // modal closes after add
+    // modal closes and the staged summary shows — but the cart is untouched
     expect(screen.queryByText('add your own option')).toBeNull();
+    expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([
+      expect.objectContaining({
+        kind: 'POLL_CUSTOM',
+        target_id: 'p1',
+        amount_cents: 200,
+        label: 'My runner',
+      }),
+    ]);
+    expect(screen.queryByText('unsaved changes')).toBeNull();
   });
 
-  it('re-hydrates and edits an already-added write-in option (#44)', async () => {
+  it('re-hydrates a committed write-in and stages edits until confirm (#44)', async () => {
     mocks.getPolls.mockResolvedValue([{ ...poll, allow_custom_entries: true, auto_approve: true }]);
     render(
-      <Wrapper>
+      <Wrapper
+        draft={{
+          selections: [
+            {
+              kind: 'POLL_CUSTOM',
+              target_id: 'p1',
+              poll_id: 'p1',
+              amount_cents: 200,
+              insertion_order: 0,
+              label: 'My runner',
+              data: { label: 'My runner' },
+            },
+          ],
+        }}
+      >
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
-    fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
-      target: { value: 'My runner' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
 
-    // Now in cart, showing the read-only summary with edit/remove.
-    expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'edit' }));
-
-    // The modal reopens pre-filled with the existing draft, not blank.
+    // The modal reopens pre-filled with the committed entry, not blank.
     expect(screen.getByText('edit your option')).toBeInTheDocument();
     const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
     expect(labelInput.value).toBe('My runner');
@@ -236,27 +286,114 @@ describe('PollList', () => {
     fireEvent.change(labelInput, { target: { value: 'My edited runner' } });
     fireEvent.click(screen.getByRole('button', { name: 'save changes' }));
 
-    // Still a single write-in entry, now updated — not a duplicate.
+    // The staged edit shows, still a single committed entry until confirm.
     expect(await screen.findByText(/your option: "My edited runner"/)).toBeInTheDocument();
     expect(screen.queryByText(/your option: "My runner"/)).toBeNull();
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections[0]).toMatchObject({
+      label: 'My runner',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    const selections = JSON.parse(localStorage.getItem('donation_draft_v1')!).selections;
+    expect(selections).toHaveLength(1);
+    expect(selections[0]).toMatchObject({ label: 'My edited runner', amount_cents: 200 });
   });
 
-  it('removes a vote from the cart', async () => {
+  it('clearing a committed amount input stages a removal until confirm (#76)', async () => {
     render(
-      <Wrapper>
+      <Wrapper
+        draft={{
+          selections: [
+            {
+              kind: 'POLL_VOTE',
+              target_id: 'o1',
+              poll_id: 'p1',
+              amount_cents: 200,
+              insertion_order: 0,
+              label: 'Runner A',
+            },
+          ],
+        }}
+      >
         <PollList />
       </Wrapper>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    // after adding, the remove button should appear
-    const removeBtn = await screen.findByRole('button', { name: 'remove' });
-    expect(removeBtn).toBeInTheDocument();
-    // clicking remove should not throw
-    fireEvent.click(removeBtn);
+    await screen.findByText('Best Runner');
+    const input = screen.getByPlaceholderText('0.00') as HTMLInputElement;
+    expect(input.value).toBe('2.00');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
   });
 
-  it('renders a donation-impact preview once the vote is in the cart (#52)', async () => {
+  it('commits staged adds, edits and removals in one confirm (#76)', async () => {
+    mocks.getPolls.mockResolvedValue([
+      {
+        ...poll,
+        options: [
+          { id: 'o1', label: 'Runner A', votes_cents: 500, status: 'ACTIVE' },
+          { id: 'o2', label: 'Runner B', votes_cents: 0, status: 'ACTIVE' },
+          { id: 'o3', label: 'Runner C', votes_cents: 0, status: 'ACTIVE' },
+        ],
+      },
+    ]);
+    render(
+      <Wrapper
+        draft={{
+          selections: [
+            {
+              kind: 'POLL_VOTE',
+              target_id: 'o1',
+              poll_id: 'p1',
+              amount_cents: 200,
+              insertion_order: 0,
+              label: 'Runner A',
+            },
+            {
+              kind: 'POLL_VOTE',
+              target_id: 'o2',
+              poll_id: 'p1',
+              amount_cents: 300,
+              insertion_order: 1,
+              label: 'Runner B',
+            },
+          ],
+        }}
+      >
+        <PollList />
+      </Wrapper>,
+    );
+
+    await screen.findByText('Best Runner');
+    const inputs = screen.getAllByPlaceholderText('0.00') as HTMLInputElement[];
+    // Committed rows show their committed amount; uncommitted rows start empty.
+    expect(inputs[0]!.value).toBe('2.00');
+    expect(inputs[1]!.value).toBe('3.00');
+    expect(inputs[2]!.value).toBe('');
+
+    fireEvent.change(inputs[0]!, { target: { value: '4.00' } }); // edit
+    fireEvent.change(inputs[1]!, { target: { value: '' } }); // staged removal
+    fireEvent.change(inputs[2]!, { target: { value: '1.50' } }); // add
+
+    // Nothing moves until the one confirm.
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+
+    const selections = JSON.parse(localStorage.getItem('donation_draft_v1')!).selections;
+    expect(selections.map((i: { target_id: string }) => i.target_id).sort()).toEqual(['o1', 'o3']);
+    expect(selections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target_id: 'o1', amount_cents: 400 }),
+        expect.objectContaining({ target_id: 'o3', amount_cents: 150 }),
+      ]),
+    );
+    expect(screen.queryByText('unsaved changes')).toBeNull();
+  });
+
+  it('renders a donation-impact preview from a staged amount (#52, #76)', async () => {
     mocks.getPolls.mockResolvedValue([
       { ...poll, options: [{ ...poll.options[0], votes_cents: 100 }], total_votes_cents: 1000 },
     ]);
@@ -269,28 +406,42 @@ describe('PollList', () => {
     await screen.findByText('Best Runner');
     expect(document.querySelector('[data-testid="progress-preview"]')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    await screen.findByRole('button', { name: 'remove' });
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '2.00' } });
 
     expect(document.querySelector('[data-testid="progress-preview"]')).not.toBeNull();
   });
 
-  it('keeps the add/remove button a fixed width regardless of label (#52)', async () => {
+  it('defaults the write-in limit to 40 characters with a live counter (#76)', async () => {
+    mocks.getPolls.mockResolvedValue([{ ...poll, allow_custom_entries: true }]);
     render(
       <Wrapper>
         <PollList />
       </Wrapper>,
     );
-
-    const addBtn = await screen.findByRole('button', { name: 'add' });
-    expect(addBtn.className).toContain('w-20');
-
-    fireEvent.click(addBtn);
-    const removeBtn = await screen.findByRole('button', { name: 'remove' });
-    expect(removeBtn.className).toContain('w-20');
+    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
+    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    expect(labelInput.maxLength).toBe(40);
+    expect(screen.getByText('0/40 characters')).toBeInTheDocument();
+    fireEvent.change(labelInput, { target: { value: 'abc' } });
+    expect(screen.getByText('3/40 characters')).toBeInTheDocument();
   });
 
-  it('updates an in-cart vote amount on change and blur', async () => {
+  it('lets a moderator-set max_entry_chars override the 40-character default (#76)', async () => {
+    mocks.getPolls.mockResolvedValue([
+      { ...poll, allow_custom_entries: true, max_entry_chars: 10 },
+    ]);
+    render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
+    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    expect(labelInput.maxLength).toBe(10);
+    expect(screen.getByText('0/10 characters')).toBeInTheDocument();
+  });
+
+  it('stages a typed amount without touching the cart (#76)', async () => {
     render(
       <Wrapper>
         <PollList />
@@ -298,18 +449,15 @@ describe('PollList', () => {
     );
 
     await screen.findByText('Best Runner');
-
-    // Add the vote first
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    await screen.findByRole('button', { name: 'remove' });
-
-    // Change the amount while in cart (triggers debounced sync)
-    const amountInputs = screen.getAllByRole('spinbutton');
-    fireEvent.change(amountInputs[0]!, { target: { value: '2.00' } });
-    fireEvent.blur(amountInputs[0]!);
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '2.50' } });
+    expect((screen.getByPlaceholderText('0.00') as HTMLInputElement).value).toBe('2.50');
+    // Staged only: the saved draft pledge (the cart) still has no selections.
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
+    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeEnabled();
   });
 
-  it('resets to default amount on blur with empty value', async () => {
+  it('shows a below-minimum inline error and stages nothing (#76)', async () => {
     render(
       <Wrapper>
         <PollList />
@@ -317,11 +465,10 @@ describe('PollList', () => {
     );
 
     await screen.findByText('Best Runner');
-    const amountInputs = screen.getAllByRole('spinbutton');
-    fireEvent.change(amountInputs[0]!, { target: { value: '' } });
-    fireEvent.blur(amountInputs[0]!);
-    // Amount resets to default
-    expect((amountInputs[0] as HTMLInputElement).value).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '0.50' } });
+    expect(screen.getByText('Minimum amount is $1.00')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
+    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeDisabled();
   });
 });
 
