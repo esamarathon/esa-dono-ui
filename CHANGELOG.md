@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-23
+
 ### Added
 
 - **Brief donation acknowledgements in the donor strip** (#250): after a donation
