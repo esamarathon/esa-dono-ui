@@ -76,6 +76,7 @@ const reward: Reward = {
   image_url: '/reward.png',
 };
 const channel = { id: 'c1', name: 'Main', slug: 'main', event_id: 'e1', is_active: true };
+const tabLabel = { rewards: 'Rewards', polls: 'Polls', goals: 'Fund goals' } as const;
 function saved(overrides: Readonly<Partial<DraftPledge>> = {}): DraftPledge {
   return {
     id: 'draft-one',
@@ -147,7 +148,7 @@ function externalDraft(d: DraftPledge | null) {
 async function choose(amount = '$10') {
   fireEvent.click(await screen.findByRole('button', { name: amount }));
   fireEvent.click(screen.getByRole('button', { name: /choose incentives/i }));
-  await screen.findByRole('meter', { name: 'reward Pool' });
+  await screen.findByRole('meter', { name: 'Rewards Pool' });
 }
 
 describe('amount-first donate through the routed flow', () => {
@@ -219,7 +220,7 @@ describe('amount-first donate through the routed flow', () => {
           expect.objectContaining({ email: 'donor@example.com' }),
         ),
       );
-      expect(await screen.findByRole('heading', { name: /Pending pledge/ })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: /Pending donation/ })).toBeInTheDocument();
     },
   );
 
@@ -227,7 +228,7 @@ describe('amount-first donate through the routed flow', () => {
     localStorage.setItem('last_donor_email', 'donor@example.com');
     localStorage.setItem('last_donor_display_name', 'Reader');
     renderAt();
-    const amount = await screen.findByRole('spinbutton', { name: 'Pledge amount ($)' });
+    const amount = await screen.findByRole('spinbutton', { name: 'Donation amount ($)' });
     fireEvent.change(amount, { target: { value: '0.99' } });
     expect(screen.getByRole('button', { name: /just donate/i })).toBeDisabled();
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
@@ -248,7 +249,7 @@ describe('amount-first donate through the routed flow', () => {
 
   it('shows the 500-character message limit in the label and a live counter (#150)', async () => {
     renderAt();
-    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Pledge amount ($)' }), {
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Donation amount ($)' }), {
       target: { value: '5' },
     });
     fireEvent.click(screen.getByRole('button', { name: /just donate/i }));
@@ -278,9 +279,9 @@ describe('amount-first donate through the routed flow', () => {
   it('keeps empty poll review customer-facing without staff reservation details', async () => {
     save(saved({ amountCents: 5000 }));
     renderAt();
-    const polls = await screen.findByRole('region', { name: 'polls review' });
+    const polls = await screen.findByRole('region', { name: 'Polls review' });
     expect(polls).toHaveTextContent('Unused poll money: $50.00. Polls have no default.');
-    expect(polls).toHaveTextContent('Unused pool money does not become spendable Wallet credit.');
+    expect(polls).toHaveTextContent('Unused pool money does not become spendable wallet credit.');
     expect(polls).not.toHaveTextContent(/moderator|reserv|eligibility|subject to availability/i);
   });
 
@@ -302,14 +303,14 @@ describe('amount-first donate through the routed flow', () => {
       { event_id: 'e1', id: 'g1', title: 'Glitch run', current_cents: 0, target_cents: 10000 },
     ]);
     renderAt();
-    const goals = await screen.findByRole('region', { name: 'fund goals review' });
+    const goals = await screen.findByRole('region', { name: 'Fund goals review' });
     await waitFor(() =>
       expect(goals).toHaveTextContent(
         'Selections are subject to availability when payment completes.',
       ),
     );
     expect(goals).not.toHaveTextContent('The destination may change');
-    expect(screen.getByRole('region', { name: 'polls review' })).not.toHaveTextContent(
+    expect(screen.getByRole('region', { name: 'Polls review' })).not.toHaveTextContent(
       /eligibility|subject to availability/i,
     );
   });
@@ -323,19 +324,21 @@ describe('amount-first donate through the routed flow', () => {
       'src',
       '/reward.png',
     );
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    expect(await screen.findByRole('button', { name: 'review →' })).toBeDisabled();
-    expect(screen.getByRole('meter', { name: 'reward Pool' })).toHaveAttribute(
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(await screen.findByRole('button', { name: 'Review →' })).toBeDisabled();
+    expect(screen.getByRole('meter', { name: 'Rewards Pool' })).toHaveAttribute(
       'aria-valuenow',
       '2500',
     );
-    expect(screen.getByRole('meter', { name: 'reward Pool' })).toHaveStyle({ color: 'var(--red)' });
-    fireEvent.click(screen.getByRole('tab', { name: 'goals' }));
+    expect(screen.getByRole('meter', { name: 'Rewards Pool' })).toHaveStyle({
+      color: 'var(--red)',
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Fund goals' }));
     expect(await screen.findByText(/No active fund goals/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /raise my donation to \$25.00/ }));
-    expect(await screen.findByRole('button', { name: 'review →' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
-    expect(await screen.findByRole('region', { name: 'rewards review' })).toHaveTextContent(
+    fireEvent.click(screen.getByRole('button', { name: /raise my donation to \$25.00/i }));
+    expect(await screen.findByRole('button', { name: 'Review →' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Review →' }));
+    expect(await screen.findByRole('region', { name: 'Rewards review' })).toHaveTextContent(
       '$25.00',
     );
   });
@@ -370,7 +373,7 @@ describe('amount-first donate through the routed flow', () => {
       chain: [{ id: 'g1', title: 'Glitch run', remaining_cents: 5000 }],
     });
     renderAt();
-    const polls = await screen.findByRole('region', { name: 'polls review' });
+    const polls = await screen.findByRole('region', { name: 'Polls review' });
     await waitFor(() => expect(polls).toHaveTextContent('$2.00 + $8.00'));
     expect(polls).toHaveTextContent('auto (locked) — topped up in proportion');
     expect(within(polls).queryByRole('button')).not.toBeInTheDocument();
@@ -378,7 +381,7 @@ describe('amount-first donate through the routed flow', () => {
       'Selections are subject to availability when payment completes.',
     );
     expect(await screen.findByText(/now: Glitch run/)).toBeInTheDocument();
-    const goals = screen.getByRole('region', { name: 'fund goals review' });
+    const goals = screen.getByRole('region', { name: 'Fund goals review' });
     expect(goals).toHaveTextContent('The destination may change when your payment completes.');
     expect(goals).not.toHaveTextContent(
       /eligibility|subject to availability|ordered Default goal list/i,
@@ -410,8 +413,8 @@ describe('amount-first donate through the routed flow', () => {
       ],
     });
     renderAt();
-    const goals = await screen.findByRole('region', { name: 'fund goals review' });
-    expect(await screen.findByLabelText('goal target cap')).toHaveTextContent(
+    const goals = await screen.findByRole('region', { name: 'Fund goals review' });
+    expect(await screen.findByLabelText('Goal target cap')).toHaveTextContent(
       'Glitch run is capped at $3.00 of $10.00: the goal only needs $3.00 more.',
     );
     await waitFor(() =>
@@ -439,7 +442,7 @@ describe('amount-first donate through the routed flow', () => {
     save(saved({ amountCents: 1000 }));
     renderAt();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'confirm & pay $0.50' })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'Confirm & pay $0.50' })).toBeEnabled(),
     );
     expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$9.50');
     expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$0.50');
@@ -478,12 +481,12 @@ describe('amount-first donate through the routed flow', () => {
     );
     renderAt();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'confirm & pay $5.00 + shipping' })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'Confirm & pay $5.00 + shipping' })).toBeEnabled(),
     );
     expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$5.00');
     expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$5.00');
     expect(screen.getByText('Shipping (separate)').parentElement).toHaveTextContent(
-      'outside the pledge and Pools',
+      'outside the donation and Pools',
     );
   });
 
@@ -526,7 +529,7 @@ describe('amount-first donate through the routed flow', () => {
     ]);
     renderAt('/donate');
     expect(parseFloat((await screen.findByTestId('progress-preview')).style.width)).toBeCloseTo(55);
-    fireEvent.click(screen.getByRole('tab', { name: 'goals' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Fund goals' }));
     expect(await screen.findByTestId('progress-preview')).toHaveStyle({ width: '75%' });
   });
 
@@ -585,18 +588,18 @@ describe('amount-first donate through the routed flow', () => {
     renderAt('/donate');
 
     fireEvent.change(await screen.findByPlaceholderText('0.00'), { target: { value: '2.00' } });
-    expect(screen.getByRole('meter', { name: 'poll Pool' })).toHaveAttribute('aria-valuenow', '0');
-    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('meter', { name: 'Polls Pool' })).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
-    expect(screen.getByRole('meter', { name: 'poll Pool' })).toHaveAttribute(
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
+    expect(screen.getByRole('meter', { name: 'Polls Pool' })).toHaveAttribute(
       'aria-valuenow',
       '200',
     );
-    expect(screen.queryByText('unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
   });
 
-  it('warns at review → and discards staged poll edits when leaving the polls tab (#76)', async () => {
+  it('warns with an Unsaved poll edits modal at Review →, keeping staged edits on Go back (#80 D8)', async () => {
     save(saved({ amountCents: 1000, lastStep: 'browse', tab: 'polls' }));
     vi.mocked(getPolls).mockResolvedValue([
       {
@@ -608,40 +611,61 @@ describe('amount-first donate through the routed flow', () => {
       },
     ]);
     renderAt('/donate');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     fireEvent.change(await screen.findByPlaceholderText('0.00'), { target: { value: '2.00' } });
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
 
-    // The warning at "review →" names the discard; cancelling keeps the staged edit.
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => false),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('discard'));
+    // Review → opens the Modal instead of window.confirm.
+    fireEvent.click(screen.getByRole('button', { name: 'Review →' }));
+    expect(await screen.findByRole('heading', { name: 'Unsaved poll edits' })).toBeInTheDocument();
+    expect(
+      screen.getByText("Reviewing now discards the amounts you typed but haven't confirmed."),
+    ).toBeInTheDocument();
+
+    // "Go back" closes the Modal and keeps the staged edits.
+    fireEvent.click(screen.getByRole('button', { name: 'Go back' }));
+    expect(screen.queryByRole('heading', { name: 'Unsaved poll edits' })).toBeNull();
     expect(await screen.findByPlaceholderText('0.00')).toHaveValue('2.00');
-    vi.unstubAllGlobals();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
 
-    // Leaving the polls tab discards the staged edit.
-    fireEvent.click(screen.getByRole('tab', { name: 'rewards' }));
-    fireEvent.click(await screen.findByRole('tab', { name: 'polls' }));
+    // Leaving the polls tab still discards the staged edit.
+    fireEvent.click(screen.getByRole('tab', { name: 'Rewards' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Polls' }));
     expect(await screen.findByPlaceholderText('0.00')).toHaveValue('');
-    expect(screen.queryByText('unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
 
-    // Proceeding through the warning reaches review with only committed rows.
+    // "Discard and review" proceeds to review with only committed rows.
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '3.00' } });
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => true),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
-    const pollsReview = await screen.findByRole('region', { name: 'polls review' });
+    fireEvent.click(screen.getByRole('button', { name: 'Review →' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard and review' }));
+    const pollsReview = await screen.findByRole('region', { name: 'Polls review' });
     expect(pollsReview).not.toHaveTextContent('Runner');
-    vi.unstubAllGlobals();
 
     // The discarded edit is gone when returning to the polls tab.
-    fireEvent.click(screen.getByRole('button', { name: 'edit selections' }));
-    fireEvent.click(await screen.findByRole('tab', { name: 'polls' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit selections' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Polls' }));
     expect(await screen.findByPlaceholderText('0.00')).toHaveValue('');
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('shows "Poll votes start at $1.00." for a below-minimum poll vote (#76)', async () => {
+    save(saved({ amountCents: 1000, lastStep: 'browse', tab: 'polls' }));
+    vi.mocked(getPolls).mockResolvedValue([
+      {
+        event_id: 'e1',
+        id: 'p1',
+        title: 'Poll',
+        total_votes_cents: 1000,
+        options: [{ id: 'o1', label: 'Runner', votes_cents: 100 }],
+      },
+    ]);
+    renderAt('/donate');
+    fireEvent.change(await screen.findByPlaceholderText('0.00'), { target: { value: '0.50' } });
+    expect(screen.getByText('Poll votes start at $1.00.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm this poll' })).toBeDisabled();
   });
 
   it('requires explicit reconfirmation of a corrected server plan, with no automatic second checkout', async () => {
@@ -662,18 +686,18 @@ describe('amount-first donate through the routed flow', () => {
       },
     });
     renderAt();
-    fireEvent.click(await screen.findByRole('button', { name: 'confirm & pay $10.00' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm & pay $10.00' }));
     expect(
-      await screen.findByRole('button', { name: 'confirm corrected review' }),
+      await screen.findByRole('button', { name: 'Confirm corrected review' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Confirm & pay $5.00' })).toBeDisabled();
     expect(createPledge).toHaveBeenCalledTimes(1);
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
       target: { value: 'Still confirming' },
     });
-    expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'confirm corrected review' }));
-    expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Confirm & pay $5.00' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm corrected review' }));
+    expect(screen.getByRole('button', { name: 'Confirm & pay $5.00' })).toBeEnabled();
     const confirmed = payment({
       draft_id: 'draft-one',
       payment_state: 'READY',
@@ -685,8 +709,8 @@ describe('amount-first donate through the routed flow', () => {
     });
     vi.mocked(createPledge).mockResolvedValue(confirmed);
     vi.mocked(reconcilePledge).mockResolvedValue(confirmed);
-    fireEvent.click(screen.getByRole('button', { name: 'confirm & pay $5.00' }));
-    expect(await screen.findByRole('heading', { name: /Pending pledge/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm & pay $5.00' }));
+    expect(await screen.findByRole('heading', { name: /Pending donation/ })).toBeInTheDocument();
     expect(createPledge).toHaveBeenLastCalledWith(
       expect.objectContaining({
         draft_id: 'draft-one',
@@ -697,7 +721,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     expect(localStorage.getItem('donation_draft_v1')).toContain('pending-one');
     await waitFor(() => expect(reconcilePledge).toHaveBeenCalledWith('pending-one'));
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
     expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$5.00');
     expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$5.00');
   });
@@ -741,7 +765,7 @@ describe('amount-first donate through the routed flow', () => {
     });
     renderAt('/');
     fireEvent.click(await screen.findByRole('link', { name: 'resume $25.00 donation' }));
-    expect(await screen.findByRole('tab', { name: 'goals' })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: 'Fund goals' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -753,7 +777,7 @@ describe('amount-first donate through the routed flow', () => {
     async (tab) => {
       renderAt(`/${tab}?channel=c1&amount=3`);
       await choose();
-      expect(await screen.findByRole('tab', { name: tab })).toHaveAttribute(
+      expect(await screen.findByRole('tab', { name: tabLabel[tab] })).toHaveAttribute(
         'aria-selected',
         'true',
       );
@@ -763,7 +787,7 @@ describe('amount-first donate through the routed flow', () => {
   it('expires an editable draft 24 hours after its last edit, but not a pending payment', async () => {
     save(saved({ updatedAt: Date.now() - 24 * 60 * 60 * 1000 }));
     renderAt();
-    expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
   });
 
@@ -775,11 +799,11 @@ describe('amount-first donate through the routed flow', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(screen.getByRole('button', { name: 'edit amount $10.00' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Edit amount $10.00' })).toBeInTheDocument();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
-      expect(screen.getByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
       expect(localStorage.getItem('donation_draft_v1')).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -818,7 +842,7 @@ describe('amount-first donate through the routed flow', () => {
     );
     expect(await screen.findByText('Display name: Server name')).toBeInTheDocument();
     expect(screen.getByText('Message: Server message')).toBeInTheDocument();
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$25.00');
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$25.00');
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(getRewards).not.toHaveBeenCalled();
     expect(localStorage.getItem('donation_draft_v1')).toContain('pending-one');
@@ -831,9 +855,9 @@ describe('amount-first donate through the routed flow', () => {
       response: { status: 409, data: { error: 'Still open', pledge: payment() } },
     });
     renderAt();
-    fireEvent.click(await screen.findByRole('button', { name: /edit — cancel/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /edit — cancel/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Still open');
-    expect(screen.queryByRole('button', { name: /confirm & pay/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /confirm & pay/i })).not.toBeInTheDocument();
     expect(getRewards).not.toHaveBeenCalled();
     expect(createPledge).not.toHaveBeenCalled();
     vi.mocked(cancelPledge).mockResolvedValue(
@@ -844,11 +868,11 @@ describe('amount-first donate through the routed flow', () => {
         read_only: false,
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: /edit — cancel/ }));
+    fireEvent.click(screen.getByRole('button', { name: /edit — cancel/i }));
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeInTheDocument();
     expect(await screen.findByText(/No payment was taken/)).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeEnabled(),
     );
     expect(localStorage.getItem('donation_draft_v1')).not.toContain('pending-one');
   });
@@ -860,11 +884,11 @@ describe('amount-first donate through the routed flow', () => {
       payment({ payment_state: 'PROCESSING', can_continue: false }),
     );
     renderAt();
-    fireEvent.click(await screen.findByRole('button', { name: 'continue to payment' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
     expect(await screen.findByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
     expect(continuePledge).toHaveBeenCalledWith('pending-one');
     expect(createPledge).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'continue to payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to payment' })).not.toBeInTheDocument();
   });
 
   it.each(['PROCESSING', 'UNKNOWN'] as const)(
@@ -875,8 +899,8 @@ describe('amount-first donate through the routed flow', () => {
       renderAt();
       expect(await screen.findByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Main' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /confirm & pay/ })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'continue to payment' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /confirm & pay/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Continue to payment' })).not.toBeInTheDocument();
     },
   );
 
@@ -917,7 +941,7 @@ describe('amount-first donate through the routed flow', () => {
     fireEvent.click(screen.getByRole('link', { name: 'home' }));
     expect(await screen.findByText('Home page')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: 'donate' }));
-    expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
     expect(screen.queryByText('Your $25.00 donation went through.')).not.toBeInTheDocument();
   });
 
@@ -987,20 +1011,20 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(cancelPledge).mockResolvedValue({ ...pending, payment_state: 'PROCESSING' });
     renderAt();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/ }));
-    await screen.findByRole('heading', { name: /Pending pledge/ });
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/i }));
+    await screen.findByRole('heading', { name: /Pending donation/ });
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
     expect(screen.getByText('Wallet credit applied').parentElement).toHaveTextContent('$0.00');
     expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$10.00');
-    fireEvent.click(await screen.findByRole('button', { name: /edit — cancel/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /edit — cancel/i }));
     expect(await screen.findByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
     await act(async () => initial.resolve({ ...pending, can_continue: true }));
     expect(screen.getByText(/Editing and new checkout are blocked/)).toBeInTheDocument();
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
     expect(screen.getByText('New money charged').parentElement).toHaveTextContent('$10.00');
-    expect(screen.queryByRole('button', { name: 'continue to payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continue to payment' })).not.toBeInTheDocument();
   });
 
   it('sign-out invalidates deferred create results and never cancels a server payment', async () => {
@@ -1009,16 +1033,16 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(createPledge).mockReturnValue(create.promise);
     renderAt();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/ }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/i }));
     localStorage.removeItem('donor_session_active');
     fireEvent(window, new Event('donor-token-changed'));
     await act(async () => create.resolve(payment()));
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
-    expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
     expect(cancelPledge).not.toHaveBeenCalled();
-    expect(screen.queryByRole('heading', { name: /Pending pledge/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Pending donation/ })).not.toBeInTheDocument();
   });
 
   it('sign-out does not allow a late reconcile response to restore or fulfill the deleted draft', async () => {
@@ -1031,7 +1055,7 @@ describe('amount-first donate through the routed flow', () => {
       old.resolve(payment({ status: 'FULFILLED', payment_state: 'FULFILLED' })),
     );
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
-    expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
     expect(screen.queryByText(/donation went through/)).not.toBeInTheDocument();
     expect(cancelPledge).not.toHaveBeenCalled();
   });
@@ -1044,7 +1068,7 @@ describe('amount-first donate through the routed flow', () => {
       payment({ status: 'FULFILLED', payment_state: 'FULFILLED' }),
     );
     renderAt('/pledge/pending-one');
-    expect(await screen.findByText(/Your pledge has been fulfilled/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your donation has been fulfilled/)).toBeInTheDocument();
     expect(localStorage.getItem('donation_draft_v1')).toBeNull();
     expect(localStorage.getItem('donor_session_active')).toBeNull();
   });
@@ -1165,11 +1189,11 @@ describe('amount-first donate through the routed flow', () => {
     expect(screen.getByText('Ended poll: Poll closed or deleted')).toBeInTheDocument();
     expect(screen.getByText('Completed goal: Goal closed or deleted')).toBeInTheDocument();
     expect(screen.getByText('Deleted goal: Goal closed or deleted')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'rewards review' })).toHaveTextContent(
+    expect(screen.getByRole('region', { name: 'Rewards review' })).toHaveTextContent(
       '2× Digital Reward$30.00',
     );
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
-    expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeDisabled();
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeDisabled();
   });
 
   it('drops an unavailable Channel own item but keeps shared items and amount, reopening the picker even on its saved slug path', async () => {
@@ -1216,12 +1240,12 @@ describe('amount-first donate through the routed flow', () => {
     renderAt('/donate/marathon/main');
     expect(await screen.findByText(/Channel is no longer available/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Side' })).toBeInTheDocument();
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
-    expect(screen.getByRole('region', { name: 'rewards review' })).toHaveTextContent(
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByRole('region', { name: 'Rewards review' })).toHaveTextContent(
       'Digital Reward',
     );
     expect(screen.queryByText('Own item')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeDisabled();
   });
 
   it('keeps Channel-switch confirmation and shared selections while dropping only the old Channel items', async () => {
@@ -1264,15 +1288,15 @@ describe('amount-first donate through the routed flow', () => {
     renderAt();
     fireEvent.click(await screen.findByRole('button', { name: 'Side' }));
     expect(
-      await screen.findByText(/Shared selections and your pledge amount stay/),
+      await screen.findByText(/Shared selections and your donation amount stay/),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByText('Own item')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Side' }));
-    fireEvent.click(screen.getByRole('button', { name: /switch & clear/ }));
+    fireEvent.click(screen.getByRole('button', { name: /switch & clear/i }));
     expect(screen.queryByText('Own item')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'increase quantity' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'edit amount $10.00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Increase quantity' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit amount $10.00' })).toBeInTheDocument();
   });
 
   it('offers shared items only of the selected Channel Event and drops them on a switch to another Event (ADR-0012)', async () => {
@@ -1306,10 +1330,10 @@ describe('amount-first donate through the routed flow', () => {
     expect(await screen.findByText('Digital Reward')).toBeInTheDocument();
     expect(screen.queryByText('Other Event reward')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Other Event' }));
-    fireEvent.click(await screen.findByRole('button', { name: /switch & clear/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /switch & clear/i }));
     expect(await screen.findByText('Other Event reward')).toBeInTheDocument();
     expect(screen.queryByText('Digital Reward')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'increase quantity' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Increase quantity' })).not.toBeInTheDocument();
   });
 
   it('repairs at review when a previously displayed goal closes, and retains permalink prefill', async () => {
@@ -1318,12 +1342,12 @@ describe('amount-first donate through the routed flow', () => {
     ]);
     renderAt('/goals?goal=g1&amount=3&channel=c1');
     await choose();
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remove' })).toBeInTheDocument();
     vi.mocked(getGoals).mockResolvedValue([]);
-    fireEvent.click(screen.getByRole('button', { name: 'review →' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review →' }));
     expect(await screen.findByText('Glitch run: Goal closed or deleted')).toBeInTheDocument();
-    expect(screen.getByText('Pledge amount').parentElement).toHaveTextContent('$10.00');
-    expect(screen.getByRole('region', { name: 'fund goals review' })).not.toHaveTextContent(
+    expect(screen.getByText('Donation amount').parentElement).toHaveTextContent('$10.00');
+    expect(screen.getByRole('region', { name: 'Fund goals review' })).not.toHaveTextContent(
       'Glitch run',
     );
   });
@@ -1334,7 +1358,7 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(getDonor).mockRejectedValue(new Error('offline'));
     renderAt();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the review');
-    expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeDisabled();
     vi.mocked(getDonor).mockResolvedValue({
       id: 'donor',
       email: 'owner@example.com',
@@ -1346,9 +1370,9 @@ describe('amount-first donate through the routed flow', () => {
       fund_contributions: [],
       custom_entries: [],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'refresh review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'confirm & pay $5.00' })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'Confirm & pay $5.00' })).toBeEnabled(),
     );
   });
 
@@ -1356,7 +1380,7 @@ describe('amount-first donate through the routed flow', () => {
     const d = saved({ lastStep: 'browse' });
     save(d);
     renderAt();
-    await screen.findByRole('meter', { name: 'reward Pool' });
+    await screen.findByRole('meter', { name: 'Rewards Pool' });
     externalDraft({ ...d, amountCents: 5000, updatedAt: d.updatedAt + 100 });
     fireEvent(
       window,
@@ -1366,7 +1390,7 @@ describe('amount-first donate through the routed flow', () => {
         storageArea: localStorage,
       }),
     );
-    expect(screen.getByRole('button', { name: 'edit amount $50.00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit amount $50.00' })).toBeInTheDocument();
   });
 
   it('refreshes the session epoch on cross-tab sign-in and ignores a pre-sign-in create reply', async () => {
@@ -1375,9 +1399,9 @@ describe('amount-first donate through the routed flow', () => {
     vi.mocked(createPledge).mockReturnValue(old.promise);
     renderAt();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /confirm & pay/ })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: /confirm & pay/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/ }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm & pay/i }));
     localStorage.setItem('donor_session_active', '1');
     fireEvent(
       window,
@@ -1389,20 +1413,20 @@ describe('amount-first donate through the routed flow', () => {
     );
     await act(async () => old.resolve(payment()));
     expect(localStorage.getItem('donation_draft_v1')).not.toContain('pending-one');
-    expect(screen.queryByRole('heading', { name: /Pending pledge/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Pending donation/ })).not.toBeInTheDocument();
   });
 
   it('uses the last edit across tabs, ignoring older changes and accepting deletion', async () => {
     const d = saved({ lastStep: 'browse' });
     save(d);
     renderAt();
-    await screen.findByRole('meter', { name: 'reward Pool' });
+    await screen.findByRole('meter', { name: 'Rewards Pool' });
     externalDraft({ ...d, updatedAt: d.updatedAt + 100, amountCents: 5000 });
-    expect(await screen.findByRole('button', { name: 'edit amount $50.00' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Edit amount $50.00' })).toBeInTheDocument();
     externalDraft({ ...d, updatedAt: d.updatedAt + 1, amountCents: 500 });
-    expect(screen.getByRole('button', { name: 'edit amount $50.00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit amount $50.00' })).toBeInTheDocument();
     expect(localStorage.getItem('donation_draft_v1')).toContain('5000');
     externalDraft(null);
-    expect(await screen.findByRole('button', { name: /choose incentives/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /choose incentives/i })).toBeInTheDocument();
   });
 });

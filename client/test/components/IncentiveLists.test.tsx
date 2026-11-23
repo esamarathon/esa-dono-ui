@@ -95,6 +95,18 @@ function Wrapper({
   return <CartProvider>{children}</CartProvider>;
 }
 
+// The write-in label field keeps its "Your option" label but lost its
+// placeholder (#80), and the label element is not linked to the input via
+// htmlFor — so select the input as the only textbox in the modal that is not
+// one of the "0.00" money inputs.
+function writeInLabelInput(): HTMLInputElement {
+  const input = screen
+    .getAllByRole('textbox')
+    .find((el) => (el as HTMLInputElement).placeholder !== '0.00');
+  if (!input) throw new Error('write-in label input not found');
+  return input as HTMLInputElement;
+}
+
 // A flash highlight is cleared by a 300 ms timeout. If the list unmounts while
 // that timeout is pending, the callback fires afterwards and sets state on a
 // torn-down environment — in jsdom that throws `window is not defined` and
@@ -104,7 +116,7 @@ async function expectFlashTimerClearedOnUnmount(ui: React.ReactElement, text: st
   const { unmount } = render(<Wrapper>{ui}</Wrapper>);
   await screen.findByText(text);
 
-  fireEvent.click(screen.getByRole('button', { name: 'add' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
   const flashIndex = setSpy.mock.calls.findIndex((call) => call[1] === 300);
   expect(flashIndex).toBeGreaterThanOrEqual(0);
   const flashTimer = setSpy.mock.results[flashIndex]!.value;
@@ -140,10 +152,10 @@ describe('PollList', () => {
     expect(input.value).toBe('');
     expect(input.type).toBe('text');
     expect(screen.queryByRole('spinbutton')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'add' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'remove' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeDisabled();
-    expect(screen.queryByText('unsaved changes')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Confirm this poll' })).toBeDisabled();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
   });
 
   it('clears the vote flash timeout on unmount', async () => {
@@ -156,7 +168,7 @@ describe('PollList', () => {
     await screen.findByText('Best Runner');
 
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
     const flashIndex = setSpy.mock.calls.findIndex((call) => call[1] === 300);
     expect(flashIndex).toBeGreaterThanOrEqual(0);
     const flashTimer = setSpy.mock.results[flashIndex]!.value;
@@ -179,6 +191,16 @@ describe('PollList', () => {
     expect(await screen.findByText(/No active polls/)).toBeInTheDocument();
   });
 
+  it('labels the share link per poll card (#80 D3)', async () => {
+    render(
+      <Wrapper>
+        <PollList />
+      </Wrapper>,
+    );
+    await screen.findByText('Best Runner');
+    expect(screen.getByRole('button', { name: 'Copy a link to this poll' })).toBeInTheDocument();
+  });
+
   it('shows a validation error for an empty write-in label', async () => {
     mocks.getPolls.mockResolvedValue([{ ...poll, allow_custom_entries: true }]);
     render(
@@ -186,9 +208,9 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
     // submit without entering a label
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add write-in' }));
     expect(screen.getByText('Please enter your option')).toBeInTheDocument();
   });
 
@@ -199,15 +221,15 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
-    fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
+    fireEvent.change(writeInLabelInput(), {
       target: { value: 'My idea' },
     });
     // change amount to 0 (the last 0.00 input is the write-in modal's amount)
     const amountInputs = screen.getAllByPlaceholderText('0.00');
     fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
-    expect(screen.getByText(/Minimum amount/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add write-in' }));
+    expect(screen.getByText('Poll votes start at $1.00.')).toBeInTheDocument();
   });
 
   it('opens the write-in modal for polls that allow custom entries', async () => {
@@ -217,8 +239,12 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
-    expect(screen.getByText('add your own option')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
+    expect(screen.getByRole('heading', { name: 'Add your own option' })).toBeInTheDocument();
+    expect(screen.getByText('Your option')).toBeInTheDocument();
+    expect(screen.getByText('Amount ($1 minimum)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add write-in' })).toBeInTheDocument();
   });
 
   it('stages a write-in and commits it with the per-poll confirm (#76)', async () => {
@@ -228,21 +254,23 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
 
-    fireEvent.change(screen.getByPlaceholderText('Type your option...'), {
+    fireEvent.change(writeInLabelInput(), {
       target: { value: 'My runner' },
     });
     const amountInputs = screen.getAllByPlaceholderText('0.00');
     fireEvent.change(amountInputs[amountInputs.length - 1]!, { target: { value: '2.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add write-in' }));
 
     // modal closes and the staged summary shows — but the cart is untouched
-    expect(screen.queryByText('add your own option')).toBeNull();
-    expect(await screen.findByText(/your option: "My runner"/)).toBeInTheDocument();
+    expect(screen.queryByText('Add your own option')).toBeNull();
+    expect(await screen.findByText(/Your option: "My runner"/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([
       expect.objectContaining({
         kind: 'POLL_CUSTOM',
@@ -251,7 +279,7 @@ describe('PollList', () => {
         label: 'My runner',
       }),
     ]);
-    expect(screen.queryByText('unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
   });
 
   it('re-hydrates a committed write-in and stages edits until confirm (#44)', async () => {
@@ -276,24 +304,24 @@ describe('PollList', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
 
     // The modal reopens pre-filled with the committed entry, not blank.
-    expect(screen.getByText('edit your option')).toBeInTheDocument();
-    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    expect(screen.getByRole('heading', { name: 'Edit your option' })).toBeInTheDocument();
+    const labelInput = writeInLabelInput();
     expect(labelInput.value).toBe('My runner');
 
     fireEvent.change(labelInput, { target: { value: 'My edited runner' } });
-    fireEvent.click(screen.getByRole('button', { name: 'save changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     // The staged edit shows, still a single committed entry until confirm.
-    expect(await screen.findByText(/your option: "My edited runner"/)).toBeInTheDocument();
-    expect(screen.queryByText(/your option: "My runner"/)).toBeNull();
+    expect(await screen.findByText(/Your option: "My edited runner"/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your option: "My runner"/)).toBeNull();
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections[0]).toMatchObject({
       label: 'My runner',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
     const selections = JSON.parse(localStorage.getItem('donation_draft_v1')!).selections;
     expect(selections).toHaveLength(1);
     expect(selections[0]).toMatchObject({ label: 'My edited runner', amount_cents: 200 });
@@ -323,9 +351,9 @@ describe('PollList', () => {
     const input = screen.getByPlaceholderText('0.00') as HTMLInputElement;
     expect(input.value).toBe('2.00');
     fireEvent.change(input, { target: { value: '' } });
-    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
   });
 
@@ -380,7 +408,7 @@ describe('PollList', () => {
 
     // Nothing moves until the one confirm.
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'confirm this poll' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm this poll' }));
 
     const selections = JSON.parse(localStorage.getItem('donation_draft_v1')!).selections;
     expect(selections.map((i: { target_id: string }) => i.target_id).sort()).toEqual(['o1', 'o3']);
@@ -390,7 +418,7 @@ describe('PollList', () => {
         expect.objectContaining({ target_id: 'o3', amount_cents: 150 }),
       ]),
     );
-    expect(screen.queryByText('unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
   });
 
   it('renders a donation-impact preview from a staged amount (#52, #76)', async () => {
@@ -418,8 +446,8 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
-    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
+    const labelInput = writeInLabelInput();
     expect(labelInput.maxLength).toBe(40);
     expect(screen.getByText('0/40 characters')).toBeInTheDocument();
     fireEvent.change(labelInput, { target: { value: 'abc' } });
@@ -435,8 +463,8 @@ describe('PollList', () => {
         <PollList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: '+ add your own option' }));
-    const labelInput = screen.getByPlaceholderText('Type your option...') as HTMLInputElement;
+    fireEvent.click(await screen.findByRole('button', { name: 'Add your own option' }));
+    const labelInput = writeInLabelInput();
     expect(labelInput.maxLength).toBe(10);
     expect(screen.getByText('0/10 characters')).toBeInTheDocument();
   });
@@ -453,8 +481,8 @@ describe('PollList', () => {
     expect((screen.getByPlaceholderText('0.00') as HTMLInputElement).value).toBe('2.50');
     // Staged only: the saved draft pledge (the cart) still has no selections.
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
-    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeEnabled();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm this poll' })).toBeEnabled();
   });
 
   it('shows a below-minimum inline error and stages nothing (#76)', async () => {
@@ -466,9 +494,9 @@ describe('PollList', () => {
 
     await screen.findByText('Best Runner');
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '0.50' } });
-    expect(screen.getByText('Minimum amount is $1.00')).toBeInTheDocument();
+    expect(screen.getByText('Poll votes start at $1.00.')).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem('donation_draft_v1')!).selections).toEqual([]);
-    expect(screen.getByRole('button', { name: 'confirm this poll' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Confirm this poll' })).toBeDisabled();
   });
 });
 
@@ -493,9 +521,34 @@ describe('GoalList', () => {
     expect(await screen.findByText('Race entry')).toBeInTheDocument();
     expect(screen.getByText('$7.50 raised')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
+  it('labels the share link per goal card (#80 D3)', async () => {
+    render(
+      <Wrapper>
+        <GoalList />
+      </Wrapper>,
+    );
+    await screen.findByText('Race entry');
+    expect(
+      screen.getByRole('button', {
+        name: 'Copy a link that starts a donation with this goal selected',
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the AddRemoveButton label at text-sm, never text-xs (#80 D2)', async () => {
+    render(
+      <Wrapper>
+        <GoalList />
+      </Wrapper>,
+    );
+    const button = await screen.findByRole('button', { name: 'Add' });
+    expect(button).toHaveClass('text-sm');
+    expect(button).not.toHaveClass('text-xs');
   });
 
   it('clears the contribution flash timeout on unmount', async () => {
@@ -509,8 +562,8 @@ describe('GoalList', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    const removeBtn = await screen.findByRole('button', { name: 'remove' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    const removeBtn = await screen.findByRole('button', { name: 'Remove' });
     expect(removeBtn).toBeInTheDocument();
     fireEvent.click(removeBtn);
   });
@@ -525,8 +578,8 @@ describe('GoalList', () => {
     await screen.findByText('Race entry');
     expect(document.querySelector('[data-testid="progress-preview"]')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    await screen.findByRole('button', { name: 'remove' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await screen.findByRole('button', { name: 'Remove' });
 
     expect(document.querySelector('[data-testid="progress-preview"]')).not.toBeNull();
   });
@@ -542,8 +595,8 @@ describe('GoalList', () => {
     fireEvent.change(amountInput, { target: { value: '5.00' } });
     fireEvent.blur(amountInput);
 
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(await screen.findByRole('button', { name: 'Remove' })).toBeInTheDocument();
   });
 
   it('does not show an add button for completed goals', async () => {
@@ -554,7 +607,7 @@ describe('GoalList', () => {
       </Wrapper>,
     );
     expect(await screen.findByText('Race entry')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'add' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
   });
 
   it('updates the amount for an in-cart contribution', async () => {
@@ -564,8 +617,8 @@ describe('GoalList', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    await screen.findByRole('button', { name: 'remove' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    await screen.findByRole('button', { name: 'Remove' });
 
     // Change amount while in-cart
     const amountInput = screen.getByRole('spinbutton');
@@ -604,11 +657,25 @@ describe('RewardList', () => {
     );
 
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     // Fieldless reward types (PHYSICAL/DIGITAL) show a quantity stepper once
     // in the cart, not a plain "remove" button (#50).
-    expect(await screen.findByRole('button', { name: 'increase quantity' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Increase quantity' })).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it('labels the share link per reward card (#80 D3)', async () => {
+    render(
+      <Wrapper>
+        <RewardList />
+      </Wrapper>,
+    );
+    await screen.findByText('T-shirt');
+    expect(
+      screen.getByRole('button', {
+        name: 'Copy a link that starts a donation with this reward selected',
+      }),
+    ).toBeInTheDocument();
   });
 
   it('clears the reward flash timeout on unmount', async () => {
@@ -622,15 +689,15 @@ describe('RewardList', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'increase quantity' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Increase quantity' }));
     expect(await screen.findByText('2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'decrease quantity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Decrease quantity' }));
     expect(await screen.findByText('1')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'decrease quantity' }));
-    expect(await screen.findByRole('button', { name: 'add' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Decrease quantity' }));
+    expect(await screen.findByRole('button', { name: 'Add' })).toBeInTheDocument();
   });
 
   it('shows the empty state', async () => {
@@ -650,23 +717,29 @@ describe('RewardList', () => {
         <RewardList />
       </Wrapper>,
     );
-    const soldOutBtn = await screen.findByRole('button', { name: 'sold out' });
+    const soldOutBtn = await screen.findByRole('button', { name: 'Sold out' });
     expect(soldOutBtn).toBeInTheDocument();
     expect(soldOutBtn).toBeDisabled();
   });
 
-  it('opens a claim modal for SHOUTOUT rewards', async () => {
+  it('opens a claim modal for SHOUTOUT rewards with an optional message field (#78, #80)', async () => {
     mocks.getRewards.mockResolvedValue([{ ...reward, type: 'SHOUTOUT', title: 'Shoutout' }]);
     render(
       <Wrapper>
         <RewardList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    expect(screen.getByText(/add: Shoutout/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    expect(screen.getByText(/Add: Shoutout/)).toBeInTheDocument();
+    // Optional answer: bare label, the "(optional; 200 characters maximum)"
+    // marker, and a 0 / 200 counter visible from the start (#78/#80).
+    expect(screen.getByText('Shoutout message')).toBeInTheDocument();
+    expect(screen.getByText('(optional; 200 characters maximum)')).toBeInTheDocument();
+    expect(screen.getByText('0 / 200')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Shoutout message/)).toHaveAttribute('maxLength', '200');
   });
 
-  it('requires the claim answer on a labeled CUSTOM reward and stages nothing on a blank one (#78)', async () => {
+  it('requires the claim answer on a labeled CUSTOM reward and stages nothing on a blank one (#78, #80)', async () => {
     mocks.getRewards.mockResolvedValue([
       {
         ...reward,
@@ -680,24 +753,27 @@ describe('RewardList', () => {
         <RewardList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    // Required answer: bare label with no "(optional)" marker, and a 0 / 200
+    // counter visible from the start (#78/#80).
     expect(screen.getByText('Your game pick')).toBeInTheDocument();
-    expect(screen.queryByText('(optional)')).not.toBeInTheDocument();
+    expect(screen.queryByText('(optional; 200 characters maximum)')).not.toBeInTheDocument();
+    expect(screen.getByText('0 / 200')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('answer required');
-    expect(screen.getByText(/add: Pick the Next Game/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'add' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Your game pick is required.');
+    expect(screen.getByText(/Add: Pick the Next Game/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Your game pick'), { target: { value: 'Celeste' } });
-    expect(screen.getByText('7/200 characters')).toBeInTheDocument();
+    expect(screen.getByText('7 / 200')).toBeInTheDocument();
     expect(screen.getByLabelText('Your game pick')).toHaveAttribute('maxLength', '200');
 
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+    expect(await screen.findByRole('button', { name: 'Remove' })).toBeInTheDocument();
   });
 
-  it('keeps the fallback Additional Info answer optional when the Custom Label is empty (#78)', async () => {
+  it('keeps the fallback Additional info answer optional when the Custom Label is empty (#78, #80)', async () => {
     mocks.getRewards.mockResolvedValue([
       { ...reward, type: 'CUSTOM', custom_type_label: null, title: 'Mystery' },
     ]);
@@ -706,11 +782,12 @@ describe('RewardList', () => {
         <RewardList />
       </Wrapper>,
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'add' }));
-    expect(screen.getByText(/Additional Info/)).toBeInTheDocument();
-    expect(screen.getByText('(optional)')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
-    expect(await screen.findByRole('button', { name: 'remove' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    expect(screen.getByText('Additional info')).toBeInTheDocument();
+    expect(screen.getByText('(optional; 200 characters maximum)')).toBeInTheDocument();
+    expect(screen.getByText('0 / 200')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+    expect(await screen.findByRole('button', { name: 'Remove' })).toBeInTheDocument();
   });
 
   it('shows the reward type definition with a more-in-Help link on the badge (#78)', async () => {
@@ -721,7 +798,7 @@ describe('RewardList', () => {
     );
     expect(await screen.findByText('T-shirt')).toBeInTheDocument();
     expect(screen.getByText(REWARD_TYPE_DEFINITIONS.PHYSICAL)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'more in Help' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'More in Help' })).toHaveAttribute(
       'href',
       '/help#reward-types',
     );

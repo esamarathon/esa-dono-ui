@@ -500,7 +500,7 @@ export default function PollList({
             >
               {changes.dirty && (
                 <span
-                  className="font-mono text-xs uppercase tracking-wider"
+                  className="font-mono text-sm uppercase tracking-wider"
                   style={{ color: 'var(--d-yellow)' }}
                 >
                   Unsaved changes

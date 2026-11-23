@@ -6,7 +6,7 @@ describe('Help page', () => {
   it('anchors the your data (gdpr) section for the checkout link (#81)', () => {
     render(<Help />);
     expect(document.getElementById('your-data-gdpr')).not.toBeNull();
-    expect(screen.getByRole('heading', { name: 'your data (gdpr)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Your data (GDPR)' })).toBeInTheDocument();
   });
 
   it('discloses the email promise and the full send list in your data (gdpr) (#81)', () => {

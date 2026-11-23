@@ -167,7 +167,7 @@ Wait a moment and retry - the database might be in use by background tasks.
    is set, the RabbitMQ Destination ("MQ Server", exchange `tiltify`, routing
    key `dono-platform.donation`).
 3. Run `prisma/seed.ts` in the backend container. It creates the dev accounts,
-   the key banner, and one active Event with a primary Channel (Main Marathon).
+   the key banner, and one active Event with a primary Channel (Stream 1).
 
 To keep the staging RabbitMQ Destination across resets, add this line to the
 host's `.env`. The broker is the `staging-rabbitmq` container, reachable as

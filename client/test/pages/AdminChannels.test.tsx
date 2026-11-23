@@ -172,7 +172,7 @@ describe('AdminChannels', () => {
 
     render(<AdminChannels />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Share' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy a link to donate to Main' }));
 
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith('https://example.com/donate?channel=c1'),

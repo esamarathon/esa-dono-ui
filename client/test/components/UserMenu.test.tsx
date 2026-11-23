@@ -27,12 +27,12 @@ describe('UserMenu', () => {
     );
 
     // Initially closed
-    expect(screen.queryByText('wallet')).toBeNull();
+    expect(screen.queryByText('Wallet')).toBeNull();
 
     // Open
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('wallet')).toBeInTheDocument();
-    expect(screen.getByText('logout')).toBeInTheDocument();
+    expect(screen.getByText('Wallet')).toBeInTheDocument();
+    expect(screen.getByText('Logout')).toBeInTheDocument();
   });
 
   it('calls onLogout when the logout button is clicked', () => {
@@ -44,7 +44,7 @@ describe('UserMenu', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    fireEvent.click(screen.getByText('logout'));
+    fireEvent.click(screen.getByText('Logout'));
 
     expect(onLogout).toHaveBeenCalled();
   });
@@ -58,8 +58,8 @@ describe('UserMenu', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('moderate')).toBeInTheDocument();
-    expect(screen.queryByText('admin')).toBeNull();
+    expect(screen.getByText('Moderate')).toBeInTheDocument();
+    expect(screen.queryByText('Admin')).toBeNull();
   });
 
   it('shows both moderate and admin links for an admin', () => {
@@ -71,8 +71,8 @@ describe('UserMenu', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('moderate')).toBeInTheDocument();
-    expect(screen.getByText('admin')).toBeInTheDocument();
+    expect(screen.getByText('Moderate')).toBeInTheDocument();
+    expect(screen.getByText('Admin')).toBeInTheDocument();
   });
 
   it('closes on Escape key', () => {
@@ -84,9 +84,9 @@ describe('UserMenu', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('wallet')).toBeInTheDocument();
+    expect(screen.getByText('Wallet')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('wallet')).toBeNull();
+    expect(screen.queryByText('Wallet')).toBeNull();
   });
 });

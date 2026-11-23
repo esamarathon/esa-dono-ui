@@ -83,7 +83,7 @@ export default function PledgeReview({
             <p className="font-body text-sm text-off-white/55">
               Unused reward Pool:{' '}
               {fmt(Math.max(0, plan.pledge_amount_cents - plan.usage_cents.reward))}. Not returned
-              as Wallet credit.
+              as wallet credit.
             </p>
           )}
           {category === 'poll' && plan.usage_cents.poll === 0 && (
@@ -140,7 +140,7 @@ export default function PledgeReview({
           )}
           {category !== 'reward' && (
             <p className="font-body text-sm text-off-white/55">
-              Unused pool money does not become spendable Wallet credit.
+              Unused pool money does not become spendable wallet credit.
             </p>
           )}
         </section>

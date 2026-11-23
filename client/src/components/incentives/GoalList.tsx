@@ -124,8 +124,7 @@ export default function GoalList() {
     <div>
       <h2 className="font-display text-3xl uppercase text-off-white mb-2">Support fund goals</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Choose amounts from your goal Pool. Unused amounts top up your selections in
-        proportion.
+        Choose amounts from your goal Pool. Unused amounts top up your selections in proportion.
       </p>
       {goals.map((g) => {
         const unavailable = g.is_active === false;

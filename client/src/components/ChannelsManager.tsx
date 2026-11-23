@@ -141,7 +141,10 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <ShareLinkButton path={`/donate?channel=${s.id}`} />
+                <ShareLinkButton
+                  path={`/donate?channel=${s.id}`}
+                  label={`Copy a link to donate to ${s.name}`}
+                />
                 <button
                   onClick={() => openEdit(s)}
                   className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"

@@ -410,15 +410,15 @@ it('collects the claim answer for a labeled CUSTOM reward and carries it per cla
   expect(screen.getByText('Your game pick')).toBeInTheDocument();
   expect(screen.queryByText('(optional)')).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
-  expect(screen.getByRole('alert')).toHaveTextContent('answer required');
-  expect(screen.getByText(/add: Pick the Next Game/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+  expect(screen.getByRole('alert')).toHaveTextContent(/Your game pick is required/);
+  expect(screen.getByText(/Add: Pick the Next Game/)).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Your game pick'), { target: { value: 'Celeste' } });
-  expect(screen.getByText('7/200 characters')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'add selection' }));
+  expect(screen.getByText('7 / 200')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
 
-  fireEvent.click(await screen.findByRole('button', { name: /Review/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Review 1 pick' }));
   fireEvent.click(screen.getByRole('button', { name: 'Apply credits' }));
   await waitFor(() => expect(applyPoolCredits).toHaveBeenCalledTimes(1));
   const request = vi.mocked(applyPoolCredits).mock.calls[0]![1];

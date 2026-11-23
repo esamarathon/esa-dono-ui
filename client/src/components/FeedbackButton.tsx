@@ -261,10 +261,10 @@ export default function FeedbackButton() {
         onClick={handleOpen}
         disabled={capturing}
         aria-label="Send feedback"
-        className="fixed bottom-4 right-4 z-40 btrl-button text-xs py-2 px-3"
+        className="fixed bottom-4 right-4 z-40 btrl-button text-sm py-2 px-3"
         style={{ background: 'var(--d-yellow)', color: 'black' }}
       >
-        {capturing ? '...' : 'feedback'}
+        {capturing ? '...' : 'Feedback'}
       </button>
 
       {modalOpen && (
@@ -299,7 +299,7 @@ export default function FeedbackButton() {
                 disabled={sending || !text.trim()}
                 className="btrl-button flex-1"
               >
-                {sending ? 'sending...' : error ? 'retry' : 'send'}
+                {sending ? 'Sending...' : error ? 'Retry' : 'Send'}
               </button>
             </div>
           )}

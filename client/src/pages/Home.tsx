@@ -38,7 +38,7 @@ export default function Home() {
       )}
       <div className="btrl-panel p-6">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-3">
-          <span className="font-data font-bold text-xl text-off-white/55">raised</span>
+          <span className="font-data font-bold text-xl text-off-white/55">Raised</span>
           <span className="font-data font-bold text-2xl sm:text-3xl text-d-yellow">
             {fmt(raisedCents)} / {fmt(goalCents)}
           </span>
@@ -54,7 +54,7 @@ export default function Home() {
           className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
           style={{ background: 'var(--d-yellow)' }}
         >
-          donate now
+          Donate now
         </Link>
       </div>
     </div>

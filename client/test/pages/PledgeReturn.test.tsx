@@ -58,8 +58,8 @@ describe('PledgeReturn', () => {
     mocks.getPledge.mockResolvedValue(pending);
     mocks.reconcilePledge.mockResolvedValue(pending);
     renderWithToken('processing');
-    expect(await screen.findByText(/Processing your pledge/)).toBeInTheDocument();
-    expect(screen.queryByText(/This pledge has expired/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/Processing your donation/)).toBeInTheDocument();
+    expect(screen.queryByText(/This donation has expired/)).not.toBeInTheDocument();
   });
 
   it.each(['PAYMENT_REVIEW', 'LEGACY_PAID'])(
@@ -74,7 +74,7 @@ describe('PledgeReturn', () => {
       expect(
         await screen.findByText(/original incentives were not fulfilled/i),
       ).toBeInTheDocument();
-      expect(screen.queryByText(/Your pledge has been fulfilled/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Your donation has been fulfilled/)).not.toBeInTheDocument();
       expect(screen.queryByText('wallet page')).not.toBeInTheDocument();
     },
   );
@@ -105,7 +105,7 @@ describe('PledgeReturn', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('No pledge token provided.')).toBeInTheDocument();
+    expect(await screen.findByText('No donation token provided.')).toBeInTheDocument();
   });
 
   it('renders the fulfilled state with items and stays put when logged out', async () => {
@@ -113,7 +113,7 @@ describe('PledgeReturn', () => {
 
     renderWithToken('tok123');
 
-    expect(await screen.findByText(/Your pledge has been fulfilled/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your donation has been fulfilled/)).toBeInTheDocument();
     expect(screen.getByText('Reward')).toBeInTheDocument();
     expect(screen.getAllByText('$10.00')).toHaveLength(1);
     expect(screen.getByText('—')).toBeInTheDocument();
@@ -129,7 +129,7 @@ describe('PledgeReturn', () => {
 
     renderWithToken('tok123');
 
-    expect(await screen.findByText(/This pledge has expired/)).toBeInTheDocument();
+    expect(await screen.findByText(/This donation has expired/)).toBeInTheDocument();
   });
 
   it('navigates straight to the wallet when the browser already has an active session', async () => {
@@ -153,7 +153,7 @@ describe('PledgeReturn', () => {
 
     renderWithToken('tok123');
 
-    await screen.findByText(/Your pledge has been fulfilled/);
+    await screen.findByText(/Your donation has been fulfilled/);
     expect(screen.queryByText('wallet page')).not.toBeInTheDocument();
   });
 });

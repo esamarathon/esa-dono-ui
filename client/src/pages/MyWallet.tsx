@@ -47,7 +47,7 @@ function WalletLogin({
   const submit = () => {
     const token = extractToken(input);
     if (!token) {
-      setFormError('Paste the full magic link from your email, or paste just the token value.');
+      setFormError('Paste the full link from your donation email, or paste just the token value.');
       return;
     }
     setFormError('');
@@ -77,7 +77,7 @@ function WalletLogin({
 
   return (
     <div className="max-w-xl mx-auto p-8">
-      <h1 className="font-display text-4xl uppercase mb-4">access your wallet</h1>
+      <h1 className="font-display text-4xl uppercase mb-4">Access your wallet</h1>
       <Card>
         {message && (
           <p className="text-sm mb-4" style={{ color: 'var(--red)' }}>
@@ -86,8 +86,8 @@ function WalletLogin({
         )}
         <div className="space-y-3 font-body text-sm text-off-white/55 mb-5">
           <p>
-            Your wallet is unlocked by the magic link emailed after each donation. There are no
-            passwords or account signups.
+            Your wallet is unlocked by the link in your donation email. There are no passwords or
+            account signups.
           </p>
           <p>
             Your wallet link stays the same after each donation. If it ever stops working, use the
@@ -97,7 +97,7 @@ function WalletLogin({
         </div>
 
         <label className="block font-data font-bold text-sm mb-1 text-off-white">
-          magic link or token
+          Link or token
         </label>
         <input
           className="w-full px-3 py-2 text-sm mb-2"
@@ -112,20 +112,20 @@ function WalletLogin({
           </p>
         )}
         <button onClick={submit} className="btrl-button">
-          open wallet
+          Open wallet
         </button>
 
         <div
-          className="mt-6 pt-5 flex items-center gap-3 font-data text-xs text-off-white/45"
+          className="mt-6 pt-5 flex items-center gap-3 font-data text-sm text-off-white/45"
           style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
         >
           <span className="flex-1 h-px" style={{ background: 'rgba(239,238,236,.08)' }} />
-          <span>lost your link?</span>
+          <span>Lost your link?</span>
           <span className="flex-1 h-px" style={{ background: 'rgba(239,238,236,.08)' }} />
         </div>
 
         <label className="block font-data font-bold text-sm mb-1 mt-5 text-off-white">
-          email a new link
+          Email a new link
         </label>
         <input
           className="w-full px-3 py-2 text-sm mb-2"
@@ -143,17 +143,17 @@ function WalletLogin({
           </p>
         )}
         <button onClick={submitEmail} disabled={emailBusy} className="btrl-button">
-          {emailBusy ? 'sending…' : 'send me a new link'}
+          {emailBusy ? 'Sending…' : 'Send me a new link'}
         </button>
 
         {providers.length > 0 && (
           <>
             <div
-              className="mt-6 pt-5 flex items-center gap-3 font-data text-xs text-off-white/45"
+              className="mt-6 pt-5 flex items-center gap-3 font-data text-sm text-off-white/45"
               style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}
             >
               <span className="flex-1 h-px" style={{ background: 'rgba(239,238,236,.08)' }} />
-              <span>or sign in with</span>
+              <span>Or sign in with</span>
               <span className="flex-1 h-px" style={{ background: 'rgba(239,238,236,.08)' }} />
             </div>
             <div className="grid gap-2 mt-5">
@@ -163,7 +163,7 @@ function WalletLogin({
                   href={`/api/auth/${p}`}
                   className="btrl-button block text-center no-underline"
                 >
-                  sign in with {p}
+                  Sign in with {p}
                 </a>
               ))}
             </div>
@@ -212,7 +212,7 @@ export default function MyWallet() {
       setDonor(null);
       clearSessionMarker();
       setError(
-        'No active wallet session. Open the newest magic link from your donation email, or sign in below.',
+        'No active wallet session. Open the link in your newest donation email, or sign in below.',
       );
     } finally {
       setLoading(false);
@@ -252,7 +252,7 @@ export default function MyWallet() {
       await startSession(token);
     } catch {
       setDonor(null);
-      setError('Invalid or expired link. Paste the newest magic link from your donation email.');
+      setError('Invalid or expired link. Paste the newest link from your donation email.');
       setLoading(false);
       return;
     }
@@ -271,28 +271,28 @@ export default function MyWallet() {
   return (
     <div className="max-w-6xl mx-auto p-4 sm:p-8">
       <div className="flex items-center justify-between mb-4">
-        <p className="font-data text-sm uppercase">my wallet</p>
+        <p className="font-data text-sm uppercase">My wallet</p>
         <button
           onClick={handleLogout}
           className="font-data font-bold text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
         >
-          logout
+          Logout
         </button>
       </div>
       <Card className="mb-6">
         <div className="flex justify-between gap-4">
           <div>
-            <p className="font-data text-sm text-off-white/55">logged in as</p>
+            <p className="font-data text-sm text-off-white/55">Logged in as</p>
             <p className="font-body font-medium break-all text-off-white">{donor.email}</p>
             {hasModeratorAccess(donor.role) && (
-              <p className="font-data text-xs text-d-yellow mt-1">moderator access enabled</p>
+              <p className="font-data text-sm text-d-yellow mt-1">Moderator access enabled</p>
             )}
           </div>
         </div>
         <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(239,238,236,.08)' }}>
           <div className="flex gap-8">
             <div>
-              <p className="font-data text-sm text-off-white/55">total donated</p>
+              <p className="font-data text-sm text-off-white/55">Total donated</p>
               <p className="font-data font-bold text-off-white">{fmt(donor.total_donated)}</p>
             </div>
           </div>
@@ -301,7 +301,7 @@ export default function MyWallet() {
 
       <PoolCredits donorId={donor.id} wallet={donor.balance_remaining} />
 
-      <h2 className="font-display text-3xl uppercase mb-3">donation history</h2>
+      <h2 className="font-display text-3xl uppercase mb-3">Donation history</h2>
       {donor.donations.length === 0 ? (
         <p className="font-body text-sm text-off-white/55">No donations yet.</p>
       ) : (
@@ -323,7 +323,7 @@ export default function MyWallet() {
         </div>
       )}
 
-      <h2 className="font-display text-3xl uppercase mb-3">my claims</h2>
+      <h2 className="font-display text-3xl uppercase mb-3">My claims</h2>
       {donor.reward_claims.length === 0 ? (
         <p className="font-body text-sm text-off-white/55">No reward claims yet.</p>
       ) : (
@@ -337,7 +337,7 @@ export default function MyWallet() {
                 </p>
               </div>
               <span
-                className={`font-data text-xs font-bold px-2 py-1 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : 'text-d-yellow'}`}
+                className={`font-data text-sm font-bold px-2 py-1 rounded-sm ${c.status === 'FULFILLED' ? 'text-green' : 'text-d-yellow'}`}
                 style={{
                   background:
                     c.status === 'FULFILLED' ? 'rgba(92,189,125,.16)' : 'rgba(208,152,70,.16)',
@@ -350,7 +350,7 @@ export default function MyWallet() {
         </div>
       )}
 
-      <h2 className="font-display text-3xl uppercase mb-3">my write-ins</h2>
+      <h2 className="font-display text-3xl uppercase mb-3">My write-ins</h2>
       {donor.custom_entries.length === 0 ? (
         <p className="font-body text-sm text-off-white/55">No write-in options submitted yet.</p>
       ) : (
@@ -367,7 +367,7 @@ export default function MyWallet() {
         </div>
       )}
 
-      <h2 className="font-display text-3xl uppercase mb-3">my poll votes</h2>
+      <h2 className="font-display text-3xl uppercase mb-3">My poll votes</h2>
       {donor.poll_votes.length === 0 ? (
         <p className="font-body text-sm text-off-white/55">No poll votes yet.</p>
       ) : (
@@ -386,9 +386,9 @@ export default function MyWallet() {
         </div>
       )}
 
-      <h2 className="font-display text-3xl uppercase mb-3">my goal contributions</h2>
+      <h2 className="font-display text-3xl uppercase mb-3">My goal donations</h2>
       {donor.fund_contributions.length === 0 ? (
-        <p className="font-body text-sm text-off-white/55">No goal contributions yet.</p>
+        <p className="font-body text-sm text-off-white/55">No goal donations yet.</p>
       ) : (
         <div className="space-y-2 mb-6">
           {donor.fund_contributions.map((c) => (
@@ -407,19 +407,19 @@ export default function MyWallet() {
         <>
           {(donor.auction_offers ?? []).length > 0 && (
             <>
-              <h2 className="font-display text-3xl uppercase mb-3">pay for your win</h2>
+              <h2 className="font-display text-3xl uppercase mb-3">Pay for your win</h2>
               <div className="space-y-2 mb-6">
                 {(donor.auction_offers ?? []).map((o) => (
                   <Card key={o.id} className="flex justify-between items-center">
                     <div>
                       <p className="font-data font-bold text-off-white">{o.auction.title}</p>
                       <p className="font-data text-sm text-off-white/55">
-                        {fmt(o.amount_cents)} · pay by {new Date(o.expires_at).toLocaleString()}
+                        {fmt(o.amount_cents)} · Pay by {new Date(o.expires_at).toLocaleString()}
                       </p>
                     </div>
                     {o.checkout_url && (
                       <a href={o.checkout_url} className="btrl-button">
-                        pay now
+                        Pay now
                       </a>
                     )}
                   </Card>
@@ -428,7 +428,7 @@ export default function MyWallet() {
             </>
           )}
 
-          <h2 className="font-display text-3xl uppercase mb-3">my bids</h2>
+          <h2 className="font-display text-3xl uppercase mb-3">My bids</h2>
           {(donor.bids ?? []).length === 0 ? (
             <p className="font-body text-sm text-off-white/55">No auction bids yet.</p>
           ) : (
@@ -445,7 +445,7 @@ export default function MyWallet() {
             </div>
           )}
 
-          <h2 className="font-display text-3xl uppercase mb-3">my auction wins</h2>
+          <h2 className="font-display text-3xl uppercase mb-3">My auction wins</h2>
           {(donor.auction_wins ?? []).length === 0 ? (
             <p className="font-body text-sm text-off-white/55">No auction wins yet.</p>
           ) : (
@@ -485,7 +485,7 @@ function StatusBadge({ status }: { status: string }) {
   };
   return (
     <span
-      className="font-data text-xs font-bold px-2 py-1 rounded-sm"
+      className="font-data text-sm font-bold px-2 py-1 rounded-sm"
       style={{ color: style.color, background: style.background }}
     >
       {status.replace('_', ' ')}

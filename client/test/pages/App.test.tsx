@@ -42,6 +42,6 @@ describe('App', () => {
     render(<App />);
 
     expect(await screen.findByText('Test Campaign')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'donate now' })).toHaveAttribute('href', '/donate');
+    expect(screen.getByRole('link', { name: 'Donate now' })).toHaveAttribute('href', '/donate');
   });
 });

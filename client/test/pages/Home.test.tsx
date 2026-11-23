@@ -43,7 +43,7 @@ describe('Home page', () => {
 
     expect(await screen.findByText('Test Campaign')).toBeDefined();
     expect(screen.getByText('A test campaign')).toBeDefined();
-    expect(screen.getByText('raised')).toHaveClass('text-xl');
+    expect(screen.getByText('Raised')).toHaveClass('text-xl');
     const total = screen.getByText('$15,602.67 / $60,000.00');
     expect(total).toHaveClass('text-2xl', 'sm:text-3xl');
     expect(total.parentElement).toHaveClass('flex-wrap', 'gap-x-4', 'gap-y-1');
