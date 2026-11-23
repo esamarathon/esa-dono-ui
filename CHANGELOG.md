@@ -7,6 +7,26 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **"Live / Up next" schedule strip replaces the public fundraising total** (#148): the
+  strip above the navbar shows what is live and what is next from the Channel's Horaro
+  schedule (new optional Channel field **Horaro schedule slug** in admin event setup;
+  the server fetches `https://horaro.org/esa/{slug}.json` with a ~60 s cache and serves
+  the computed slots at `GET /api/schedule`). The homepage hero keeps its name,
+  description, logo and the "Donate now" CTA; the raised amount, progress bar and
+  "% of goal" are gone. The strip renders nothing whenever the state is unclear (no
+  Channel or slug, nothing scheduled, several active Events, failing schedule read).
+  Donation acknowledgements in the strip are a later step (#250).
+
+### Removed
+
+- **The public aggregate total and goal** (#148): `GET /api/campaign` and its OpenAPI
+  entry are removed (the homepage's static name/description moved into the client) and
+  `CAMPAIGN_GOAL_CENTS` is retired from docker-compose, `.env.example` and the docs.
+  Donation counting rules, admin accounting totals and `GET /api/campaign/broadcast`
+  are unchanged.
+
 ## [0.9.0] — 2026-11-22
 
 ### Changed

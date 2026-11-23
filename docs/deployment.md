@@ -179,7 +179,7 @@ Behind an external proxy, also check that each visitor gets their own rate-limit
 counter (run from two different networks, e.g. your machine and the server):
 
 ```bash
-curl -sI https://donations.example.com/api/campaign | grep -i x-ratelimit-remaining
+curl -sI https://donations.example.com/api/schedule | grep -i x-ratelimit-remaining
 ```
 
 Each network should count down from `RATE_LIMIT_API` (default 600) on its own.
@@ -353,7 +353,6 @@ The mechanics are owned by `docs/agents/release.md`; for the planned steps above
 | `STRIPE_CURRENCY`                   | no             | `usd`                                                      | checkout currency                                                  |
 | `STRIPE_SHIPPING_RATE_ID`           | no             | —                                                          | ShippingRate for PHYSICAL rewards                                  |
 | `STRIPE_SHIPPING_ALLOWED_COUNTRIES` | no             | `US`                                                       | countries for shipping collection                                  |
-| `CAMPAIGN_GOAL_CENTS`               | no             | `500000`                                                   | home-page goal (integer cents)                                     |
 | `GOOGLE_CLIENT_ID/SECRET`           | no             | —                                                          | Google SSO (unset → disabled)                                      |
 | `DISCORD_CLIENT_ID/SECRET`          | no             | —                                                          | Discord SSO (unset → disabled)                                     |
 | `TWITCH_CLIENT_ID/SECRET`           | no             | —                                                          | Twitch SSO (unset → disabled)                                      |

@@ -205,6 +205,8 @@ export interface Channel {
   slug: string;
   event_id: string;
   is_active: boolean;
+  /** Horaro schedule slug for the donor-site schedule strip (#148). */
+  horaro_schedule_slug?: string | null;
   /** Ordered own/shared goal ids. Ineligible entries are preserved. */
   default_goals?: string[];
   default_goal?: { id: string; title: string } | null;
@@ -345,15 +347,16 @@ export interface AuctionWin {
   donor?: { email?: string };
 }
 
-export interface Campaign {
-  name?: string;
-  title?: string;
-  description?: string;
-  logo?: { src?: string };
-  amount_raised?: { value?: string };
-  total_amount_raised?: { value?: string };
-  goal?: { value?: string };
-  fundraising_goal?: { value?: string };
+/** One timetable item of a Horaro schedule, as shown in the donor-site strip (#148). */
+export interface ScheduleSlot {
+  game: string;
+  players: string;
+}
+
+/** GET /api/schedule result. Null slots mean the strip renders nothing (D6). */
+export interface Schedule {
+  live: ScheduleSlot | null;
+  next: ScheduleSlot | null;
 }
 
 /** A browser-local donor selection. Live prices are revalidated before review. */

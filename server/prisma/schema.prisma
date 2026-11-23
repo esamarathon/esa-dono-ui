@@ -122,6 +122,10 @@ model Channel {
   slug       String          @unique
   event_id   String
   is_active  Boolean         @default(true)
+  /// Horaro schedule slug (e.g. "2026-winter1") for the donor-site schedule
+  /// strip. The Horaro organisation is fixed to "esa" in code (#148). Empty =
+  /// no schedule configured.
+  horaro_schedule_slug String?
   created_at DateTime        @default(now())
   updated_at DateTime        @updatedAt
   event      Event           @relation("EventChannels", fields: [event_id], references: [id], onDelete: Restrict)

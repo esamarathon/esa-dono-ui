@@ -86,6 +86,7 @@ servers:
 
 tags:
   - name: Health
+  - name: Schedule
   - name: Campaign
   - name: Donor
   - name: Auth
@@ -129,31 +130,55 @@ paths:
                   db: { enum: [false] }
                   error: { type: string }
 
-  # ─── Campaign ───
-  /campaign:
+  # ─── Schedule ───
+  /schedule:
     get:
-      tags: [Campaign]
-      summary: Get campaign totals
+      tags: [Schedule]
+      summary: Live / Up next schedule slots for the donor-site strip
+      description: >-
+        The computed current and next slot of a Channel's Horaro schedule
+        (`https://horaro.org/esa/{schedule-slug}.json`, fetched and cached
+        server-side; the browser never calls Horaro). Unclear states — no
+        Channel, no single active Event with a primary Channel, no configured
+        slug, empty schedule or an ended/failing one — return nulls.
+      parameters:
+        - name: channel
+          in: query
+          required: false
+          description: >-
+            Channel slug. When absent, the primary Channel of the single active
+            Event is used; with zero or several active Events the result is
+            nulls.
+          schema:
+            type: string
       responses:
         '200':
-          description: Campaign stats
+          description: Computed slots; null when the strip must render nothing
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  name: { type: string }
-                  description: { type: string }
-                  amount_raised:
-                    type: object
-                    description: One overall total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
-                    properties:
-                      value: { type: string, description: 'Dollars formatted string' }
-                  goal:
-                    type: object
-                    properties:
-                      value: { type: string }
+                  live:
+                    allOf:
+                      - $ref: '#/components/schemas/ScheduleSlot'
+                    nullable: true
+                    description: The item whose planned slot contains now
+                  next:
+                    allOf:
+                      - $ref: '#/components/schemas/ScheduleSlot'
+                    nullable: true
+                    description: The first item starting after now
+        '500':
+          description: Schedule lookup failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
 
+  # ─── Campaign ───
   /campaign/broadcast:
     get:
       tags: [Campaign]
@@ -4868,6 +4893,13 @@ components:
       scheme: bearer
       description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
+    ScheduleSlot:
+      type: object
+      required: [game, players]
+      description: One timetable item of a Horaro schedule (game and players only)
+      properties:
+        game: { type: string }
+        players: { type: string }
     SpendReversalPreview:
       type: object
       required: [destinations]

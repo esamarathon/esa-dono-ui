@@ -193,6 +193,43 @@ describe('Channels', () => {
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
 
+    it('sets, updates and clears the Horaro schedule slug (#148)', async () => {
+      const createRes = await request(createApp())
+        .post('/api/admin/channels')
+        .send({
+          name: `Horaro Channel ${crypto.randomUUID()}`,
+          horaro_schedule_slug: '2026-winter1',
+        })
+        .set(auth);
+      expect(createRes.status).toBe(200);
+      expect(createRes.body.horaro_schedule_slug).toBe('2026-winter1');
+      createdChannelIds.push(createRes.body.id);
+
+      const stored = await prisma.channel.findUnique({ where: { id: createRes.body.id } });
+      expect(stored?.horaro_schedule_slug).toBe('2026-winter1');
+
+      const updateRes = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ horaro_schedule_slug: ' 2026-summer1 ' })
+        .set(auth);
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.horaro_schedule_slug).toBe('2026-summer1');
+
+      const cleared = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ horaro_schedule_slug: '' })
+        .set(auth);
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.horaro_schedule_slug).toBeNull();
+
+      const bad = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ horaro_schedule_slug: '../esa/other-org' })
+        .set(auth);
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toMatch(/horaro_schedule_slug/);
+    });
+
     it('creates a channel with a caller-chosen id, once', async () => {
       const id = crypto.randomUUID();
       const created = await request(createApp())
