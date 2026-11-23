@@ -4,7 +4,7 @@ import type { DraftSelection } from '../types';
 type GoalChain = Array<{ id: string; title: string; remaining_cents: number }>;
 
 const CATEGORIES: PoolCategory[] = ['reward', 'poll', 'goal'];
-const LABELS = { reward: 'rewards', poll: 'polls', goal: 'fund goals' };
+const LABELS = { reward: 'Rewards', poll: 'Polls', goal: 'Fund goals' };
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
@@ -71,7 +71,7 @@ export default function PledgeReview({
                   {auto > 0 && (
                     <>
                       {' '}
-                      + {fmt(auto)} <span aria-label="locked auto-allocation">auto (locked)</span> —
+                      + {fmt(auto)} <span aria-label="Locked auto-allocation">auto (locked)</span> —
                       topped up in proportion
                     </>
                   )}
@@ -83,7 +83,7 @@ export default function PledgeReview({
             <p className="font-body text-sm text-off-white/55">
               Unused reward Pool:{' '}
               {fmt(Math.max(0, plan.pledge_amount_cents - plan.usage_cents.reward))}. Not returned
-              as Wallet credit.
+              as wallet credit.
             </p>
           )}
           {category === 'poll' && plan.usage_cents.poll === 0 && (
@@ -96,13 +96,13 @@ export default function PledgeReview({
               row.capped ? (
                 <p
                   key={row.goal_id}
-                  aria-label="goal target cap"
+                  aria-label="Goal target cap"
                   className="font-body text-sm text-off-white/55"
                 >
                   {goalTitle(row.goal_id)} is capped at {fmt(row.donor_cents + row.auto_cents)} of{' '}
                   {fmt(row.intended_cents)}: the goal only needs{' '}
                   {fmt(goalRemaining?.[row.goal_id] ?? 0)} more. The rest continues as{' '}
-                  <span aria-label="locked auto-allocation">auto (locked)</span>.
+                  <span aria-label="Locked auto-allocation">auto (locked)</span>.
                 </p>
               ) : null,
             )}
@@ -117,7 +117,7 @@ export default function PledgeReview({
           {category === 'goal' && plan.usage_cents.goal === 0 && (
             <p className="font-body text-sm text-off-white/55">
               {fmt(plan.pledge_amount_cents)}{' '}
-              <span aria-label="locked auto-allocation">auto (locked)</span> — the Channel's current
+              <span aria-label="Locked auto-allocation">auto (locked)</span> — the Channel's current
               default goal
               {defaultGoal && defaultGoalChain.length
                 ? ` (now: ${defaultGoalChain
@@ -140,14 +140,14 @@ export default function PledgeReview({
           )}
           {category !== 'reward' && (
             <p className="font-body text-sm text-off-white/55">
-              Unused pool money does not become spendable Wallet credit.
+              Unused pool money does not become spendable wallet credit.
             </p>
           )}
         </section>
       ))}
       <dl className="btrl-panel p-4 mb-4 font-data text-sm space-y-2">
         <div className="flex justify-between">
-          <dt>Pledge amount</dt>
+          <dt>Donation amount</dt>
           <dd className="text-d-yellow">{fmt(plan.pledge_amount_cents)}</dd>
         </div>
         <div className="flex justify-between">
@@ -162,7 +162,7 @@ export default function PledgeReview({
           <dt>Shipping (separate)</dt>
           <dd>
             {plan.requires_shipping
-              ? 'Added at payment; outside the pledge and Pools'
+              ? 'Added at payment; outside the donation and Pools'
               : 'No shipping'}
           </dd>
         </div>

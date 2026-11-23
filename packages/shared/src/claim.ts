@@ -17,19 +17,20 @@ function claimAnswerTexts(claimData: unknown): string[] {
 /**
  * Required-ness derives from the Custom Label (#78): a CUSTOM reward whose staff
  * set a `custom_type_label` requires a non-blank claim answer; the fallback
- * "Additional Info" field stays optional, the shoutout message stays optional,
- * and DIGITAL/PHYSICAL rewards collect no answer. The answer's key is the
- * collecting client's choice, so any non-blank text counts. Returns an error
- * message, or null when the claim may be created.
+ * "Additional info" field stays optional and DIGITAL/PHYSICAL rewards collect no
+ * answer. The 200-character cap applies to every collected claim answer text —
+ * including the shoutout message, which counts as a claim answer (#80). The
+ * answer's key is the collecting client's choice, so any non-blank text counts.
+ * Returns an error message, or null when the claim may be created.
  */
 export function claimAnswerError(
   claimData: unknown,
   reward: { type: string; custom_type_label?: string | null },
 ): string | null {
-  if (reward.type !== 'CUSTOM') return null;
   const answers = claimAnswerTexts(claimData);
   if (answers.some((answer) => answer.length > CLAIM_ANSWER_MAX_CHARS))
     return `answer exceeds maximum of ${CLAIM_ANSWER_MAX_CHARS} characters`;
+  if (reward.type !== 'CUSTOM') return null;
   if ((reward.custom_type_label ?? '').trim() && !answers.some((answer) => answer.trim()))
     return 'answer is required';
   return null;

@@ -5,8 +5,9 @@ import { claimFieldsFor } from '../../lib/rewardClaimFields';
 
 /**
  * Shared claim-answer modal for the reward card and the Pool-credit spend UI.
- * A blank required answer shows an inline "answer required" error (working
- * label, #80) and stages nothing: the modal stays open.
+ * A blank required answer shows an inline "{label} is required." error (#80)
+ * and stages nothing: the modal stays open. Every answer is capped at 200
+ * characters with a `0 / 200` counter visible from the start (#78/#80).
  */
 export default function RewardClaimModal({
   reward,
@@ -27,13 +28,13 @@ export default function RewardClaimModal({
   const submit = () => {
     const blank = fields.find((f) => f.required && !(formData[f.key] ?? '').trim());
     if (blank) {
-      setError('answer required');
+      setError(`${blank.label} is required.`);
       return;
     }
     onSubmit(formData);
   };
   return (
-    <Modal title={`add: ${reward.title}`} onClose={onClose}>
+    <Modal title={`Add: ${reward.title}`} onClose={onClose}>
       {intro}
       {fields.map((f) => (
         <div className="mb-3" key={f.key}>
@@ -42,23 +43,25 @@ export default function RewardClaimModal({
             className="block font-data font-bold text-sm mb-1 text-off-white"
           >
             {f.label}{' '}
-            {!f.required && <span className="text-off-white/40 font-normal">(optional)</span>}
+            {!f.required && (
+              <span className="text-off-white/40 font-normal">
+                (optional; {CLAIM_ANSWER_MAX_CHARS} characters maximum)
+              </span>
+            )}
           </label>
           <input
             id={`claim-${f.key}`}
             className="w-full px-3 py-2 text-sm"
-            maxLength={f.capped ? CLAIM_ANSWER_MAX_CHARS : undefined}
+            maxLength={CLAIM_ANSWER_MAX_CHARS}
             value={formData[f.key] || ''}
             onChange={(e) => {
               setError('');
               setFormData((d) => ({ ...d, [f.key]: e.target.value }));
             }}
           />
-          {f.capped && (
-            <div className="text-xs text-off-white/40 mt-1">
-              {(formData[f.key] || '').length}/{CLAIM_ANSWER_MAX_CHARS} characters
-            </div>
-          )}
+          <div className="text-sm text-off-white/40 mt-1">
+            {(formData[f.key] || '').length} / {CLAIM_ANSWER_MAX_CHARS}
+          </div>
           {error && f.required && (
             <p role="alert" className="text-sm mt-1" style={{ color: 'var(--red)' }}>
               {error}
@@ -68,7 +71,7 @@ export default function RewardClaimModal({
       ))}
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="btrl-button btrl-button-outline">
-          cancel
+          Cancel
         </button>
         <button onClick={submit} className="btrl-button">
           {submitLabel}

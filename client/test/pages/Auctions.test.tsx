@@ -40,7 +40,7 @@ describe('Auctions page', () => {
     render(<Auctions />);
     expect(await screen.findByText('Signed Guitar')).toBeInTheDocument();
     expect(screen.getByText('$10.00')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'bid' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bid' })).toBeInTheDocument();
   });
 
   it('places a bid and reloads the list', async () => {
@@ -50,7 +50,7 @@ describe('Auctions page', () => {
     render(<Auctions />);
     await screen.findByText('Signed Guitar');
 
-    fireEvent.click(screen.getByRole('button', { name: 'bid' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
 
     await waitFor(() => expect(placeBid).toHaveBeenCalledWith('a1', 1000));
     await waitFor(() => expect(getAuctions).toHaveBeenCalledTimes(2));
@@ -63,7 +63,7 @@ describe('Auctions page', () => {
 
     const input = screen.getByRole('spinbutton');
     fireEvent.change(input, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'bid' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
 
     expect(await screen.findByText('Enter a valid bid amount.')).toBeInTheDocument();
     expect(placeBid).not.toHaveBeenCalled();
@@ -77,7 +77,7 @@ describe('Auctions page', () => {
 
     render(<Auctions />);
     await screen.findByText('Signed Guitar');
-    fireEvent.click(screen.getByRole('button', { name: 'bid' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
 
     expect(await screen.findByText('You are already the highest bidder')).toBeInTheDocument();
   });
@@ -86,7 +86,7 @@ describe('Auctions page', () => {
     vi.mocked(getAuctions).mockResolvedValue([{ ...openAuction, status: 'SETTLED' }]);
     render(<Auctions />);
     await screen.findByText('Signed Guitar');
-    expect(screen.queryByRole('button', { name: 'bid' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Bid' })).not.toBeInTheDocument();
     expect(screen.getByText('settled')).toBeInTheDocument();
   });
 
@@ -97,7 +97,7 @@ describe('Auctions page', () => {
     render(<Auctions />);
     await screen.findByText('Signed Guitar');
     expect(screen.getByText(/highest bidder/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'bid' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Bid' })).not.toBeInTheDocument();
   });
 
   it('does not show a highest-bidder badge when the user does not lead', async () => {
@@ -107,6 +107,6 @@ describe('Auctions page', () => {
     render(<Auctions />);
     await screen.findByText('Signed Guitar');
     expect(screen.queryByText(/highest bidder/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'bid' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bid' })).toBeInTheDocument();
   });
 });

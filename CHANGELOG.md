@@ -7,6 +7,24 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Donor copy, label and typography pass** (#80): donor-facing copy is sentence case
+  with a 14px minimum text size, and the working labels from the poll-flow and
+  reward-claim tickets get their final strings ("Confirm this poll", "Unsaved changes",
+  the `Unsaved poll edits` confirmation modal, "Poll votes start at $1.00.",
+  "Add write-in", "Add: {title}", "Add reward", `0 / 200` answer counters with
+  `(optional; 200 characters maximum)` markers). Copy-link buttons carry per-context
+  tooltips and matching aria-labels. Donor copy says "wallet credit" (never "wallet
+  balance") and "the link in your donation email" (never "magic link"), the Help page
+  is rewritten to the amount-first flow, and the shoutout message counts as a claim
+  answer for the 200-character cap (`claimAnswerError`).
+- **Donor terminology: donate, Stream 1 / Stream 2** (#73): donor-facing copy says
+  "donate"/"donation" (the amount field reads "Donation amount ($)") and no longer
+  shows "pledge" or "contribute" — both stay internal domain words. The seeded demo
+  channels rename from "Main Marathon"/"Bonus Stream" to "Stream 1"/"Stream 2" (seed,
+  staging docs and test fixtures only).
+
 ## [0.8.0] — 2026-11-21
 
 ### Changed

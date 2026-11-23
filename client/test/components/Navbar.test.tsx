@@ -83,7 +83,7 @@ describe('Navbar', () => {
   it('shows a plain login link when no donor token is present', async () => {
     renderNavbar();
     expect(await screen.findByText('login')).toBeDefined();
-    expect(screen.queryByText('logged in as')).toBeNull();
+    expect(screen.queryByText('Logged in as')).toBeNull();
   });
 
   it('labels the primary donation link donate when no draft exists', async () => {
@@ -102,15 +102,15 @@ describe('Navbar', () => {
     renderNavbar();
 
     await waitFor(() => expect(screen.queryByText('login')).toBeNull());
-    expect(screen.queryByText('wallet')).toBeNull(); // collapsed until opened
+    expect(screen.queryByText('Wallet')).toBeNull(); // collapsed until opened
 
     const trigger = screen.getByText(/donor@example.com/);
     fireEvent.click(trigger);
 
-    expect(await screen.findByText('wallet')).toBeDefined();
-    expect(screen.getByText('logout')).toBeDefined();
-    expect(screen.queryByText('moderate')).toBeNull();
-    expect(screen.queryByText('admin')).toBeNull();
+    expect(await screen.findByText('Wallet')).toBeDefined();
+    expect(screen.getByText('Logout')).toBeDefined();
+    expect(screen.queryByText('Moderate')).toBeNull();
+    expect(screen.queryByText('Admin')).toBeNull();
   });
 
   it('shows moderate but not admin for a MODERATOR donor', async () => {
@@ -125,8 +125,8 @@ describe('Navbar', () => {
     const trigger = await screen.findByText(/donor@example.com/);
     fireEvent.click(trigger);
 
-    expect(await screen.findByText('moderate')).toBeDefined();
-    expect(screen.queryByText('admin')).toBeNull();
+    expect(await screen.findByText('Moderate')).toBeDefined();
+    expect(screen.queryByText('Admin')).toBeNull();
   });
 
   it('shows both moderate and admin for an ADMIN donor', async () => {
@@ -141,8 +141,8 @@ describe('Navbar', () => {
     const trigger = await screen.findByText(/donor@example.com/);
     fireEvent.click(trigger);
 
-    expect(await screen.findByText('moderate')).toBeDefined();
-    expect(await screen.findByText('admin')).toBeDefined();
+    expect(await screen.findByText('Moderate')).toBeDefined();
+    expect(await screen.findByText('Admin')).toBeDefined();
   });
 
   it('falls back to the logged-out nav when the session probe reports no session', async () => {
@@ -155,7 +155,7 @@ describe('Navbar', () => {
     renderNavbar();
 
     expect(await screen.findByText('login')).toBeDefined();
-    expect(screen.queryByText('logged in as')).toBeNull();
+    expect(screen.queryByText('Logged in as')).toBeNull();
   });
 
   it('offers resume to the saved Channel and step outside donate, with no cart button', async () => {

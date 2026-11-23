@@ -88,7 +88,7 @@ describe('GET /api/donor', () => {
     const email = `chan-${Date.now()}-${Math.random()}@example.com`;
     const { token, donor } = await makeDonor(email);
     const channel = await createTestChannel(prisma, {
-      name: `Main Marathon ${crypto.randomUUID()}`,
+      name: `Stream 1 ${crypto.randomUUID()}`,
     });
     const channeled = await prisma.donation.create({
       data: {
