@@ -7,6 +7,17 @@ breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Brief donation acknowledgements in the donor strip** (#250): after a donation
+  that counts toward money totals, the "Live / Up next" strip replaces the schedule
+  text in place for a few seconds — "Sam donated $25" (hidden or blank names read
+  "Anonymous"; donor comments never show) or "N donations in the last minute" during
+  a burst — then returns to the schedule. Acknowledgements cover every donation to
+  the strip's Event and ride the existing `GET /api/schedule` read (now polled every
+  ~15 s), gated by the new `donation-acknowledgements` feature flag, which is
+  **off by default** — until an admin enables it, the strip stays schedule-only.
+
 ## [0.10.0] — 2026-11-23
 
 ### Changed

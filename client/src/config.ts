@@ -19,12 +19,21 @@ export const DEFAULT_GOAL_AMOUNT = '5.00';
 export const CART_SYNC_DEBOUNCE_MS = 400;
 
 /**
- * How often the "Live / Up next" schedule strip re-fetches GET /api/schedule,
- * matching the server's Horaro timetable cache TTL. The strip must keep a
- * constant height across updates so a later acknowledgement (#250) can replace
- * its content in place.
+ * How often the "Live / Up next" schedule strip re-fetches GET /api/schedule.
+ * #250 D8: the combined strip (schedule + donation acknowledgements) polls
+ * ~15 s — faster than the server's ~60 s Horaro timetable cache — so an
+ * individual acknowledgement plausibly just happened. The strip must keep a
+ * constant height across updates so an acknowledgement can replace its
+ * content in place.
  */
-export const SCHEDULE_POLL_MS = 60000;
+export const SCHEDULE_POLL_MS = 15000;
+
+/**
+ * How long one donation acknowledgement (individual or aggregate) replaces
+ * the schedule text before the schedule returns (#250 derived item 3, "a few
+ * seconds" from #148).
+ */
+export const ACK_SLOT_MS = 5000;
 
 /**
  * How often the incentive data (rewards/polls/goals/channels) is refreshed.

@@ -83,6 +83,9 @@ model Donation {
   payment_refunds PaymentRefund[]
   adjustments BalanceAdjustment[] @relation("DonationAdjustments")
   pool_credits PoolCredit[]
+  // #250: the schedule strip's donation acknowledgements read an Event's
+  // donations of the last minute on every ~15 s poll (D8).
+  @@index([event_id, created_at])
 }
 
 /// A charity event: a marathon, or a one-day stream event. Parent of Channels
