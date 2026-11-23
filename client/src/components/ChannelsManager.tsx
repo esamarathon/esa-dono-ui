@@ -14,13 +14,23 @@ interface ChannelForm {
   slug: string;
   event_id: string;
   is_active: boolean;
+  horaro_schedule_slug: string;
   default_goals: string[];
 }
 
-const EMPTY: ChannelForm = { name: '', slug: '', event_id: '', is_active: true, default_goals: [] };
+const EMPTY: ChannelForm = {
+  name: '',
+  slug: '',
+  event_id: '',
+  is_active: true,
+  horaro_schedule_slug: '',
+  default_goals: [],
+};
 
 const SLUG_HELP =
   'Changing a slug breaks overlay bindings and published links, so it is blocked while active.';
+const HORARO_HELP =
+  'Optional. The Horaro schedule name (for example 2026-winter1) behind the Live / Up next strip on the donation site.';
 
 type ChannelModal = 'create' | Channel | null;
 
@@ -62,6 +72,7 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       slug: s.slug,
       event_id: s.event_id,
       is_active: s.is_active,
+      horaro_schedule_slug: s.horaro_schedule_slug ?? '',
       default_goals: s.default_goals ?? [],
     });
     setModal(s);
@@ -75,6 +86,7 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       ...(form.slug ? { slug: form.slug } : {}),
       ...(form.event_id ? { event_id: form.event_id } : {}),
       is_active: form.is_active,
+      horaro_schedule_slug: form.horaro_schedule_slug.trim(),
       ...(modal !== 'create' ? { default_goals: form.default_goals } : {}),
     };
     try {
@@ -192,6 +204,22 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
               onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
             />
             <p className="font-body text-sm text-off-white/55 mt-1">{SLUG_HELP}</p>
+          </div>
+          <div className="mb-3">
+            <label
+              htmlFor="channel_horaro_slug"
+              className="block font-data font-bold text-sm mb-1 text-off-white"
+            >
+              horaro schedule slug
+            </label>
+            <input
+              id="channel_horaro_slug"
+              className="w-full px-3 py-2 text-sm"
+              placeholder="2026-winter1"
+              value={form.horaro_schedule_slug}
+              onChange={(e) => setForm((d) => ({ ...d, horaro_schedule_slug: e.target.value }))}
+            />
+            <p className="font-body text-sm text-off-white/55 mt-1">{HORARO_HELP}</p>
           </div>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>

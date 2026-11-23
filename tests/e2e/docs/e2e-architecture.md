@@ -8,7 +8,7 @@
 > payload (`amount_cents`, `channel_id`, `donor_ref`) instead of the
 > `amount.value`/`donor_name`/`reward_claims[]` shape shown in the diagrams
 > below, and there is no `/api/tiltify/*` router — only `/api/channels`,
-> `/api/campaign`, `/api/admin`, etc. (see `server/index.ts`). The diagrams
+> `/api/schedule`, `/api/admin`, etc. (see `server/index.ts`). The diagrams
 > are accurate for `dev` (and for the real Kollekt/esa-layouts-v2 consumers,
 > per ADR-0009/0010) but will not match a `main` build. Kollekt and
 > esa-layouts-v2 themselves are private repos — their internal env vars,
@@ -414,7 +414,7 @@ EventDelivery (Outbox pattern)
    └─ ACK message
 
 8. User Sees Result
-   ├─ Frontend polls donation total (GET /api/campaign)
+   ├─ Frontend shows the Live / Up next strip (GET /api/schedule)
    ├─ OBS / Browser receives WebSocket: new donation
    ├─ Donation alert displays on stream
    └─ Total tally updates

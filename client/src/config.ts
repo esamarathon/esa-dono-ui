@@ -19,10 +19,12 @@ export const DEFAULT_GOAL_AMOUNT = '5.00';
 export const CART_SYNC_DEBOUNCE_MS = 400;
 
 /**
- * How often the homepage re-fetches campaign totals so the raised amount
- * updates for clients without a manual reload.
+ * How often the "Live / Up next" schedule strip re-fetches GET /api/schedule,
+ * matching the server's Horaro timetable cache TTL. The strip must keep a
+ * constant height across updates so a later acknowledgement (#250) can replace
+ * its content in place.
  */
-export const CAMPAIGN_POLL_MS = 15000;
+export const SCHEDULE_POLL_MS = 60000;
 
 /**
  * How often the incentive data (rewards/polls/goals/channels) is refreshed.
