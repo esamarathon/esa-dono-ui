@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-11-23
+
 ### Changed
 
 - **"Live / Up next" schedule strip replaces the public fundraising total** (#148): the
