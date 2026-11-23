@@ -61,10 +61,11 @@ reward keywords"):
 - Reward type words (digital, physical, shoutout, custom) carry an in-place definition
   on the reward card, sourced from one shared copy set the Help page also renders.
 - A CUSTOM reward's answer is **required** when staff set a Custom Label (its answer
-  field label); the fallback "Additional Info" answer and the shoutout message are
+  field label); the fallback "Additional info" answer and the shoutout message are
   optional. A required answer is rejected blank on the client and with a 400 at every
-  claim entry point (pledge, direct claim, Pool-credit spend), and is capped at 200
-  characters with a visible counter.
+  claim entry point (pledge, direct claim, Pool-credit spend). Every collected claim
+  answer — including the shoutout message — is capped at 200 characters with a
+  visible counter.
 - The donor's reusable donation funding reads **wallet credit** (never "wallet
   balance"). The wallet unlock is described as **the link in your donation email**
   (never "magic link"); staff copy keeps "magic link". Donor-facing copy uses sentence

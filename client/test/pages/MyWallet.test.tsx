@@ -74,7 +74,7 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('access your wallet')).toBeInTheDocument();
+    expect(await screen.findByText('Access your wallet')).toBeInTheDocument();
     // "No session" is the expected logged-out answer, not an error (#135).
     expect(screen.queryByText(/No active wallet session/)).not.toBeInTheDocument();
     expect(mocks.getDonor).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('my wallet')).toBeInTheDocument();
+    expect(await screen.findByText('My wallet')).toBeInTheDocument();
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
     expect(screen.getByText('No donations yet.')).toBeInTheDocument();
   });
@@ -113,9 +113,9 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('my wallet')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'my bids' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'my auction wins' })).not.toBeInTheDocument();
+    expect(await screen.findByText('My wallet')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My bids' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My auction wins' })).not.toBeInTheDocument();
     expect(screen.queryByText('No auction bids yet.')).not.toBeInTheDocument();
     expect(screen.queryByText('No auction wins yet.')).not.toBeInTheDocument();
   });
@@ -173,15 +173,15 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('my wallet')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'my bids' }) !== null).toBe(enabled);
-    expect(screen.queryByRole('heading', { name: 'my auction wins' }) !== null).toBe(enabled);
-    expect(screen.queryByRole('heading', { name: 'pay for your win' }) !== null).toBe(enabled);
+    expect(await screen.findByText('My wallet')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My bids' }) !== null).toBe(enabled);
+    expect(screen.queryByRole('heading', { name: 'My auction wins' }) !== null).toBe(enabled);
+    expect(screen.queryByRole('heading', { name: 'Pay for your win' }) !== null).toBe(enabled);
     expect(screen.queryByText('Signed guitar bid') !== null).toBe(enabled);
     expect(screen.queryByText('Signed poster offer') !== null).toBe(enabled);
     expect(screen.queryByText('Signed game win') !== null).toBe(enabled);
-    expect(screen.queryByRole('link', { name: 'pay now' }) !== null).toBe(enabled);
-    expect(screen.getByRole('heading', { name: 'donation history' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Pay now' }) !== null).toBe(enabled);
+    expect(screen.getByRole('heading', { name: 'Donation history' })).toBeInTheDocument();
   });
 
   it("shows each donation's channel in the donation history (#53)", async () => {
@@ -193,7 +193,7 @@ describe('MyWallet', () => {
           amount_cents: 1000,
           comment: null,
           created_at: '2026-01-01T00:00:00Z',
-          channel: { id: 'c1', name: 'Main Marathon' },
+          channel: { id: 'c1', name: 'Stream 1' },
         },
         {
           id: 'don2',
@@ -211,7 +211,7 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Main Marathon')).toBeInTheDocument();
+    expect(await screen.findByText('Stream 1')).toBeInTheDocument();
     expect(screen.getByText('shared')).toBeInTheDocument();
   });
 
@@ -228,7 +228,7 @@ describe('MyWallet', () => {
     fireEvent.change(await screen.findByPlaceholderText('https://.../wallet?token=...'), {
       target: { value: 'tok123' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'open wallet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open wallet' }));
 
     await waitFor(() => expect(mocks.startSession).toHaveBeenCalledWith('tok123'));
   });
@@ -242,10 +242,10 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'open wallet' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open wallet' }));
 
     expect(
-      await screen.findByText(/Paste the full magic link from your email/),
+      await screen.findByText(/Paste the full link from your donation email/),
     ).toBeInTheDocument();
   });
 
@@ -262,7 +262,7 @@ describe('MyWallet', () => {
     fireEvent.change(await screen.findByPlaceholderText('you@example.com'), {
       target: { value: 'alice@example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'send me a new link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send me a new link' }));
 
     expect(await screen.findByText(/fresh link is on its way/)).toBeInTheDocument();
   });
@@ -277,7 +277,7 @@ describe('MyWallet', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'logout' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Logout' }));
 
     await waitFor(() => expect(mocks.endSession).toHaveBeenCalled());
   });
@@ -294,8 +294,37 @@ describe('MyWallet', () => {
     fireEvent.change(await screen.findByPlaceholderText('you@example.com'), {
       target: { value: 'notanemail' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'send me a new link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send me a new link' }));
 
     expect(screen.getByText('Enter a valid email address.')).toBeInTheDocument();
+  });
+
+  it('renders donor labels and status badges at text-sm, never text-xs (D2)', async () => {
+    mocks.getDonor.mockResolvedValue({
+      ...wallet,
+      role: 'MODERATOR',
+      reward_claims: [
+        {
+          id: 'claim1',
+          amount_cents: 1000,
+          status: 'FULFILLED',
+          reward: { title: 'Signed poster' },
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <MyWallet />
+      </MemoryRouter>,
+    );
+
+    const moderatorNote = await screen.findByText('Moderator access enabled');
+    expect(moderatorNote.className).toContain('text-sm');
+    expect(moderatorNote.className).not.toContain('text-xs');
+
+    const claimBadge = screen.getByText('FULFILLED');
+    expect(claimBadge.className).toContain('text-sm');
+    expect(claimBadge.className).not.toContain('text-xs');
   });
 });

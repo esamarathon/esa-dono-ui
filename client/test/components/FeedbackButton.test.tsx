@@ -96,10 +96,10 @@ describe('FeedbackButton', () => {
     const textarea = await screen.findByPlaceholderText("What's going on?");
     fireEvent.change(textarea, { target: { value: 'This page is broken' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('Feedback is not enabled')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(textarea).toHaveValue('This page is broken');
   });
 
@@ -124,7 +124,7 @@ describe('FeedbackButton', () => {
 
     const textarea = await screen.findByPlaceholderText("What's going on?");
     fireEvent.change(textarea, { target: { value: 'Great site!' } });
-    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('Thanks — feedback sent!')).toBeInTheDocument();
     expect(sendFeedback).toHaveBeenCalledWith(
@@ -157,11 +157,11 @@ describe('FeedbackButton', () => {
 
     const textarea = await screen.findByPlaceholderText("What's going on?");
     fireEvent.change(textarea, { target: { value: 'Anon report' } });
-    fireEvent.click(screen.getByRole('button', { name: 'send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('Thanks — feedback sent!')).toBeInTheDocument();
     expect(screen.queryByText('Failed to send feedback')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     expect(sendFeedback).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({ donor_id: null }),

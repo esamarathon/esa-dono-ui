@@ -17,7 +17,7 @@ function fmt(cents: number) {
 /**
  * One poll's staged (uncommitted) edits (#76). Staged amounts are ephemeral
  * component state: they are never part of the resumable browser draft, and
- * leaving the polls tab (unmount) discards them. Only "confirm this poll"
+ * leaving the polls tab (unmount) discards them. Only "Confirm this poll"
  * writes them to the draft pledge (the cart).
  */
 interface PollStaging {
@@ -38,7 +38,7 @@ function stagedCents(raw: string): number | null {
 
 function amountErrorFor(raw: string): string | null {
   return raw.trim() && stagedCents(raw) === null
-    ? `Minimum amount is $${MIN_SPEND_DOLLARS.toFixed(2)}`
+    ? `Poll votes start at $${MIN_SPEND_DOLLARS.toFixed(2)}.`
     : null;
 }
 
@@ -318,7 +318,7 @@ export default function PollList({
     }
     const cents = Math.round(parseFloat(writeInAmount) * 100);
     if (isNaN(cents) || cents < MIN_SPEND_CENTS) {
-      setWriteInError(`Minimum amount is $${MIN_SPEND_DOLLARS.toFixed(2)}`);
+      setWriteInError(`Poll votes start at $${MIN_SPEND_DOLLARS.toFixed(2)}.`);
       return;
     }
     setStaging((prev) => ({
@@ -351,7 +351,7 @@ export default function PollList({
     if (writingIn?.id === poll.id) setWritingIn(null);
   };
 
-  // Report staged-edit presence upward (DonateFlow warns at "review →") and
+  // Report staged-edit presence upward (DonateFlow warns at "Review →") and
   // clear it on unmount: leaving the polls tab discards staged edits.
   const anyStaged = polls.some((poll) => pollChanges(poll).dirty);
   useEffect(() => {
@@ -363,7 +363,7 @@ export default function PollList({
 
   return (
     <div>
-      <h2 className="font-display text-3xl uppercase text-off-white mb-2">vote in polls</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">Vote in polls</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Choose votes from your poll Pool. $1 = 1 vote. Unused amounts top up your selections in
         proportion.
@@ -396,7 +396,7 @@ export default function PollList({
           >
             <div className="flex justify-between items-start mb-1">
               <h3 className="font-data font-bold text-lg text-off-white">{poll.title}</h3>
-              <ShareLinkButton path={`/polls?poll=${poll.id}`} />
+              <ShareLinkButton path={`/polls?poll=${poll.id}`} label="Copy a link to this poll" />
             </div>
             {poll.description && (
               <p className="font-body text-sm text-off-white/55 mb-3">{poll.description}</p>
@@ -406,7 +406,7 @@ export default function PollList({
                 className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mb-3"
                 style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
               >
-                no longer available
+                No longer available
               </span>
             )}
             <div className="space-y-3">
@@ -436,7 +436,7 @@ export default function PollList({
                         type="text"
                         inputMode="decimal"
                         placeholder="0.00"
-                        aria-label={`amount for ${opt.label}`}
+                        aria-label={`Amount for ${opt.label}`}
                         className={`w-20 px-2 py-1 text-sm ${flashPollId === poll.id ? 'animate-add-flash' : ''}`}
                         value={displayAmount(poll.id, opt.id)}
                         onChange={(e) => handleAmountChange(poll, opt, e.target.value)}
@@ -444,7 +444,7 @@ export default function PollList({
                       />
                       {error && (
                         <p
-                          className="font-mono text-xs mt-1 text-right"
+                          className="font-mono text-sm mt-1 text-right"
                           style={{ color: 'var(--red)' }}
                         >
                           {error}
@@ -462,7 +462,7 @@ export default function PollList({
                   <div className="flex justify-between items-center text-sm">
                     <div>
                       <span className="font-data font-bold text-off-white">
-                        your option: "{shownWriteIn.label}"
+                        Your option: "{shownWriteIn.label}"
                       </span>
                       <span className="font-data text-off-white/55 ml-2">
                         {fmt(shownWriteIn.cents)}
@@ -473,13 +473,13 @@ export default function PollList({
                         onClick={() => openWriteInEdit(poll, shownWriteIn)}
                         className="btrl-button btrl-button-ghost text-sm"
                       >
-                        edit
+                        Edit
                       </button>
                       <button
                         onClick={() => stageWriteInRemoval(poll)}
                         className="btrl-button btrl-button-outline text-sm"
                       >
-                        remove
+                        Remove
                       </button>
                     </div>
                   </div>
@@ -488,7 +488,7 @@ export default function PollList({
                     onClick={() => openWriteIn(poll)}
                     className="btrl-button btrl-button-ghost text-sm"
                   >
-                    + add your own option
+                    Add your own option
                   </button>
                 )}
               </div>
@@ -500,10 +500,10 @@ export default function PollList({
             >
               {changes.dirty && (
                 <span
-                  className="font-mono text-xs uppercase tracking-wider"
+                  className="font-mono text-sm uppercase tracking-wider"
                   style={{ color: 'var(--d-yellow)' }}
                 >
-                  unsaved changes
+                  Unsaved changes
                 </span>
               )}
               <button
@@ -511,7 +511,7 @@ export default function PollList({
                 disabled={!changes.dirty || changes.hasErrors}
                 className="btrl-button"
               >
-                confirm this poll
+                Confirm this poll
               </button>
             </div>
           </Card>
@@ -523,7 +523,7 @@ export default function PollList({
 
       {writingIn && (
         <Modal
-          title={writeInEditing ? 'edit your option' : 'add your own option'}
+          title={writeInEditing ? 'Edit your option' : 'Add your own option'}
           onClose={() => setWritingIn(null)}
         >
           <p className="font-body text-sm text-off-white/55 mb-3">
@@ -537,23 +537,22 @@ export default function PollList({
           </p>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">
-              your option
+              Your option
             </label>
             <input
               className="w-full px-3 py-2 text-sm"
-              placeholder="Type your option..."
               value={writeInLabel}
               onChange={(e) => setWriteInLabel(e.target.value)}
               maxLength={writingIn.max_entry_chars ?? DEFAULT_MAX_ENTRY_CHARS}
             />
-            <p className="font-mono text-xs text-off-white/55 mt-1">
+            <p className="font-mono text-sm text-off-white/55 mt-1">
               {writeInLabel.length}/{writingIn.max_entry_chars ?? DEFAULT_MAX_ENTRY_CHARS}{' '}
               characters
             </p>
           </div>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">
-              amount ($1 minimum)
+              Amount ($1 minimum)
             </label>
             <input
               type="text"
@@ -572,10 +571,10 @@ export default function PollList({
           )}
           <div className="flex justify-end gap-2">
             <button onClick={() => setWritingIn(null)} className="btrl-button btrl-button-outline">
-              cancel
+              Cancel
             </button>
             <button onClick={stageWriteIn} className="btrl-button">
-              {writeInEditing ? 'save changes' : 'add selection'}
+              {writeInEditing ? 'Save changes' : 'Add write-in'}
             </button>
           </div>
         </Modal>

@@ -70,7 +70,7 @@ export default function RewardList() {
 
   return (
     <div>
-      <h2 className="font-display text-3xl uppercase text-off-white mb-2">rewards</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">Rewards</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Choose rewards from your reward Pool. Each reward costs a fixed amount.
       </p>
@@ -99,7 +99,7 @@ export default function RewardList() {
                       className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                       style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
                     >
-                      no longer available
+                      No longer available
                     </span>
                   )}
                   <span
@@ -112,7 +112,7 @@ export default function RewardList() {
                     <span className="inline-flex align-middle ml-1">
                       <InfoTip
                         text={rewardTypeDefinition(r.type)!}
-                        link={{ href: '/help#reward-types', label: 'more in Help' }}
+                        link={{ href: '/help#reward-types', label: 'More in Help' }}
                       />
                     </span>
                   )}
@@ -125,13 +125,16 @@ export default function RewardList() {
                 <div className="text-right ml-4">
                   <p className="font-display text-2xl text-d-yellow">{fmt(r.cost_cents)}</p>
                   <div className="flex items-center justify-end gap-2 mt-2">
-                    <ShareLinkButton path={`/rewards?reward=${r.id}`} />
+                    <ShareLinkButton
+                      path={`/rewards?reward=${r.id}`}
+                      label="Copy a link that starts a donation with this reward selected"
+                    />
                     {inCart(r.id) ? (
                       fieldsFor(r).length === 0 ? (
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => decrementRewardQuantity(r.id)}
-                            aria-label="decrease quantity"
+                            aria-label="Decrease quantity"
                             className="btrl-button btrl-button-outline text-sm w-8"
                           >
                             -
@@ -145,7 +148,7 @@ export default function RewardList() {
                               r.quantity_total !== null &&
                               cartQuantity(r.id) >= r.quantity_total - r.quantity_claimed
                             }
-                            aria-label="increase quantity"
+                            aria-label="Increase quantity"
                             className={`btrl-button text-sm w-8 ${flashId === r.id ? 'animate-add-flash' : ''}`}
                           >
                             +
@@ -156,7 +159,7 @@ export default function RewardList() {
                           onClick={() => removeFromCart('REWARD', r.id)}
                           className={`btrl-button btrl-button-outline text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
                         >
-                          remove
+                          Remove
                         </button>
                       )
                     ) : (
@@ -165,7 +168,7 @@ export default function RewardList() {
                         disabled={soldOut || unavailable}
                         className="btrl-button text-sm"
                       >
-                        {soldOut ? 'sold out' : 'add'}
+                        {soldOut ? 'Sold out' : 'Add'}
                       </button>
                     )}
                   </div>
@@ -188,7 +191,7 @@ export default function RewardList() {
               <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
             </p>
           }
-          submitLabel="add selection"
+          submitLabel="Add reward"
           onSubmit={(data) => {
             commitAdd(claiming, data);
             setClaiming(null);

@@ -47,7 +47,7 @@ export default function UserMenu({
         <UsersIcon className="w-5 h-5 lg:hidden" />
         <span className="hidden lg:flex flex-col text-right leading-tight">
           <span className="font-mono text-sm tracking-widest uppercase text-d-yellow">
-            logged in as
+            Logged in as
           </span>
           <span className="font-data font-bold text-sm text-off-white">
             {donor.email} &middot; {fmt(donor.balance_remaining)}
@@ -68,22 +68,22 @@ export default function UserMenu({
             style={{ borderBottom: '1px solid rgba(239,238,236,.08)' }}
           >
             <p className="font-mono text-sm tracking-widest uppercase text-d-yellow">
-              logged in as
+              Logged in as
             </p>
             <p className="font-data font-bold text-sm text-off-white truncate">{donor.email}</p>
             <p className="font-data text-sm text-off-white/55">{fmt(donor.balance_remaining)}</p>
           </div>
           <NavLink to="/wallet" onClick={() => setOpen(false)} className={menuLinkClass}>
-            wallet
+            Wallet
           </NavLink>
           {hasModeratorAccess(donor.role) && (
             <NavLink to="/moderate" onClick={() => setOpen(false)} className={menuLinkClass}>
-              moderate
+              Moderate
             </NavLink>
           )}
           {hasAdminAccess(donor.role) && (
             <NavLink to="/admin" onClick={() => setOpen(false)} className={menuLinkClass}>
-              admin
+              Admin
             </NavLink>
           )}
           <button
@@ -93,7 +93,7 @@ export default function UserMenu({
             }}
             className={`${menuLinkClass} w-full text-left`}
           >
-            logout
+            Logout
           </button>
         </div>
       )}

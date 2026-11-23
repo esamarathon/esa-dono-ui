@@ -73,7 +73,7 @@ describe('AdminSimulate', () => {
 
   it('loads channels and submits the selected channel_id (#62)', async () => {
     adminClient.get.mockResolvedValue({
-      data: [{ id: 'c1', name: 'Main Marathon', is_active: true }],
+      data: [{ id: 'c1', name: 'Stream 1', is_active: true }],
     });
     adminClient.post.mockResolvedValue({
       data: { token: 'tok', donor: { balance_remaining: 500 } },
@@ -81,7 +81,7 @@ describe('AdminSimulate', () => {
 
     render(<AdminSimulate />);
 
-    expect(await screen.findByText('Main Marathon')).toBeInTheDocument();
+    expect(await screen.findByText('Stream 1')).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('donor@example.com'), {
       target: { value: 'alice@example.com' },
     });

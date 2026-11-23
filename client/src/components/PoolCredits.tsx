@@ -94,7 +94,7 @@ function WalletFooter({ wallet }: { wallet: number }) {
     <p className="mt-5 pt-3 border-t font-data text-sm text-off-white/65">
       Wallet credit {fmt(wallet)} · for new donations only.{' '}
       <Link to="/donate" className="underline">
-        Open normal draft pledge
+        Start a new donation
       </Link>
     </p>
   );
@@ -283,7 +283,7 @@ function CreditPlanner({
             .find((p) => p.id === pick.poll_id)
             ?.options.find((o) => o.id === pick.target_id)?.label;
   const tag = (channel: { name: string } | null) => (
-    <span className="ml-2 font-data text-xs uppercase text-off-white/55">
+    <span className="ml-2 font-data text-sm uppercase text-off-white/55">
       {channel?.name ?? 'SHARED'}
     </span>
   );
@@ -314,7 +314,7 @@ function CreditPlanner({
                 document.getElementById('credit-panel')?.scrollIntoView({ behavior: 'smooth' })
               }
             >
-              review ↓
+              Review ↓
             </button>
           </div>
           <fieldset
@@ -447,7 +447,7 @@ function CreditPlanner({
                             })
                           }
                         >
-                          remove
+                          Remove
                         </button>
                       ) : (
                         <button
@@ -458,7 +458,7 @@ function CreditPlanner({
                           }
                           onClick={() => setClaiming(r)}
                         >
-                          add
+                          Add
                         </button>
                       )}
                     </div>
@@ -591,7 +591,7 @@ function CreditPlanner({
               <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
             </p>
           }
-          submitLabel="add selection"
+          submitLabel="Add reward"
           onSubmit={(data) => {
             select({
               kind: 'REWARD',
