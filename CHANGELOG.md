@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-22
+
 ### Changed
 
 - **Donor copy, label and typography pass** (#80): donor-facing copy is sentence case
