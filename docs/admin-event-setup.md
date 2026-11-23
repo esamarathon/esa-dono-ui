@@ -17,6 +17,10 @@ Agree on these before entering data:
 - Each Channel's name and slug, for example `ESA Summer 2027 — Stream 1` and
   `esa-summer-2027-stream-1`. Channel names must also be unique across the site.
   A Channel is one stream within the Event. Even a single-stream Event needs one.
+- Each Channel's optional **Horaro schedule slug** (for example `2026-winter1`):
+  the schedule behind the "Live / Up next" strip on the donation site. The
+  schedule lives on `horaro.org` under the fixed ESA organisation; only the
+  schedule name is stored. Leave it empty for no strip.
 - Which Channel is the **Primary channel**: the destination for an Event donation
   link that does not name a Channel.
 - Rewards, poll questions and options, goal amounts, and which incentives are shared
@@ -81,8 +85,10 @@ does not cancel existing Pending pledges or payments.
 ## 3. Create Channels and choose the Primary channel
 
 1. Open **channels** (`/admin/channels`).
-2. Click **+ new channel** for each stream. Enter **name** and **slug**, and select
-   the new **event** explicitly—do not rely on the default owner.
+2. Click **+ new channel** for each stream. Enter **name** and **slug**, select
+   the new **event** explicitly—do not rely on the default owner—and, optionally,
+   the **horaro schedule slug** for the "Live / Up next" strip (for example
+   `2026-winter1`).
 3. **Uncheck active before saving.** New Channels default to active. Check the
    saved name, slug and Event on every Channel.
 4. In **events**, click **edit** on the Event, choose **primary channel**, then
@@ -156,11 +162,10 @@ pledge amount. For example, a $10 pledge can back a $10 reward, $10 of poll vote
 and $10 toward a goal. That is not $30 raised. Unused poll/goal selections can be
 auto-allocated; reward claims are not automatically chosen for a donor.
 
-**Money totals count money, not the sum of incentive progress.** The home page's
-headline and goal are also not Event settings: its money total is platform-wide,
-and its goal comes from `CAMPAIGN_GOAL_CENTS`. Check Event and Channel totals in
-the corresponding stream tools rather than expecting a new Event to reset the
-home page.
+**Money totals count money, not the sum of incentive progress.** The donation
+site shows no public total or goal (#148): the stream overlay owns the public
+fundraising display. Check Event and Channel totals in the corresponding stream
+tools rather than expecting a new Event to reset a home-page counter.
 
 ### Optional: auctions
 

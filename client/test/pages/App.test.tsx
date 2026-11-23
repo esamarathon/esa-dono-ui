@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-vi.mock('../../src/api/campaign', () => ({ getCampaign: vi.fn() }));
+vi.mock('../../src/api/schedule', () => ({ getSchedule: vi.fn() }));
 vi.mock('../../src/api/channels', () => ({ getChannels: vi.fn() }));
 vi.mock('../../src/api/rewards', () => ({ getRewards: vi.fn() }));
 vi.mock('../../src/api/polls', () => ({ getPolls: vi.fn() }));
@@ -18,7 +18,7 @@ vi.mock('../../src/lib/tracing', () => ({
   identifyDonor: vi.fn(),
 }));
 
-import { getCampaign } from '../../src/api/campaign';
+import { getSchedule } from '../../src/api/schedule';
 import { getChannels } from '../../src/api/channels';
 import { getRewards } from '../../src/api/rewards';
 import { getPolls } from '../../src/api/polls';
@@ -30,7 +30,7 @@ import App from '../../src/App';
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getCampaign).mockResolvedValue({ name: 'Test Campaign' });
+    vi.mocked(getSchedule).mockResolvedValue({ live: null, next: null });
     vi.mocked(getChannels).mockResolvedValue([]);
     vi.mocked(getRewards).mockResolvedValue([]);
     vi.mocked(getPolls).mockResolvedValue([]);
@@ -38,10 +38,10 @@ describe('App', () => {
     vi.mocked(getDonor).mockRejectedValue(new Error('no session'));
   });
 
-  it('renders the home page with the campaign name', async () => {
+  it('renders the home page hero', async () => {
     render(<App />);
 
-    expect(await screen.findByText('Test Campaign')).toBeInTheDocument();
+    expect(await screen.findByText('ESA Charity Marathon')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Donate now' })).toHaveAttribute('href', '/donate');
   });
 });

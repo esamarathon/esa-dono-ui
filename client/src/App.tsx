@@ -1,11 +1,10 @@
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import Navbar from './components/Navbar';
-import GlobalProgressBar from './components/GlobalProgressBar';
+import ScheduleStrip from './components/ScheduleStrip';
 import FeedbackButton from './components/FeedbackButton';
 import BroadcastBanner from './components/BroadcastBanner';
 import { DraftPledgeProvider } from './context/DraftPledgeContext';
-import { CampaignProvider } from './context/CampaignContext';
 import { track } from './lib/tracing';
 import Home from './pages/Home';
 import DonateFlow, { LegacyIncentiveRedirect } from './pages/DonateFlow';
@@ -95,29 +94,27 @@ export default function App() {
           element={
             <div className="min-h-screen flex flex-col">
               <BroadcastBanner />
-              <CampaignProvider>
-                <DraftPledgeProvider>
-                  <PageViewTracker />
-                  <Navbar />
-                  <GlobalProgressBar />
-                  <FeedbackButton />
-                  <div className="flex-1">
-                    <Routes>
-                      <Route path="/" element={<Home />} />
-                      <Route path="/donate" element={<DonateFlow />} />
-                      <Route path="/donate/:eventSlug" element={<DonateFlow />} />
-                      <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
-                      <Route path="/pledge/:token" element={<PledgeReturn />} />
-                      <Route path="/wallet" element={<MyWallet />} />
-                      <Route path="/help" element={<Help />} />
-                      <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
-                      <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
-                      <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
-                      <Route path="/auctions" element={<Auctions />} />
-                    </Routes>
-                  </div>
-                </DraftPledgeProvider>
-              </CampaignProvider>
+              <DraftPledgeProvider>
+                <PageViewTracker />
+                <Navbar />
+                <ScheduleStrip />
+                <FeedbackButton />
+                <div className="flex-1">
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/donate" element={<DonateFlow />} />
+                    <Route path="/donate/:eventSlug" element={<DonateFlow />} />
+                    <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
+                    <Route path="/pledge/:token" element={<PledgeReturn />} />
+                    <Route path="/wallet" element={<MyWallet />} />
+                    <Route path="/help" element={<Help />} />
+                    <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
+                    <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
+                    <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
+                    <Route path="/auctions" element={<Auctions />} />
+                  </Routes>
+                </div>
+              </DraftPledgeProvider>
             </div>
           }
         />

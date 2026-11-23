@@ -11,7 +11,7 @@ vi.mock('../../src/api/client', () => ({
 }));
 
 import { getOAuthProviders } from '../../src/api/auth';
-import { getCampaign } from '../../src/api/campaign';
+import { getSchedule } from '../../src/api/schedule';
 import { getChannels } from '../../src/api/channels';
 import { getPublicEvents, getPublicEvent } from '../../src/api/events';
 import { getDonor, getSession, requestToken } from '../../src/api/donor';
@@ -32,10 +32,17 @@ describe('public API helpers', () => {
     expect(mocks.get).toHaveBeenCalledWith('/auth/providers');
   });
 
-  it('getCampaign returns the campaign payload', async () => {
-    mocks.get.mockResolvedValue({ data: { name: 'x' } });
-    await expect(getCampaign()).resolves.toEqual({ name: 'x' });
-    expect(mocks.get).toHaveBeenCalledWith('/campaign');
+  it('getSchedule returns the computed schedule without a channel by default', async () => {
+    const payload = { live: { game: 'Celeste', players: 'TGH' }, next: null };
+    mocks.get.mockResolvedValue({ data: payload });
+    await expect(getSchedule()).resolves.toEqual(payload);
+    expect(mocks.get).toHaveBeenCalledWith('/schedule', { params: {} });
+  });
+
+  it('getSchedule passes the channel slug as a query param when provided', async () => {
+    mocks.get.mockResolvedValue({ data: { live: null, next: null } });
+    await expect(getSchedule('stream-1')).resolves.toEqual({ live: null, next: null });
+    expect(mocks.get).toHaveBeenCalledWith('/schedule', { params: { channel: 'stream-1' } });
   });
 
   it('getChannels returns the channels array', async () => {

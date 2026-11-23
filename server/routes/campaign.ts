@@ -1,37 +1,11 @@
 import { Router, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
-import { countedDonation } from '../lib/donationTotals.js';
 
 const router = Router();
 
-const STUB_CAMPAIGN = {
-  name: 'ESA Charity Marathon',
-  description:
-    'A charity speedrunning channel raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!',
-  goal: { value: '5000.00' },
-};
-
-router.get('/', async (_req: Request, res: Response) => {
-  try {
-    const goalCents = Number(process.env.CAMPAIGN_GOAL_CENTS || '500000');
-
-    // Completed and wallet-refunded donations count; chargebacks do not (lib/donationTotals.ts).
-    // Hidden donations still count; hiding is a display decision.
-    const { _sum } = await prisma.donation.aggregate({
-      where: countedDonation,
-      _sum: { amount_cents: true },
-    });
-
-    res.json({
-      ...STUB_CAMPAIGN,
-      amount_raised: { value: ((_sum.amount_cents ?? 0) / 100).toFixed(2) },
-      goal: { value: (goalCents / 100).toFixed(2) },
-    });
-  } catch (err) {
-    console.error('Campaign error:', err);
-    res.status(500).json({ error: 'Failed to fetch campaign' });
-  }
-});
+// GET /api/campaign retired in #148: the donor site shows no public aggregate
+// total (the stream overlay owns the public display) and the homepage's static
+// name/description live in the client. Only the broadcast banner read remains.
 
 router.get('/broadcast', async (_req: Request, res: Response) => {
   try {

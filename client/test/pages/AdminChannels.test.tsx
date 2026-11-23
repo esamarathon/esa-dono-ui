@@ -81,6 +81,26 @@ describe('AdminChannels', () => {
     );
   });
 
+  it('edits the Horaro schedule slug of a channel (#148)', async () => {
+    mockGet([{ ...channel, horaro_schedule_slug: '2026-winter1' }]);
+    adminClient.put.mockResolvedValue({ data: {} });
+
+    render(<AdminChannels />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    const horaroInput = screen.getByLabelText('horaro schedule slug');
+    expect(horaroInput).toHaveValue('2026-winter1');
+    fireEvent.change(horaroInput, { target: { value: '2026-summer1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(adminClient.put).toHaveBeenCalledWith(
+        '/channels/c1',
+        expect.objectContaining({ horaro_schedule_slug: '2026-summer1' }),
+      ),
+    );
+  });
+
   it('blocks the slug field while editing an active channel (#115)', async () => {
     mockGet([channel]);
 
