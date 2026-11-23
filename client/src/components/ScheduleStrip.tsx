@@ -4,17 +4,19 @@ import { getSchedule } from '../api/schedule';
 import { ACK_SLOT_MS, SCHEDULE_POLL_MS } from '../config';
 import type { Schedule, ScheduleRecentDonation, ScheduleSlot } from '../types';
 
-/** #250 derived item 2: amounts render like the strip's money — no forced
- *  decimals ("$25"); cents when nonzero ("$25.50"). */
+/** Ack amounts render with forced two decimals ("$25.00", "$25.50"), matching
+ *  the grilling-approved copy in #250 Q4/Q5 ("Sam donated $25.00") and the
+ *  strip's earlier money rendering (GlobalProgressBar). */
 function fmtAckAmount(cents: number): string {
   const sign = cents < 0 ? '-' : '';
-  const absolute = Math.abs(cents);
-  const whole = Math.floor(absolute / 100);
-  const rest = absolute % 100;
-  return `${sign}$${rest === 0 ? String(whole) : `${whole}.${String(rest).padStart(2, '0')}`}`;
+  const amount = Math.abs(cents) / 100;
+  return `${sign}$${amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-/** D4/D5 individual acknowledgement copy: "Sam donated $25". */
+/** D4/D5 individual acknowledgement copy: "Sam donated $25.00". */
 function ackLine(donation: ScheduleRecentDonation): string {
   return `${donation.display_name} donated ${fmtAckAmount(donation.amount_cents)}`;
 }
@@ -29,7 +31,7 @@ function ackLine(donation: ScheduleRecentDonation): string {
  *
  * Acknowledgements (D3–D7): after an ack-eligible donation is observed, the
  * schedule text is replaced IN PLACE for one ~5 s slot — an individual
- * "Sam donated $25", or "N donations in the last minute" while two or more
+ * "Sam donated $25.00", or "N donations in the last minute" while two or more
  * donations sit in the rolling one-minute window — then the schedule returns.
  * There is no queue: nothing created before the load (or a reconnect, which
  * behaves exactly like a fresh load) is ever acknowledged (D9), and each

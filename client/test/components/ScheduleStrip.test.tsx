@@ -209,13 +209,13 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
 
     // A donation created during the visit arrives with the next poll.
     await advance(15000);
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
     // The ack replaces the schedule text in place (D2/D6).
     expect(screen.queryByText('Live')).not.toBeInTheDocument();
     expect(screen.queryByText('Celeste')).not.toBeInTheDocument();
 
     await advance(4999);
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
 
     await advance(1);
     expect(screen.queryByTestId('donation-ack')).toBeNull();
@@ -238,7 +238,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     await flush();
     await advance(15000);
 
-    expect(screen.getByText('Anonymous donated $10')).toBeInTheDocument();
+    expect(screen.getByText('Anonymous donated $10.00')).toBeInTheDocument();
   });
 
   it('renders cents when nonzero and no forced decimals otherwise (derived item 2)', async () => {
@@ -275,7 +275,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     await flush();
     await advance(15000);
 
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
     expect(
       screen.queryByText('A very long donor comment that must never show in the strip'),
     ).toBeNull();
@@ -307,11 +307,11 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     renderStrip();
     await flush();
     await advance(15000);
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
 
     await advance(15000);
     expect(screen.getByText('2 donations in the last minute')).toBeInTheDocument();
-    expect(screen.queryByText('Sam donated $25')).toBeNull();
+    expect(screen.queryByText('Sam donated $25.00')).toBeNull();
   });
 
   it('re-shows the aggregate only when another donation arrives (D7)', async () => {
@@ -361,7 +361,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     renderStrip();
     await flush();
     await advance(15000);
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
 
     await advance(5000); // the slot ends
     expect(screen.queryByTestId('donation-ack')).toBeNull();
@@ -417,7 +417,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     renderStrip();
     await flush();
     await advance(15000); // d1 acknowledged
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
 
     await advance(15000); // the read fails: the strip renders nothing
     expect(screen.queryByTestId('schedule-strip')).toBeNull();
@@ -427,7 +427,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     expect(screen.queryByTestId('donation-ack')).toBeNull();
 
     await advance(15000); // d3 is newer than the reconnect: acknowledged
-    expect(screen.getByText('Kim donated $15')).toBeInTheDocument();
+    expect(screen.getByText('Kim donated $15.00')).toBeInTheDocument();
   });
 
   it('stays schedule-only when the response carries no donation data (D11)', async () => {
@@ -462,7 +462,7 @@ describe('ScheduleStrip donation acknowledgements (#250)', () => {
     await advance(15000); // the ack replaces the schedule
 
     const strip = screen.getByTestId('schedule-strip');
-    expect(screen.getByText('Sam donated $25')).toBeInTheDocument();
+    expect(screen.getByText('Sam donated $25.00')).toBeInTheDocument();
     expect(strip.firstElementChild!.className).toContain('h-10');
     expect(strip.getAttribute('aria-live')).toBeNull();
     expect(strip.querySelectorAll('button, a, input, select, textarea, [tabindex]')).toHaveLength(
