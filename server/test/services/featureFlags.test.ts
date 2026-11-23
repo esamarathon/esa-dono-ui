@@ -43,6 +43,10 @@ it('re-seeding preserves an operator toggle and only refreshes the description',
   expect(b.description).toBe('Refreshed description');
 });
 
-it('covers every flag the code checks (feedback, auctions)', () => {
-  expect(DEFAULT_FEATURE_FLAGS.map((f) => f.name).sort()).toEqual(['auctions', 'feedback']);
+it('covers every flag the code checks (feedback, auctions, donation-acknowledgements)', () => {
+  expect(DEFAULT_FEATURE_FLAGS.map((f) => f.name).sort()).toEqual([
+    'auctions',
+    'donation-acknowledgements',
+    'feedback',
+  ]);
 });

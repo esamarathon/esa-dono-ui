@@ -353,10 +353,29 @@ export interface ScheduleSlot {
   players: string;
 }
 
-/** GET /api/schedule result. Null slots mean the strip renders nothing (D6). */
+/**
+ * One acknowledgement candidate from GET /api/schedule (#250): an Event
+ * donation of the last minute that counts toward money totals. `display_name`
+ * already applies the D2/D5 mapping (blank or hidden reads "Anonymous"); the
+ * donor's comment is never sent. `amount_cents` is integer cents.
+ */
+export interface ScheduleRecentDonation {
+  id: string;
+  display_name: string;
+  amount_cents: number;
+  created_at: string;
+}
+
+/**
+ * GET /api/schedule result. Null slots mean the strip renders nothing (D6).
+ * `recent_donations` is present only while the `donation-acknowledgements`
+ * feature flag is on and the strip renders (D3/D11); it is the Event's
+ * ack-eligible donations of the last minute (D8).
+ */
 export interface Schedule {
   live: ScheduleSlot | null;
   next: ScheduleSlot | null;
+  recent_donations?: ScheduleRecentDonation[];
 }
 
 /** A browser-local donor selection. Live prices are revalidated before review. */

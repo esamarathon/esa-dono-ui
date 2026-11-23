@@ -21,6 +21,11 @@ export const DEFAULT_FEATURE_FLAGS: ReadonlyArray<{
     description:
       'Silent auctions: donor bidding, closing items and winner payment. Not part of the three pledge Pools.',
   },
+  {
+    name: 'donation-acknowledgements',
+    description:
+      'Brief donation acknowledgements in the donor-site schedule strip (name and amount, or a burst count). The schedule itself is not gated.',
+  },
 ];
 
 /**
