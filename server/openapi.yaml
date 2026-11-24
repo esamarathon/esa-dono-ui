@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.10.0'
+  version: '0.11.0'
 
 servers:
   - url: /api
@@ -138,9 +138,13 @@ paths:
       description: >-
         The computed current and next slot of a Channel's Horaro schedule
         (`https://horaro.org/esa/{schedule-slug}.json`, fetched and cached
-        server-side; the browser never calls Horaro). Unclear states — no
-        Channel, no single active Event with a primary Channel, no configured
-        slug, empty schedule or an ended/failing one — return nulls.
+        server-side; the browser never calls Horaro) and, while the
+        `donation-acknowledgements` feature flag is on, the Event's recent
+        donations for the strip's brief acknowledgements (computed fresh per
+        request, outside the timetable cache). Unclear states — no Channel,
+        no single active Event with a primary Channel, no configured slug,
+        empty schedule or an ended/failing one — return nulls and carry no
+        acknowledgements.
       parameters:
         - name: channel
           in: query
@@ -169,6 +173,17 @@ paths:
                       - $ref: '#/components/schemas/ScheduleSlot'
                     nullable: true
                     description: The first item starting after now
+                  recent_donations:
+                    type: array
+                    description: >-
+                      The Event's ack-eligible donations (the money-counted
+                      statuses) of the last minute, for the strip's donation
+                      acknowledgements. Present only while the
+                      `donation-acknowledgements` feature flag is on and the
+                      strip renders; omitted otherwise (the schedule itself is
+                      never gated).
+                    items:
+                      $ref: '#/components/schemas/ScheduleRecentDonation'
         '500':
           description: Schedule lookup failed
           content:
@@ -4900,6 +4915,22 @@ components:
       properties:
         game: { type: string }
         players: { type: string }
+    ScheduleRecentDonation:
+      type: object
+      required: [id, display_name, amount_cents, created_at]
+      description: >-
+        One donation the donor-site strip may acknowledge (#250): an Event
+        donation of the last minute that counts toward money totals. The
+        donor's comment is never included.
+      properties:
+        id: { type: string }
+        display_name:
+          type: string
+          description: >-
+            Display name after the hidden/blank mapping: a hidden donation or
+            a blank name reads "Anonymous".
+        amount_cents: { type: integer, description: 'Current amount in integer cents' }
+        created_at: { type: string, format: date-time }
     SpendReversalPreview:
       type: object
       required: [destinations]

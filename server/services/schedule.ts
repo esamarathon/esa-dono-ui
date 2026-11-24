@@ -5,7 +5,9 @@ import { httpError } from '../lib/httpError.js';
  * only Horaro consumer: it fetches `https://horaro.org/esa/{slug}.json`
  * (public, no auth), caches the timetable (~60 s TTL) and computes the current
  * and next slot from `scheduled_t`/`length_t`. The Horaro organisation is
- * fixed to `esa`; a Channel stores only the schedule slug (D5).
+ * fixed to `esa`; a Channel stores only the schedule slug (D5). The
+ * donation-acknowledgement part of the strip's read (#250) is not served from
+ * this cache — see `recentDonationsForEvent` in `routes/schedule.ts`.
  *
  * D8: on a fetch failure the last good timetable may still be served while it
  * has a current or future slot; once its last slot has passed, the computed
@@ -18,7 +20,9 @@ const HORARO_ORG = 'esa';
 const HORARO_BASE_URL = `https://horaro.org/${HORARO_ORG}`;
 const FETCH_TIMEOUT_MS = 5000;
 
-/** Server-side timetable cache TTL; the client polls on a matching cadence. */
+/** Server-side timetable cache TTL. The client polls faster than this (~15 s,
+ *  #250 D8) because the donation acknowledgements ride the same read and need
+ *  fresher data; the timetable itself is refetched at most once per TTL. */
 export const SCHEDULE_CACHE_TTL_MS = 60_000;
 
 export interface ScheduleSlot {
