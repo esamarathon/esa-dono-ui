@@ -70,8 +70,9 @@ it('the demo bootstrap creates an active public Event with both Channels before 
       ]),
     );
     const main = channels.find((channel) => channel.slug === 'main-marathon')!;
-    // #148: without DEMO_HORARO_SLUG the field stays empty, so the strip hides.
-    expect(main.horaro_schedule_slug).toBeNull();
+    // #286: without DEMO_SCHEDULE_SLUG the fields stay empty, so the strip hides.
+    expect(main.schedule_slug).toBeNull();
+    expect(main.schedule_stream_id).toBeNull();
     expect(event).toMatchObject({ is_active: true, primary_channel_id: main.id });
     expect(response.body).toContainEqual(
       expect.objectContaining({
@@ -83,8 +84,9 @@ it('the demo bootstrap creates an active public Event with both Channels before 
         ]),
       }),
     );
-    // #148: DEMO_HORARO_SLUG seeds the demo Channels' Horaro schedule slug, so
-    // the nightly staging reset keeps the "Live / Up next" strip configured.
+    // #286: DEMO_SCHEDULE_SLUG (and the optional DEMO_SCHEDULE_STREAM_ID) seed
+    // the demo Channels' Crew Corner schedule mapping, so the nightly staging
+    // reset keeps the "Live / Up next" strip configured.
     await prisma.event.updateMany({
       where: { slug: 'default-event' },
       data: { primary_channel_id: null },
@@ -94,7 +96,8 @@ it('the demo bootstrap creates an active public Event with both Channels before 
       env: {
         ...process.env,
         ADMIN_API_KEY: 'test-admin-key',
-        DEMO_HORARO_SLUG: 'demo-schedule',
+        DEMO_SCHEDULE_SLUG: 'demo-schedule',
+        DEMO_SCHEDULE_STREAM_ID: '3',
       },
     });
     const seeded = await prisma.channel.findMany({
@@ -102,7 +105,8 @@ it('the demo bootstrap creates an active public Event with both Channels before 
     });
     expect(seeded).toHaveLength(2);
     for (const channel of seeded) {
-      expect(channel.horaro_schedule_slug).toBe('demo-schedule');
+      expect(channel.schedule_slug).toBe('demo-schedule');
+      expect(channel.schedule_stream_id).toBe(3);
     }
   } finally {
     await new Promise<void>((resolve, reject) =>

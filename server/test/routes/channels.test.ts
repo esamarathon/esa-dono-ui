@@ -193,41 +193,73 @@ describe('Channels', () => {
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
     });
 
-    it('sets, updates and clears the Horaro schedule slug (#148)', async () => {
+    it('sets, updates and clears the Crew Corner schedule slug (#286)', async () => {
       const createRes = await request(createApp())
         .post('/api/admin/channels')
         .send({
-          name: `Horaro Channel ${crypto.randomUUID()}`,
-          horaro_schedule_slug: '2026-winter1',
+          name: `Schedule Channel ${crypto.randomUUID()}`,
+          schedule_slug: 'esa2026',
         })
         .set(auth);
       expect(createRes.status).toBe(200);
-      expect(createRes.body.horaro_schedule_slug).toBe('2026-winter1');
+      expect(createRes.body.schedule_slug).toBe('esa2026');
       createdChannelIds.push(createRes.body.id);
 
       const stored = await prisma.channel.findUnique({ where: { id: createRes.body.id } });
-      expect(stored?.horaro_schedule_slug).toBe('2026-winter1');
+      expect(stored?.schedule_slug).toBe('esa2026');
 
       const updateRes = await request(createApp())
         .put(`/api/admin/channels/${createRes.body.id}`)
-        .send({ horaro_schedule_slug: ' 2026-summer1 ' })
+        .send({ schedule_slug: ' esa2027 ' })
         .set(auth);
       expect(updateRes.status).toBe(200);
-      expect(updateRes.body.horaro_schedule_slug).toBe('2026-summer1');
+      expect(updateRes.body.schedule_slug).toBe('esa2027');
 
       const cleared = await request(createApp())
         .put(`/api/admin/channels/${createRes.body.id}`)
-        .send({ horaro_schedule_slug: '' })
+        .send({ schedule_slug: '' })
         .set(auth);
       expect(cleared.status).toBe(200);
-      expect(cleared.body.horaro_schedule_slug).toBeNull();
+      expect(cleared.body.schedule_slug).toBeNull();
 
       const bad = await request(createApp())
         .put(`/api/admin/channels/${createRes.body.id}`)
-        .send({ horaro_schedule_slug: '../esa/other-org' })
+        .send({ schedule_slug: '../esa/other-org' })
         .set(auth);
       expect(bad.status).toBe(400);
-      expect(bad.body.error).toMatch(/horaro_schedule_slug/);
+      expect(bad.body.error).toMatch(/schedule_slug/);
+    });
+
+    it('sets and clears the Crew Corner stream id (#286)', async () => {
+      const createRes = await request(createApp())
+        .post('/api/admin/channels')
+        .send({
+          name: `Stream Channel ${crypto.randomUUID()}`,
+          schedule_slug: 'esa2026',
+          schedule_stream_id: ' 4 ',
+        })
+        .set(auth);
+      expect(createRes.status).toBe(200);
+      // Digit strings are accepted (the admin form sends strings) and stored
+      // as integers.
+      expect(createRes.body.schedule_stream_id).toBe(4);
+      createdChannelIds.push(createRes.body.id);
+
+      const cleared = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ schedule_stream_id: '' })
+        .set(auth);
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.schedule_stream_id).toBeNull();
+
+      for (const value of [0, -2, 3.5, 'abc', true]) {
+        const bad = await request(createApp())
+          .put(`/api/admin/channels/${createRes.body.id}`)
+          .send({ schedule_stream_id: value })
+          .set(auth);
+        expect(bad.status).toBe(400);
+        expect(bad.body.error).toMatch(/schedule_stream_id/);
+      }
     });
 
     it('creates a channel with a caller-chosen id, once', async () => {

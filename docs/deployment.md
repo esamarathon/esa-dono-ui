@@ -298,6 +298,7 @@ never rides another step's release.
 | 0.9.0   | Terminology and copy/typography pass                              | #73, #80 |
 | 0.10.0  | Public fundraising total, progress bar, live-activity replacement | #148     |
 | 0.11.0  | Donation acknowledgements in the donor strip                      | #250     |
+| 0.12.0  | Crew Corner schedule source                                       | #286     |
 
 - **Implementation order is not release granularity.** #78 and #76 may be implemented in
   parallel; they still land and release one at a time. #73 has no implementation step of

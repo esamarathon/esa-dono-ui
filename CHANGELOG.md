@@ -7,6 +7,19 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The strip's schedule source is Crew Corner's published schedule API** (#286):
+  `GET /api/schedule` now reads
+  `{SCHEDULE_SOURCE_BASE_URL}/api/v1/events/{eventSlug}/schedule?source=published&format=horaro`
+  (anonymous, published-only) instead of Horaro — Horaro is Crew Corner's
+  downstream mirror and is never read donor-side again. A Channel stores a
+  `schedule_slug` (the Crew Corner event slug; renamed from
+  `horaro_schedule_slug`) plus an optional `schedule_stream_id`; the admin
+  fields are "Schedule event slug" and "Schedule stream id". The strip's output,
+  cache, poll and hide rules are unchanged. Staging seeds `DEMO_SCHEDULE_SLUG`
+  (and optionally `DEMO_SCHEDULE_STREAM_ID`).
+
 ## [0.11.1] — 2026-11-24
 
 ### Fixed

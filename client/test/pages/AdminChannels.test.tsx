@@ -81,22 +81,44 @@ describe('AdminChannels', () => {
     );
   });
 
-  it('edits the Horaro schedule slug of a channel (#148)', async () => {
-    mockGet([{ ...channel, horaro_schedule_slug: '2026-winter1' }]);
+  it('edits the Crew Corner schedule fields of a channel (#286)', async () => {
+    mockGet([{ ...channel, schedule_slug: 'esa2026', schedule_stream_id: 4 }]);
     adminClient.put.mockResolvedValue({ data: {} });
 
     render(<AdminChannels />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
-    const horaroInput = screen.getByLabelText('horaro schedule slug');
-    expect(horaroInput).toHaveValue('2026-winter1');
-    fireEvent.change(horaroInput, { target: { value: '2026-summer1' } });
+    const slugInput = screen.getByLabelText('Schedule event slug');
+    expect(slugInput).toHaveValue('esa2026');
+    fireEvent.change(slugInput, { target: { value: 'esa2027' } });
+    const streamInput = screen.getByLabelText('Schedule stream id');
+    expect(streamInput).toHaveValue('4');
+    fireEvent.change(streamInput, { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: 'save' }));
 
     await waitFor(() =>
       expect(adminClient.put).toHaveBeenCalledWith(
         '/channels/c1',
-        expect.objectContaining({ horaro_schedule_slug: '2026-summer1' }),
+        expect.objectContaining({ schedule_slug: 'esa2027', schedule_stream_id: '5' }),
+      ),
+    );
+  });
+
+  it('leaves the schedule fields empty for a channel without a schedule (#286)', async () => {
+    mockGet([channel]);
+    adminClient.put.mockResolvedValue({ data: {} });
+
+    render(<AdminChannels />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'edit' }));
+    expect(screen.getByLabelText('Schedule event slug')).toHaveValue('');
+    expect(screen.getByLabelText('Schedule stream id')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+
+    await waitFor(() =>
+      expect(adminClient.put).toHaveBeenCalledWith(
+        '/channels/c1',
+        expect.objectContaining({ schedule_slug: '', schedule_stream_id: '' }),
       ),
     );
   });

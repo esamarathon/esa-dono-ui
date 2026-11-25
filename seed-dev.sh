@@ -90,21 +90,27 @@ fi
 
 # Fixed ids: consumers key their state by Channel id (Kollekt keeps one
 # Campaign per id), so a nightly reset must not mint new ones.
-# Optional Horaro schedule (#148): DEMO_HORARO_SLUG names the schedule at
-# horaro.org/esa/<slug>.json. Unset keeps the field null, so the strip hides;
-# a schedule whose rows are all in the past hides too (D6/D8).
-DEMO_HORARO_JSON=null
-if [ -n "${DEMO_HORARO_SLUG:-}" ]; then
-  DEMO_HORARO_JSON="\"$DEMO_HORARO_SLUG\""
+# Optional Crew Corner schedule (#286): DEMO_SCHEDULE_SLUG names the event at
+# {SCHEDULE_SOURCE_BASE_URL}/api/v1/events/<slug>/schedule (published source),
+# and DEMO_SCHEDULE_STREAM_ID optionally pins one stream's board. Unset keeps
+# the fields null, so the strip hides; a schedule without current or future
+# rows hides too (D6/D8).
+DEMO_SCHEDULE_JSON=null
+if [ -n "${DEMO_SCHEDULE_SLUG:-}" ]; then
+  DEMO_SCHEDULE_JSON="\"$DEMO_SCHEDULE_SLUG\""
+fi
+DEMO_SCHEDULE_STREAM_JSON=null
+if [ -n "${DEMO_SCHEDULE_STREAM_ID:-}" ]; then
+  DEMO_SCHEDULE_STREAM_JSON="\"$DEMO_SCHEDULE_STREAM_ID\""
 fi
 
 C_MAIN=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"id\":\"00000000-0000-4000-8000-000000000101\",\"name\":\"Stream 1\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true,\"horaro_schedule_slug\":$DEMO_HORARO_JSON}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000101\",\"name\":\"Stream 1\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true,\"schedule_slug\":$DEMO_SCHEDULE_JSON,\"schedule_stream_id\":$DEMO_SCHEDULE_STREAM_JSON}" | jq -er .id)
 
 C_BONUS=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"id\":\"00000000-0000-4000-8000-000000000102\",\"name\":\"Stream 2\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true,\"horaro_schedule_slug\":$DEMO_HORARO_JSON}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000102\",\"name\":\"Stream 2\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true,\"schedule_slug\":$DEMO_SCHEDULE_JSON,\"schedule_stream_id\":$DEMO_SCHEDULE_STREAM_JSON}" | jq -er .id)
 
 # Activate before incentives/donations, not in the later accounts/banner seed.
 curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \

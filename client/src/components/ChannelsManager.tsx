@@ -14,7 +14,8 @@ interface ChannelForm {
   slug: string;
   event_id: string;
   is_active: boolean;
-  horaro_schedule_slug: string;
+  schedule_slug: string;
+  schedule_stream_id: string;
   default_goals: string[];
 }
 
@@ -23,14 +24,17 @@ const EMPTY: ChannelForm = {
   slug: '',
   event_id: '',
   is_active: true,
-  horaro_schedule_slug: '',
+  schedule_slug: '',
+  schedule_stream_id: '',
   default_goals: [],
 };
 
 const SLUG_HELP =
   'Changing a slug breaks overlay bindings and published links, so it is blocked while active.';
-const HORARO_HELP =
-  'Optional. The Horaro schedule name (for example 2026-winter1) behind the Live / Up next strip on the donation site.';
+const SCHEDULE_HELP =
+  'Optional. The Crew Corner event slug (for example esa2026) behind the Live / Up next strip on the donation site.';
+const STREAM_HELP =
+  'Optional. The Crew Corner stream id to show on this channel; empty shows the event\u2019s first stream.';
 
 type ChannelModal = 'create' | Channel | null;
 
@@ -72,7 +76,8 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       slug: s.slug,
       event_id: s.event_id,
       is_active: s.is_active,
-      horaro_schedule_slug: s.horaro_schedule_slug ?? '',
+      schedule_slug: s.schedule_slug ?? '',
+      schedule_stream_id: s.schedule_stream_id != null ? String(s.schedule_stream_id) : '',
       default_goals: s.default_goals ?? [],
     });
     setModal(s);
@@ -86,7 +91,8 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       ...(form.slug ? { slug: form.slug } : {}),
       ...(form.event_id ? { event_id: form.event_id } : {}),
       is_active: form.is_active,
-      horaro_schedule_slug: form.horaro_schedule_slug.trim(),
+      schedule_slug: form.schedule_slug.trim(),
+      schedule_stream_id: form.schedule_stream_id.trim(),
       ...(modal !== 'create' ? { default_goals: form.default_goals } : {}),
     };
     try {
@@ -207,19 +213,35 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
           </div>
           <div className="mb-3">
             <label
-              htmlFor="channel_horaro_slug"
+              htmlFor="channel_schedule_slug"
               className="block font-data font-bold text-sm mb-1 text-off-white"
             >
-              horaro schedule slug
+              Schedule event slug
             </label>
             <input
-              id="channel_horaro_slug"
+              id="channel_schedule_slug"
               className="w-full px-3 py-2 text-sm"
-              placeholder="2026-winter1"
-              value={form.horaro_schedule_slug}
-              onChange={(e) => setForm((d) => ({ ...d, horaro_schedule_slug: e.target.value }))}
+              placeholder="esa2026"
+              value={form.schedule_slug}
+              onChange={(e) => setForm((d) => ({ ...d, schedule_slug: e.target.value }))}
             />
-            <p className="font-body text-sm text-off-white/55 mt-1">{HORARO_HELP}</p>
+            <p className="font-body text-sm text-off-white/55 mt-1">{SCHEDULE_HELP}</p>
+          </div>
+          <div className="mb-3">
+            <label
+              htmlFor="channel_schedule_stream_id"
+              className="block font-data font-bold text-sm mb-1 text-off-white"
+            >
+              Schedule stream id
+            </label>
+            <input
+              id="channel_schedule_stream_id"
+              className="w-full px-3 py-2 text-sm"
+              placeholder="empty = the event's first stream"
+              value={form.schedule_stream_id}
+              onChange={(e) => setForm((d) => ({ ...d, schedule_stream_id: e.target.value }))}
+            />
+            <p className="font-body text-sm text-off-white/55 mt-1">{STREAM_HELP}</p>
           </div>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>
