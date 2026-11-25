@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-11-24
+
 ### Changed
 
 - **The strip's schedule source is Crew Corner's published schedule API** (#286):
