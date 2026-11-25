@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-11-24
+
 ### Fixed
 
 - **The demo seed now keeps the Channel's Horaro schedule slug** (#148 follow-up):
