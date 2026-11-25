@@ -205,8 +205,10 @@ export interface Channel {
   slug: string;
   event_id: string;
   is_active: boolean;
-  /** Horaro schedule slug for the donor-site schedule strip (#148). */
-  horaro_schedule_slug?: string | null;
+  /** Crew Corner event slug for the donor-site schedule strip (#286). */
+  schedule_slug?: string | null;
+  /** Optional Crew Corner stream id for the donor-site schedule strip (#286). */
+  schedule_stream_id?: number | null;
   /** Ordered own/shared goal ids. Ineligible entries are preserved. */
   default_goals?: string[];
   default_goal?: { id: string; title: string } | null;
@@ -347,7 +349,7 @@ export interface AuctionWin {
   donor?: { email?: string };
 }
 
-/** One timetable item of a Horaro schedule, as shown in the donor-site strip (#148). */
+/** One slot of the schedule strip, from the Crew Corner published schedule (#148, #286). */
 export interface ScheduleSlot {
   game: string;
   players: string;

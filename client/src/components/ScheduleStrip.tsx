@@ -24,10 +24,10 @@ function ackLine(donation: ScheduleRecentDonation): string {
 /**
  * "Live / Up next" schedule strip (#148) with step 2's donation
  * acknowledgements (#250), mounted where GlobalProgressBar used to sit (above
- * the navbar on non-home pages). It shows the Horaro schedule of the Channel
- * in context, else the single active Event's primary Channel, and renders
- * NOTHING when the state is unclear (D6/D7): no Channel, no slug, nothing
- * scheduled, or the schedule read fails.
+ * the navbar on non-home pages). It shows the schedule of the Channel in
+ * context (Crew Corner's published schedule, #286), else the single active
+ * Event's primary Channel, and renders NOTHING when the state is unclear
+ * (D6/D7): no Channel, no slug, nothing scheduled, or the schedule read fails.
  *
  * Acknowledgements (D3–D7): after an ack-eligible donation is observed, the
  * schedule text is replaced IN PLACE for one ~5 s slot — an individual

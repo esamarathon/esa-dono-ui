@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.11.1'
+  version: '0.12.0'
 
 servers:
   - url: /api
@@ -136,9 +136,11 @@ paths:
       tags: [Schedule]
       summary: Live / Up next schedule slots for the donor-site strip
       description: >-
-        The computed current and next slot of a Channel's Horaro schedule
-        (`https://horaro.org/esa/{schedule-slug}.json`, fetched and cached
-        server-side; the browser never calls Horaro) and, while the
+        The computed current and next slot of a Channel's schedule (Crew
+        Corner's published schedule API,
+        `{SCHEDULE_SOURCE_BASE_URL}/api/v1/events/{eventSlug}/schedule`,
+        fetched and cached server-side; the browser never calls the schedule
+        source) and, while the
         `donation-acknowledgements` feature flag is on, the Event's recent
         donations for the strip's brief acknowledgements (computed fresh per
         request, outside the timetable cache). Unclear states — no Channel,
@@ -4911,7 +4913,7 @@ components:
     ScheduleSlot:
       type: object
       required: [game, players]
-      description: One timetable item of a Horaro schedule (game and players only)
+      description: One slot of the donor strip's schedule (game and players only)
       properties:
         game: { type: string }
         players: { type: string }
