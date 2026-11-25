@@ -31,6 +31,8 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Donor strip's schedule source: Crew Corner's published schedule API (#286).
+      - SCHEDULE_SOURCE_BASE_URL=${SCHEDULE_SOURCE_BASE_URL:-https://crewcorner.esamarathon.com}
       # Proxy hops in front of Express (#140): 1 = the frontend nginx only; 2 when
       # another reverse proxy (Caddy, Traefik, a load balancer) sits in front of it.
       # Wrong here, and every client shares one rate-limit bucket.

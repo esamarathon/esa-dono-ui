@@ -21,7 +21,7 @@ export const CART_SYNC_DEBOUNCE_MS = 400;
 /**
  * How often the "Live / Up next" schedule strip re-fetches GET /api/schedule.
  * #250 D8: the combined strip (schedule + donation acknowledgements) polls
- * ~15 s — faster than the server's ~60 s Horaro timetable cache — so an
+ * ~15 s — faster than the server's ~60 s schedule timetable cache — so an
  * individual acknowledgement plausibly just happened. The strip must keep a
  * constant height across updates so an acknowledgement can replace its
  * content in place.

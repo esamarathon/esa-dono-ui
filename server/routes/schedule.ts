@@ -24,20 +24,21 @@ export interface ScheduleRecentDonation {
 /**
  * GET /api/schedule?channel=<channel-slug>
  *
- * The computed "Live / Up next" result for a Channel's Horaro schedule (#148)
- * plus the donation-acknowledgement data (#250). `channel` is a Channel slug.
- * When absent, the primary Channel of the single active Event is used (D7).
+ * The computed "Live / Up next" result for a Channel's schedule (the Crew
+ * Corner published schedule since #286) plus the donation-acknowledgement
+ * data (#250). `channel` is a Channel slug. When absent, the primary Channel
+ * of the single active Event is used (D7).
  * Every unclear state returns `{ live: null, next: null }` with 200 — no
  * Channel, ambiguous or missing active Event, no primary Channel, no
- * configured slug, or nothing scheduled (D6). The browser never calls Horaro
- * directly.
+ * configured schedule, or nothing scheduled (D6). The browser never calls the
+ * schedule source directly.
  *
  * Acknowledgements (D3/D8/D11): while the `donation-acknowledgements` flag is
  * on and the strip renders (the schedule result is not empty), the response
  * also carries `recent_donations` — the Event's ack-eligible donations
  * (COMPLETED/REFUNDED, D1) of the last minute as
  * `(id, display name, amount, created_at)`. That read is computed FRESH per
- * request and never inherits the ~60 s Horaro timetable cache. With the flag
+ * request and never inherits the ~60 s schedule timetable cache. With the flag
  * off (or its row absent) the field is omitted and the strip behaves exactly
  * like 0.10.0. Wherever the strip renders nothing, there are no
  * acknowledgements either.
@@ -45,8 +46,8 @@ export interface ScheduleRecentDonation {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const channelSlug = typeof req.query.channel === 'string' ? req.query.channel : undefined;
-    const { horaroSlug, eventId } = await resolveStripContext(channelSlug);
-    const schedule = await scheduleForSlug(horaroSlug);
+    const { scheduleSlug, scheduleStreamId, eventId } = await resolveStripContext(channelSlug);
+    const schedule = await scheduleForSlug(scheduleSlug, scheduleStreamId);
     const body: ScheduleResult & { recent_donations?: ScheduleRecentDonation[] } = {
       ...schedule,
     };
@@ -62,28 +63,37 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-/** The Horaro slug and the Event of the Channel in context, else of the single
- *  active Event's primary Channel; nulls whenever the state is unclear (D6/D7). */
-async function resolveStripContext(
-  channelSlug: string | undefined,
-): Promise<{ horaroSlug: string | null; eventId: string | null }> {
+/** The schedule slug/stream id and the Event of the Channel in context, else of
+ *  the single active Event's primary Channel; nulls whenever the state is
+ *  unclear (D6/D7). The Channel-in-context rules are unchanged (#286 D3). */
+async function resolveStripContext(channelSlug: string | undefined): Promise<{
+  scheduleSlug: string | null;
+  scheduleStreamId: number | null;
+  eventId: string | null;
+}> {
   if (channelSlug) {
     const channel = await prisma.channel.findUnique({
       where: { slug: channelSlug },
-      select: { horaro_schedule_slug: true, event_id: true },
+      select: { schedule_slug: true, schedule_stream_id: true, event_id: true },
     });
     return {
-      horaroSlug: channel?.horaro_schedule_slug || null,
+      scheduleSlug: channel?.schedule_slug || null,
+      scheduleStreamId: channel?.schedule_stream_id ?? null,
       eventId: channel?.event_id ?? null,
     };
   }
   const activeEvents = await prisma.event.findMany({
     where: { is_active: true },
-    select: { id: true, primary_channel: { select: { horaro_schedule_slug: true } } },
+    select: {
+      id: true,
+      primary_channel: { select: { schedule_slug: true, schedule_stream_id: true } },
+    },
   });
-  if (activeEvents.length !== 1) return { horaroSlug: null, eventId: null };
+  if (activeEvents.length !== 1)
+    return { scheduleSlug: null, scheduleStreamId: null, eventId: null };
   return {
-    horaroSlug: activeEvents[0]!.primary_channel?.horaro_schedule_slug || null,
+    scheduleSlug: activeEvents[0]!.primary_channel?.schedule_slug || null,
+    scheduleStreamId: activeEvents[0]!.primary_channel?.schedule_stream_id ?? null,
     eventId: activeEvents[0]!.id,
   };
 }
