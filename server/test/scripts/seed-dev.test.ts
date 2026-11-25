@@ -70,6 +70,8 @@ it('the demo bootstrap creates an active public Event with both Channels before 
       ]),
     );
     const main = channels.find((channel) => channel.slug === 'main-marathon')!;
+    // #148: without DEMO_HORARO_SLUG the field stays empty, so the strip hides.
+    expect(main.horaro_schedule_slug).toBeNull();
     expect(event).toMatchObject({ is_active: true, primary_channel_id: main.id });
     expect(response.body).toContainEqual(
       expect.objectContaining({
@@ -81,6 +83,27 @@ it('the demo bootstrap creates an active public Event with both Channels before 
         ]),
       }),
     );
+    // #148: DEMO_HORARO_SLUG seeds the demo Channels' Horaro schedule slug, so
+    // the nightly staging reset keeps the "Live / Up next" strip configured.
+    await prisma.event.updateMany({
+      where: { slug: 'default-event' },
+      data: { primary_channel_id: null },
+    });
+    await prisma.channel.deleteMany({ where: { slug: { in: ['main-marathon', 'bonus-stream'] } } });
+    await exec('bash', ['-c', shell, 'seed-dev.sh', `http://127.0.0.1:${address.port}`], {
+      env: {
+        ...process.env,
+        ADMIN_API_KEY: 'test-admin-key',
+        DEMO_HORARO_SLUG: 'demo-schedule',
+      },
+    });
+    const seeded = await prisma.channel.findMany({
+      where: { slug: { in: ['main-marathon', 'bonus-stream'] } },
+    });
+    expect(seeded).toHaveLength(2);
+    for (const channel of seeded) {
+      expect(channel.horaro_schedule_slug).toBe('demo-schedule');
+    }
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

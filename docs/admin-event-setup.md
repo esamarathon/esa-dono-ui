@@ -20,7 +20,9 @@ Agree on these before entering data:
 - Each Channel's optional **Horaro schedule slug** (for example `2026-winter1`):
   the schedule behind the "Live / Up next" strip on the donation site. The
   schedule lives on `horaro.org` under the fixed ESA organisation; only the
-  schedule name is stored. Leave it empty for no strip.
+  schedule name is stored. Leave it empty for no strip. The strip also renders
+  nothing while the schedule has no current or future rows (after its last
+  row has passed), so point it at the Event's live schedule, not a past one.
 - Which Channel is the **Primary channel**: the destination for an Event donation
   link that does not name a Channel.
 - Rewards, poll questions and options, goal amounts, and which incentives are shared

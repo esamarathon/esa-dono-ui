@@ -165,7 +165,10 @@ Wait a moment and retry - the database might be in use by background tasks.
 2. Run `seed-dev.sh` from a helper container on the app network. It creates
    the demo Channels, incentives and donations and, when `SEED_RABBITMQ_URL`
    is set, the RabbitMQ Destination ("MQ Server", exchange `tiltify`, routing
-   key `dono-platform.donation`).
+   key `dono-platform.donation`). When `DEMO_HORARO_SLUG` is set, it also
+   stores that Horaro schedule slug on both demo Channels, so the "Live / Up
+   next" strip survives the reset; the schedule must have current or future
+   rows or the strip still hides.
 3. Run `prisma/seed.ts` in the backend container. It creates the dev accounts,
    the key banner, and one active Event with a primary Channel (Stream 1).
 
