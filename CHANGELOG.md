@@ -7,13 +7,20 @@ breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The demo seed now keeps the Channel's Horaro schedule slug** (#148 follow-up):
+  `seed-dev.sh` stores `DEMO_HORARO_SLUG` on the demo Channels, so the nightly
+  staging reset no longer leaves the "Live / Up next" strip unconfigured (and the
+  acknowledgements hidden with it).
+
 ## [0.11.0] — 2026-11-23
 
 ### Added
 
 - **Brief donation acknowledgements in the donor strip** (#250): after a donation
   that counts toward money totals, the "Live / Up next" strip replaces the schedule
-  text in place for a few seconds — "Sam donated $25" (hidden or blank names read
+  text in place for a few seconds — "Sam donated $25.00" (hidden or blank names read
   "Anonymous"; donor comments never show) or "N donations in the last minute" during
   a burst — then returns to the schedule. Acknowledgements cover every donation to
   the strip's Event and ride the existing `GET /api/schedule` read (now polled every
