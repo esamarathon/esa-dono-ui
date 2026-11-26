@@ -42,9 +42,12 @@ Adopt Stripe hosted **Checkout Sessions** as the payment mechanism.
   fulfillment — not collected on Stripe's page.
 - Campaign totals are computed from our DB (`SUM(Donation.amount_cents)`), goal from
   `CAMPAIGN_GOAL_CENTS`.
-  _(Superseded by #148: `GET /api/campaign` and `CAMPAIGN_GOAL_CENTS` retired — the
-  donor site shows no public aggregate total and the stream overlay owns the public
-  display. The counting rule itself is unchanged in `lib/donationTotals.ts`.)_
+  _(Superseded in part by #148: `CAMPAIGN_GOAL_CENTS` is retired and the donor
+  site shows no public aggregate total or goal — the stream overlay owns the
+  public display. `GET /api/campaign` survives as a minimal totals read for API
+  consumers (`{total_raised_cents}`, no goal; #148 amendment), optionally
+  scoped to an Event or Channel. The counting rule itself is unchanged in
+  `lib/donationTotals.ts`.)_
 - Physical items always run a Checkout (item discounted to $0 when wallet-funded)
   attached to a per-donor Stripe Customer that holds the validated shipping address.
   Shipping is charged at claim time, flat by item size (SMALL/MEDIUM/LARGE) with a

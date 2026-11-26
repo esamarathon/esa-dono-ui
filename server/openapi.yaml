@@ -199,15 +199,33 @@ paths:
   /campaign:
     get:
       tags: [Campaign]
-      summary: Get the aggregate donation total
-      description: >
-        The deployment-wide money total for API consumers (#148 amendment). The donor
-        site does not display it; the stream overlay owns the public fundraising display.
-        There is no goal. The pre-0.10.0 shape (name, description, amount_raised, goal)
-        is gone.
+      summary: Get a donation total (overall, per Event, or per Channel)
+      description: >-
+        The money total for API consumers (#148 amendment). The donor site does not
+        display it; the stream overlay owns the public fundraising display. Without a
+        scope parameter this is the deployment-wide total. There is no goal. The
+        pre-0.10.0 shape (name, description, amount_raised, goal) is gone.
+      parameters:
+        - name: event
+          in: query
+          required: false
+          description: >-
+            Event slug. Returns that Event's total: its assigned donations only (an
+            unassigned donation counts in the overall total). The slug resolves whether
+            the Event is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          description: >-
+            Channel slug. Returns that Channel's total. The slug resolves whether the
+            Channel is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
       responses:
         '200':
-          description: Aggregate donation total
+          description: Donation total for the requested scope
           content:
             application/json:
               schema:
@@ -217,6 +235,22 @@ paths:
                   total_raised_cents:
                     type: integer
                     description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping is excluded. Same rule as GET /api/admin/stats.
+        '400':
+          description: Both event and channel given, or a scope parameter is empty, repeated, or not a plain slug string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+        '404':
+          description: No Event or Channel with that slug
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
 
   /campaign/broadcast:
     get:
