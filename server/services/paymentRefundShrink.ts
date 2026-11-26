@@ -1,6 +1,11 @@
 import type { Prisma } from '@prisma/client';
 import type { PoolCategory } from '@dono/shared';
-import { readDonationAccountingTx } from './poolAccounting.js';
+import {
+  liveClaimWhere,
+  liveDirectClaimWhere,
+  liveRowWhere,
+  readDonationAccountingTx,
+} from './poolAccounting.js';
 
 type Tx = Prisma.TransactionClient;
 type Component = {
@@ -34,13 +39,7 @@ export async function previewPoolShrinkTx(
     });
   };
   const directClaims = await tx.rewardClaim.findMany({
-    where: {
-      donation_id: donationId,
-      id: { not: claimId },
-      reversed_at: null,
-      status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
-      credit_redemptions: { none: {} },
-    },
+    where: { donation_id: donationId, id: { not: claimId }, ...liveDirectClaimWhere() },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
   });
   for (const row of directClaims)
@@ -56,12 +55,12 @@ export async function previewPoolShrinkTx(
       reduced_before_cents: 0,
     });
   const votes = await tx.pollVote.findMany({
-    where: { donation_id: donationId, reversed_at: null },
+    where: { donation_id: donationId, ...liveRowWhere() },
     include: { poll: true, poll_option: true, credit_redemptions: true },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
   });
   const contributions = await tx.fundContribution.findMany({
-    where: { donation_id: donationId, reversed_at: null },
+    where: { donation_id: donationId, ...liveRowWhere() },
     include: { goal: true, credit_redemptions: true },
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
   });
@@ -94,11 +93,7 @@ export async function previewPoolShrinkTx(
   const redemptions = await tx.poolCreditRedemption.findMany({
     where: {
       credit: { donation_id: donationId },
-      OR: [
-        { claim: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } } },
-        { vote: { reversed_at: null } },
-        { contribution: { reversed_at: null } },
-      ],
+      OR: [{ claim: liveClaimWhere() }, { vote: liveRowWhere() }, { contribution: liveRowWhere() }],
     },
     include: {
       credit: true,

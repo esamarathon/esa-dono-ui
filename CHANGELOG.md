@@ -25,6 +25,14 @@ breaking changes.
   donations; unassigned donations count in the overall total only. Slugs
   resolve whether active or not, like `GET /api/tiltify/campaigns/{id}`.
 
+### Changed
+
+- **The pooled accounting rules have one home** (no behavior change):
+  `poolAccounting.ts` now owns allocation liveness, the category budget and the
+  REQUESTED Payment-refund freeze, and absorbs `rewardFunding.ts`. Every
+  allocation query in the money modules builds its filter from it, so a rule
+  change is one edit instead of eleven.
+
 ## [0.12.1] — 2026-11-25
 
 ### Fixed

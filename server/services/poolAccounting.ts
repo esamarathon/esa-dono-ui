@@ -1,7 +1,154 @@
-import type { Prisma } from '@prisma/client';
+import type { PledgeItem, Prisma } from '@prisma/client';
 import type { PoolCategory } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
-import { readCreditRewardAllocationsTx } from './rewardFunding.js';
+
+// Row liveness, the category budget and the Payment-refund freeze are the
+// pooled accounting rules (ADR-0011). This module is their only home: every
+// allocation query builds its filter from the functions below.
+
+/** Live allocation row: not reversed. */
+export function liveRowWhere(): { reversed_at: null } {
+  return { reversed_at: null };
+}
+
+/** Live claim rows: not reversed and still counting (ADR-0011 §5). */
+export function liveClaimWhere(): Prisma.RewardClaimWhereInput {
+  return { ...liveRowWhere(), status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } };
+}
+
+/** Live claims funded directly by their donation, not by Pool credit. */
+export function liveDirectClaimWhere(): Prisma.RewardClaimWhereInput {
+  return { ...liveClaimWhere(), credit_redemptions: { none: {} } };
+}
+
+/** Live claims this donation funded through Pool credit. */
+export function liveCreditBackedClaimWhere(donationId: string): Prisma.RewardClaimWhereInput {
+  return {
+    ...liveClaimWhere(),
+    credit_redemptions: { some: { credit: { donation_id: donationId } } },
+  };
+}
+
+/**
+ * What a category can still take: the pledge amount minus failed-payment
+ * Wallet credit, live rows and reservations (ADR-0011 §1.7).
+ */
+export function categoryBudgetRemainingCents(
+  used: { live_cents: number; outstanding_credit_cents: number },
+  pledge_amount_cents: number,
+  failed_payment_wallet_credit_cents: number,
+): number {
+  return (
+    pledge_amount_cents -
+    failed_payment_wallet_credit_cents -
+    used.live_cents -
+    used.outstanding_credit_cents
+  );
+}
+
+// A REQUESTED Payment refund freezes the donation's money until it resolves.
+export const requestedPaymentRefundWhere = { status: 'REQUESTED' } as const;
+
+export async function hasRequestedPaymentRefundTx(
+  tx: Prisma.TransactionClient,
+  donationId: string,
+): Promise<boolean> {
+  return (
+    (await tx.paymentRefund.count({
+      where: { donation_id: donationId, ...requestedPaymentRefundWhere },
+    })) > 0
+  );
+}
+
+export async function assertNoRequestedPaymentRefundTx(
+  tx: Prisma.TransactionClient,
+  donationId: string | null,
+): Promise<void> {
+  if (donationId && (await hasRequestedPaymentRefundTx(tx, donationId)))
+    throw httpError(409, 'A Payment refund is requested for this donation');
+}
+
+/** Confirmed initial reward type wins; historical rows fall back to the catalog. */
+export function confirmedRewardType(
+  claim: { reward_id: string; reward: { type: string } },
+  items: readonly Pick<PledgeItem, 'kind' | 'target_id' | 'confirmed_reward_type'>[] | undefined,
+): string {
+  return (
+    items?.find((item) => item.kind === 'REWARD' && item.target_id === claim.reward_id)
+      ?.confirmed_reward_type ?? claim.reward.type
+  );
+}
+
+/** Redemptions are canonical funding, even when a whole entitlement has donation_id=null. */
+export async function readRewardFundingTx(
+  tx: Prisma.TransactionClient,
+  claim: { id: string; donation_id: string | null; amount_cents: number },
+) {
+  const rows = await tx.poolCreditRedemption.findMany({
+    where: { claim_id: claim.id },
+    select: {
+      id: true,
+      credit_id: true,
+      amount_cents: true,
+      reduced_cents: true,
+      credit: { select: { donation_id: true, donation: { select: { created_at: true } } } },
+    },
+  });
+  const amounts = new Map<string, number>();
+  for (const row of rows)
+    amounts.set(
+      row.credit.donation_id,
+      (amounts.get(row.credit.donation_id) ?? 0) + row.amount_cents - row.reduced_cents,
+    );
+  const ordered = [...rows].sort(
+    (a, b) =>
+      a.credit.donation.created_at.getTime() - b.credit.donation.created_at.getTime() ||
+      a.credit.donation_id.localeCompare(b.credit.donation_id),
+  );
+  return {
+    redemption_backed: rows.length > 0,
+    components: rows.map(({ credit, ...row }) => ({
+      ...row,
+      effective_cents: row.amount_cents - row.reduced_cents,
+      donation_id: credit.donation_id,
+    })),
+    donation_ids: rows.length
+      ? [...new Set(ordered.map((row) => row.credit.donation_id))]
+      : claim.donation_id
+        ? [claim.donation_id]
+        : [],
+    carrier_donation_id: ordered[0]?.credit.donation_id ?? claim.donation_id,
+    source_cents: rows.length
+      ? amounts
+      : new Map(claim.donation_id ? [[claim.donation_id, claim.amount_cents]] : []),
+  };
+}
+
+/** Source-local financial projection; entitlement/stock/status still belong to ONE claim. */
+export async function readCreditRewardAllocationsTx(
+  tx: Prisma.TransactionClient,
+  donationId: string,
+) {
+  const claims = await tx.rewardClaim.findMany({
+    where: liveCreditBackedClaimWhere(donationId),
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
+    select: { id: true, donation_id: true, reward_id: true, amount_cents: true, status: true },
+  });
+  const result = [];
+  for (const claim of claims) {
+    const funding = await readRewardFundingTx(tx, claim);
+    result.push({
+      id: claim.id,
+      reward_id: claim.reward_id,
+      status: claim.status,
+      source: 'donor' as const,
+      amount_cents: funding.source_cents.get(donationId)!,
+      entitlement_amount_cents: claim.amount_cents,
+      carrier_donation_id: funding.carrier_donation_id!,
+    });
+  }
+  return result;
+}
 
 export type CategoryAmounts = Record<PoolCategory, number>;
 export interface PoolAccountingInput {
@@ -30,7 +177,11 @@ export function computePoolAccounting(input: PoolAccountingInput) {
       active && key !== 'reward'
         ? Math.max(
             0,
-            input.pledge_amount_cents! - live - reserved - input.failed_payment_wallet_credit_cents,
+            categoryBudgetRemainingCents(
+              { live_cents: live, outstanding_credit_cents: reserved },
+              input.pledge_amount_cents!,
+              input.failed_payment_wallet_credit_cents,
+            ),
           )
         : 0;
     return {
@@ -62,16 +213,12 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
       failed_payment_wallet_credit_cents: true,
       event: { select: { ended_at: true } },
       reward_claims: {
-        where: {
-          reversed_at: null,
-          status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
-          credit_redemptions: { none: {} },
-        },
+        where: liveDirectClaimWhere(),
         orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         select: { id: true, reward_id: true, amount_cents: true, status: true },
       },
       poll_votes: {
-        where: { reversed_at: null },
+        where: liveRowWhere(),
         orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         select: {
           id: true,
@@ -83,7 +230,7 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
         },
       },
       contributions: {
-        where: { reversed_at: null },
+        where: liveRowWhere(),
         orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
         select: { id: true, goal_id: true, amount_cents: true, source: true },
       },

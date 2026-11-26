@@ -4,7 +4,13 @@ import { httpError } from '../lib/httpError.js';
 import { withWebhooks } from './webhooks/outbox.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { previewPoolShrinkTx, applyPoolShrinkTx } from './paymentRefundShrink.js';
-import { confirmedRewardType, readRewardFundingTx } from './rewardFunding.js';
+import {
+  assertNoRequestedPaymentRefundTx,
+  confirmedRewardType,
+  hasRequestedPaymentRefundTx,
+  liveDirectClaimWhere,
+  readRewardFundingTx,
+} from './poolAccounting.js';
 import {
   createPaymentRefund,
   listPaymentRefunds,
@@ -80,11 +86,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
           event: true,
           pledge: { include: { items: true } },
           reward_claims: {
-            where: {
-              reversed_at: null,
-              status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
-              credit_redemptions: { none: {} },
-            },
+            where: liveDirectClaimWhere(),
             include: { reward: { select: { type: true } } },
           },
         },
@@ -113,9 +115,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
                     ? 'Shipping must be recorded before a Payment refund'
                     : Math.min(claim.amount_cents, donation.amount_cents) <= 0
                       ? 'No refundable item money remains'
-                      : (await tx.paymentRefund.count({
-                            where: { donation_id: donation.id, status: 'REQUESTED' },
-                          }))
+                      : (await hasRequestedPaymentRefundTx(tx, donation.id))
                         ? 'A Payment refund is requested for this donation'
                         : null;
   if (reason || !donation)
@@ -389,8 +389,7 @@ export async function resolvePaymentRefundItem(id: string, resolution: unknown, 
     if (record.status !== 'FAILED' || !record.accepted_at)
       throw httpError(409, 'Only an accepted, later-failed Payment refund can be resolved');
     const donation = await tx.donation.findUniqueOrThrow({ where: { id: record.donation_id } });
-    if (await tx.paymentRefund.count({ where: { donation_id: donation.id, status: 'REQUESTED' } }))
-      throw httpError(409, 'A Payment refund is requested for this donation');
+    await assertNoRequestedPaymentRefundTx(tx, donation.id);
     if (resolution === 'SETTLED_BY_DISPUTE' && donation.status !== 'CHARGEBACK')
       throw httpError(409, 'Only a CHARGEBACK can settle this item by dispute');
     if (resolution === 'WALLET_CREDIT' && !['COMPLETED', 'REFUNDED'].includes(donation.status))
