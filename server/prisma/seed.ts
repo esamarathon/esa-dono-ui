@@ -112,7 +112,9 @@ async function main() {
   // Install the default feature flags so they are visible and toggleable in
   // the admin UI. Idempotent: existing toggles are preserved on re-seed.
   await ensureDefaultFeatureFlags();
-  console.log(`✓ Default feature flags installed (disabled; toggles preserved on re-seed)`);
+  console.log(
+    `✓ Default feature flags installed (SEED_FLAG_* initial states; toggles preserved on re-seed)`,
+  );
 
   const { event, channel } = await ensureActiveEvent();
   console.log(
