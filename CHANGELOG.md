@@ -7,8 +7,6 @@ breaking changes.
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Fixed
 
 - **Feature-flag toggles survive a database-wipe re-seed when the environment
