@@ -121,6 +121,24 @@ describe('GET /api/campaign', () => {
     expect(res.body.error).toBe('Use either event or channel, not both');
   });
 
+  it('returns 400 for a repeated scope parameter instead of the overall total', async () => {
+    const res = await request(createApp()).get('/api/campaign?event=a&event=b&channel=c');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(
+      'event and channel must each be given at most once, as a non-empty slug',
+    );
+  });
+
+  it('returns 400 for an empty scope parameter', async () => {
+    const res = await request(createApp()).get('/api/campaign?event=');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(
+      'event and channel must each be given at most once, as a non-empty slug',
+    );
+  });
+
   it('returns 404 for an unknown event slug', async () => {
     vi.mocked(prisma.event.findUnique).mockResolvedValue(null as any);
 

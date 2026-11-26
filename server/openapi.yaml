@@ -236,7 +236,7 @@ paths:
                     type: integer
                     description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping is excluded. Same rule as GET /api/admin/stats.
         '400':
-          description: Both event and channel given
+          description: Both event and channel given, or a scope parameter is empty, repeated, or not a plain slug string
           content:
             application/json:
               schema:

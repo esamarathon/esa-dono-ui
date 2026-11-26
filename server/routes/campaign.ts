@@ -13,28 +13,50 @@ const router = Router();
 // Channel (the overlay's own numbers, ADR-0010); the slugs resolve whether
 // active or not, like GET /api/tiltify/campaigns/{id}.
 
+/** One scope query value: absent (undefined), exactly one non-empty slug, or
+ *  malformed (null) — empty, repeated, or not a plain string. */
+function scopeSlug(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const eventSlug = typeof req.query.event === 'string' ? req.query.event : undefined;
-    const channelSlug = typeof req.query.channel === 'string' ? req.query.channel : undefined;
-    if (eventSlug && channelSlug) {
+    const eventSlug = scopeSlug(req.query.event);
+    const channelSlug = scopeSlug(req.query.channel);
+    if (eventSlug === null || channelSlug === null) {
+      return res.status(400).json({
+        error: 'event and channel must each be given at most once, as a non-empty slug',
+      });
+    }
+    if (eventSlug !== undefined && channelSlug !== undefined) {
       return res.status(400).json({ error: 'Use either event or channel, not both' });
     }
 
-    if (eventSlug || channelSlug) {
-      const row = eventSlug
-        ? await prisma.event.findUnique({ where: { slug: eventSlug } })
-        : await prisma.channel.findUnique({ where: { slug: channelSlug as string } });
-      if (!row) {
-        return res.status(404).json({ error: eventSlug ? 'Event not found' : 'Channel not found' });
-      }
-      // Completed and wallet-refunded donations count; chargebacks do not (lib/donationTotals.ts).
-      // Hidden donations still count; hiding is a display decision. An Event total is its
-      // assigned donations; an unassigned one counts in the overall total only.
-      const cents = eventSlug
-        ? await eventTotalCents(prisma, row.id)
-        : await channelTotalCents(prisma, row.id);
-      return res.json({ total_raised_cents: cents });
+    // One resolved scope: its lookup, not-found text and total function are
+    // chosen once here; the flow below is scope-agnostic.
+    const scope =
+      eventSlug !== undefined
+        ? {
+            notFound: 'Event not found',
+            find: () => prisma.event.findUnique({ where: { slug: eventSlug } }),
+            total: (id: string) => eventTotalCents(prisma, id),
+          }
+        : channelSlug !== undefined
+          ? {
+              notFound: 'Channel not found',
+              find: () => prisma.channel.findUnique({ where: { slug: channelSlug } }),
+              total: (id: string) => channelTotalCents(prisma, id),
+            }
+          : null;
+
+    // Completed and wallet-refunded donations count; chargebacks do not (lib/donationTotals.ts).
+    // Hidden donations still count; hiding is a display decision. An Event total is its
+    // assigned donations; an unassigned one counts in the overall total only.
+    if (scope) {
+      const row = await scope.find();
+      if (!row) return res.status(404).json({ error: scope.notFound });
+      return res.json({ total_raised_cents: await scope.total(row.id) });
     }
 
     const { _sum } = await prisma.donation.aggregate({

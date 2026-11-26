@@ -18,8 +18,9 @@ breaking changes.
   description, `amount_raised`, `goal`); the new shape carries no goal.
 
 - **`GET /api/campaign` can scope the total to an Event or Channel**: pass
-  `?event=<event-slug>` or `?channel=<channel-slug>` (exactly one; both is a
-  400, unknown slugs are 404) and the same `{ "total_raised_cents": … }` shape
+  `?event=<event-slug>` or `?channel=<channel-slug>` (exactly one; both or a
+  malformed value is a 400, unknown slugs are 404) and the same
+  `{ "total_raised_cents": … }` shape
   returns that Event's or Channel's total. An Event total counts its assigned
   donations; unassigned donations count in the overall total only. Slugs
   resolve whether active or not, like `GET /api/tiltify/campaigns/{id}`.
