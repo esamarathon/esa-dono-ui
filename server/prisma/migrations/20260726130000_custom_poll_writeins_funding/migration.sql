@@ -33,4 +33,3 @@ ALTER TABLE "new_PollOption" RENAME TO "PollOption";
 CREATE UNIQUE INDEX "PollOption_custom_entry_id_key" ON "PollOption"("custom_entry_id");
 PRAGMA foreign_keys=ON;
 PRAGMA defer_foreign_keys=OFF;
-

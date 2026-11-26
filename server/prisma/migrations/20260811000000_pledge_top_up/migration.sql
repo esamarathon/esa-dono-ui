@@ -24,4 +24,3 @@ CREATE UNIQUE INDEX "PendingPledge_pledge_token_key" ON "PendingPledge"("pledge_
 CREATE UNIQUE INDEX "PendingPledge_fulfilled_by_donation_id_key" ON "PendingPledge"("fulfilled_by_donation_id");
 PRAGMA foreign_keys=ON;
 PRAGMA defer_foreign_keys=OFF;
-
