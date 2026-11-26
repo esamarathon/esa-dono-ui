@@ -9,7 +9,10 @@ The seed script (`server/prisma/seed.ts`) creates:
 - ✅ Moderator account at `moderator@localhost`
 - ✅ Admin account at `admin@localhost`
 - ✅ Broadcast banner displaying current API keys from env vars
-- ✅ Default feature flags (`feedback`, `auctions`), installed disabled; toggles survive re-seeding
+- ✅ Default feature flags (`feedback`, `auctions`, `donation-acknowledgements`),
+  installed with their `SEED_FLAG_*` env initial states (disabled when unset);
+  operator toggles survive re-seeding (but not the nightly volume drop — set
+  the `SEED_FLAG_*` variables in the host env to keep flags on across resets)
 
 These accounts and the banner persist across database restarts, including staging's daily resets.
 

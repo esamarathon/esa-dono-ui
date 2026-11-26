@@ -200,10 +200,13 @@ Check the effect on other Events before changing them.
 ### Feature flags
 
 Flags are site-wide and toggled under **feature flags** (`/admin/feature-flags`).
-The seed installs the default flags below, disabled; re-seeding keeps your
-toggles. A flag that does not exist in the list behaves exactly like a disabled
-one. Flags created in the admin UI do nothing until code checks them — only the
-flags listed here have an effect.
+The seed installs the default flags below, disabled unless the environment says
+otherwise: `SEED_FLAG_<NAME>` with the flag name's hyphens as underscores
+(`SEED_FLAG_DONATION_ACKNOWLEDGEMENTS=on`) sets the initial state for a flag
+installed fresh — how a nightly-reset staging keeps its toggles on. Re-seeding
+an existing row always keeps its toggle. A flag that does not exist in the list
+behaves exactly like a disabled one. Flags created in the admin UI do nothing
+until code checks them — only the flags listed here have an effect.
 
 | Flag                        | Use and purpose                                                                                                                                                                                                                                                                                                 | Default  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
