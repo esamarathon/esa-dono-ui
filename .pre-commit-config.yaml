@@ -1,33 +1,17 @@
+# Hygiene suite, run in CI by the "Pre-commit" job (`pre-commit run --all-files`).
+# Format and lint run at commit via lint-staged and in CI's Lint & Format job;
+# secret scanning has its own CI job (gitleaks, .gitleaks.toml) — neither is
+# duplicated here. Patch files are data, so whitespace hooks must not edit them.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: \.patch$
       - id: end-of-file-fixer
+        exclude: \.patch$
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=500']
       - id: check-merge-conflict
       - id: detect-private-key
-
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
-    hooks:
-      - id: gitleaks
-
-  # Format and lint through the repo's npm scripts — one prettier/eslint version
-  # (node_modules, the same lint-staged uses at commit) instead of pinned mirrors.
-  - repo: local
-    hooks:
-      - id: prettier
-        name: prettier (npm run format)
-        entry: npm run format
-        language: system
-        pass_filenames: false
-        files: '\.(ts|tsx|js|jsx|json|css|html|md|yml|yaml)$'
-      - id: eslint
-        name: eslint (npm run lint:fix)
-        entry: npm run lint:fix
-        language: system
-        pass_filenames: false
-        files: '\.(ts|tsx|js|jsx)$'
