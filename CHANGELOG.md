@@ -7,6 +7,17 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-25
+
+### Fixed
+
+- **Feature-flag toggles survive a database-wipe re-seed when the environment
+  says so** (follow-up to the nightly staging reset): the seed installs a fresh
+  flag with the `SEED_FLAG_<NAME>` initial state (e.g.
+  `SEED_FLAG_DONATION_ACKNOWLEDGEMENTS=on`) instead of always disabled —
+  previously every nightly reset silently turned toggled flags (and with them
+  the donation acknowledgements) back off.
+
 ## [0.12.0] — 2026-11-24
 
 ### Changed
