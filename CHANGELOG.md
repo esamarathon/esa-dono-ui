@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-25
+
 ### Fixed
 
 - **Feature-flag toggles survive a database-wipe re-seed when the environment
