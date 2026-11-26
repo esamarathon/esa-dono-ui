@@ -132,6 +132,17 @@ Two levels, defined in `CONTEXT.md` (ADR-0008, PRD-0002 §S):
 - **Incentives belong to one Event, and are channel-scoped or shared** (ADR-0012). `Reward`, `Poll`, `FundGoal` and `Auction` have a required `event_id` and a nullable `channel_id`: `null` = shared by every Channel of that Event, and by no other Event; a set value scopes it to that Channel, whose Event must match. `@dono/shared` `isAvailableOn()` is the one rule used by pledges, fulfillment, Pool spend and credit, Unused pool targets, Default goal lists and the donate client; SQLite triggers reject a Channel incentive in another Event and a Channel move to another Event while it owns incentives. An incentive never changes Event. `createPledge()` removes unavailable/foreign selections in its corrected review (409; no pledge or hold).
 - `Donation.event_id` is set by routing (above). `hidden_from_overlay` is the moderator's Hide from overlay (see `server/services/webhooks/` above).
 - **Per-Channel staff stats are admin-only.** `GET /api/admin/stats` includes `channels: [...]`. The public Tiltify campaign read exposes its Channel/Event money total. **Money totals count `COMPLETED` and `REFUNDED` donations**. Wallet refunds keep the money. Payment refunds lower `amount_cents` in place while status stays `COMPLETED`; shipping stays outside totals. `CHARGEBACK` and `PENDING` do not count, and hidden donations do. One rule is shared by `/api/admin/stats` and the cents metrics: `lib/donationTotals.ts` (PRD-0002 §E7). The donor site shows no public aggregate total or goal (#148): the stream overlay owns the public fundraising display, while `GET /api/campaign` serves the money total (`total_raised_cents`, no goal) to API consumers only (#148 amendment) — overall, or scoped to an Event or Channel with `?event=<slug>` / `?channel=<slug>`; `GET /api/schedule` instead serves the "Live / Up next" strip from each Channel's schedule (Crew Corner's published schedule since #286).
+
+  Where the totals live (all the same money rule):
+
+  | Surface                           | Scope                                                         | Access       |
+  | --------------------------------- | ------------------------------------------------------------- | ------------ |
+  | `GET /api/campaign`               | overall, or per Event/Channel via `?event=`/`?channel=` slugs | public       |
+  | `GET /api/tiltify/campaigns/{id}` | per Channel or Event by id (Tiltify contract, ADR-0010)       | public       |
+  | `GET /api/admin/stats`            | overall + per Channel (`channels[].raised_cents`)             | admin key    |
+  | `GET /api/metrics`                | `dono_donated_cents_*` gauges labelled `event`/`channel`      | metrics key  |
+  | webhook `fact.updated`            | per Channel and Event (push to destinations)                  | destinations |
+
 - **Metrics** (`services/metrics.ts`, docs in `docs/webhooks-and-metrics.md`):
   - `dono_donations_unassigned` counts donations waiting to be assigned.
   - Per-Event/Channel breakdowns are **separate** gauges labelled `event`/`channel` (slugs, `""` when unassigned or shared): `dono_{donated_cents,donations,reward_claims,poll_votes}_by_channel`. They are separate so `sum()` never double-counts the unlabelled totals.
