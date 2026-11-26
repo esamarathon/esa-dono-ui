@@ -196,6 +196,28 @@ paths:
                   error: { type: string }
 
   # ─── Campaign ───
+  /campaign:
+    get:
+      tags: [Campaign]
+      summary: Get the aggregate donation total
+      description: >
+        The deployment-wide money total for API consumers (#148 amendment). The donor
+        site does not display it; the stream overlay owns the public fundraising display.
+        There is no goal. The pre-0.10.0 shape (name, description, amount_raised, goal)
+        is gone.
+      responses:
+        '200':
+          description: Aggregate donation total
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total_raised_cents]
+                properties:
+                  total_raised_cents:
+                    type: integer
+                    description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping is excluded. Same rule as GET /api/admin/stats.
+
   /campaign/broadcast:
     get:
       tags: [Campaign]

@@ -7,6 +7,16 @@ breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The aggregate donation total stays available to API consumers as
+  `GET /api/campaign`** (#148 amendment): the donor site keeps no public total
+  or goal — the stream overlay owns the public fundraising display — but
+  external tools can still read the total. New minimal shape
+  `{ "total_raised_cents": <integer cents> }`, same money-total rule as
+  `GET /api/admin/stats`. Not compatible with the pre-0.10.0 response (name,
+  description, `amount_raised`, `goal`); the new shape carries no goal.
+
 ## [0.12.1] — 2026-11-25
 
 ### Fixed
