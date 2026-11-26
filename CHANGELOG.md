@@ -7,7 +7,7 @@ breaking changes.
 
 ## [Unreleased]
 
-## [Unreleased]
+## [0.12.1] — 2026-11-25
 
 ### Fixed
 
