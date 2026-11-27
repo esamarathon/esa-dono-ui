@@ -111,4 +111,3 @@ PRAGMA defer_foreign_keys=OFF;
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Stream_name_key" ON "Stream"("name");
-

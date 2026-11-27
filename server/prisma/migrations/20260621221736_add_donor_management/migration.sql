@@ -46,4 +46,3 @@ CREATE UNIQUE INDEX "Donor_email_key" ON "Donor"("email");
 CREATE UNIQUE INDEX "Donor_magic_token_key" ON "Donor"("magic_token");
 PRAGMA foreign_keys=ON;
 PRAGMA defer_foreign_keys=OFF;
-

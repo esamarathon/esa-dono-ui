@@ -297,3 +297,17 @@ jobs:
         run: |
           curl -sL https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz | tar xz
           ./gitleaks detect --source . --verbose --no-git --config .gitleaks.toml
+
+  pre-commit:
+    name: Pre-commit hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install pre-commit
+
+      - run: pre-commit run --all-files
