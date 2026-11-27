@@ -46,8 +46,36 @@ export function categoryBudgetRemainingCents(
   );
 }
 
+/**
+ * ADR-0011 §2/§6: the Wallet credit a reversal grants, before the balance clamp.
+ * Pooled: the max-rule difference after prior Wallet grants. Legacy: the reversed
+ * money minus what a chargeback took back.
+ */
+export function walletCreditGrantCents(
+  state: {
+    pledge_amount_cents: number | null;
+    wallet_applied_cents: number;
+    wallet_credit_granted_cents: number;
+    amount_cents: number;
+  },
+  status: 'REFUNDED' | 'CHARGEBACK',
+  moved: { retained_cents: number; reversed_cents: number },
+): number {
+  return state.pledge_amount_cents === null
+    ? moved.reversed_cents - (status === 'CHARGEBACK' ? state.amount_cents : 0)
+    : (status === 'CHARGEBACK'
+        ? state.wallet_applied_cents
+        : state.pledge_amount_cents - moved.retained_cents) - state.wallet_credit_granted_cents;
+}
+
 // A REQUESTED Payment refund freezes the donation's money until it resolves.
 export const requestedPaymentRefundWhere = { status: 'REQUESTED' } as const;
+
+/** Throws while the donation's money is frozen by a REQUESTED Payment refund. */
+export function assertPaymentRefundFreeze(payment_refund_requested: boolean): void {
+  if (payment_refund_requested)
+    throw httpError(409, 'A Payment refund is requested for this donation');
+}
 
 export async function hasRequestedPaymentRefundTx(
   tx: Prisma.TransactionClient,
@@ -64,8 +92,7 @@ export async function assertNoRequestedPaymentRefundTx(
   tx: Prisma.TransactionClient,
   donationId: string | null,
 ): Promise<void> {
-  if (donationId && (await hasRequestedPaymentRefundTx(tx, donationId)))
-    throw httpError(409, 'A Payment refund is requested for this donation');
+  if (donationId) assertPaymentRefundFreeze(await hasRequestedPaymentRefundTx(tx, donationId));
 }
 
 /** Confirmed initial reward type wins; historical rows fall back to the catalog. */
@@ -235,10 +262,19 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
         select: { id: true, goal_id: true, amount_cents: true, source: true },
       },
       pool_credits: { select: { category: true, remaining_cents: true } },
+      payment_refunds: { where: requestedPaymentRefundWhere, select: { id: true } },
     },
   });
   if (!donation) throw httpError(404, 'Donation not found');
-  const { event, pool_credits, reward_claims, poll_votes, contributions, ...fields } = donation;
+  const {
+    event,
+    pool_credits,
+    reward_claims,
+    poll_votes,
+    contributions,
+    payment_refunds,
+    ...fields
+  } = donation;
   const allocations = {
     reward: [
       ...reward_claims.map((row) => ({ ...row, source: 'donor' as const })),
@@ -256,6 +292,7 @@ export async function readDonationAccountingTx(tx: Prisma.TransactionClient, don
   return {
     ...fields,
     event_ended_at: event?.ended_at ?? null,
+    payment_refund_requested: payment_refunds.length > 0,
     allocations,
     pools: computePoolAccounting({
       ...fields,
