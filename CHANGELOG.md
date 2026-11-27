@@ -7,6 +7,13 @@ breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The frontend image scans clean at HIGH/CRITICAL again**: the nginx runner
+  base shipped `libxml2` `2.13.9-r3`, which carries six HIGH CVEs
+  (CVE-2026-86138/86139/86140/86142/86143/11979, all fixed by `2.13.9-r5`);
+  the image's CVE floor bump now installs `libxml2>=2.13.9-r5`.
+
 ### Added
 
 - **The aggregate donation total stays available to API consumers as

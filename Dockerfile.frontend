@@ -52,9 +52,11 @@ LABEL org.opencontainers.image.title="esa-dono-ui-frontend" \
 # libxslt CVE-2026-125350/87636/9947 — NVD titles them "chromium-browser";
 # the flagged package is the nginx dependency libxslt, no browser is shipped).
 # libxml2 CVE-2026-86144 (HIGH) — floor bump; libxml2 is the libxslt dependency.
+# libxml2 CVE-2026-86138/86139/86140/86142/86143/11979 (6x HIGH, fixed in
+# 2.13.9-r4/-r5) — floor bump covers them all.
 USER root
 RUN apk upgrade --no-cache \
- && apk add --no-cache 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4' 'libxml2>=2.13.9-r3'
+ && apk add --no-cache 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4' 'libxml2>=2.13.9-r5'
 USER nginx
 
 COPY nginx.conf /etc/nginx/templates/default.conf.template
