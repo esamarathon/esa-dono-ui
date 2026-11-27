@@ -1,12 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import {
-  assertNoRequestedPaymentRefundTx,
+  assertPaymentRefundFreeze,
   liveRowWhere,
   readDonationAccountingTx,
 } from './poolAccounting.js';
 import { goalRemainingCents } from './spend.js';
-import { reverseSpendTx } from './reversal.js';
+import { reverseSpendTx } from './spendReversal.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 
 type Tx = Prisma.TransactionClient;
@@ -20,7 +20,7 @@ async function sourceTx(tx: Tx, id: string) {
   if (donation.pledge_amount_cents === null || donation.status !== 'COMPLETED')
     throw httpError(409, 'Only COMPLETED pooled donations have Unused pool money');
   if (!donation.channel_id) throw httpError(409, 'An admin must route this donation first');
-  await assertNoRequestedPaymentRefundTx(tx, id);
+  assertPaymentRefundFreeze(donation.payment_refund_requested);
   return donation;
 }
 

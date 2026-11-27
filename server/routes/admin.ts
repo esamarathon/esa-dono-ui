@@ -45,19 +45,19 @@ import {
   incentiveEventId,
   keepEvent,
 } from '../services/incentiveLifecycle.js';
+import { setDonationStatusTx, previewDonationReversalTx } from '../services/reversal.js';
 import {
-  adjustWalletCreditTx,
-  refundGoalContributions,
-  refundPollOptionVotes,
-  reverseSpendTx,
-  setDonationStatusTx,
-  sweepWalletCreditsTx,
-  previewDonationReversalTx,
-  setClaimStatusTx,
   acknowledgeChargebackClaimTx,
   previewSpendReversalTx,
+  reverseSpendTx,
+  setClaimStatusTx,
+} from '../services/spendReversal.js';
+import {
   previewIncentiveReversalTx,
-} from '../services/reversal.js';
+  refundGoalContributions,
+  refundPollOptionVotes,
+} from '../services/incentiveReversal.js';
+import { adjustWalletCreditTx, sweepWalletCreditsTx } from '../services/walletAdjust.js';
 import {
   closeAuctionTx,
   cancelAuctionTx,

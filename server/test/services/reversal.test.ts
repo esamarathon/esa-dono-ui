@@ -5,15 +5,14 @@ import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 import crypto from 'crypto';
 import prisma from '../../lib/prisma.js';
+import { reverseSpendTx, setClaimStatusTx } from '../../services/spendReversal.js';
 import {
-  reverseSpendTx,
-  setDonationStatusTx,
-  refundPollOptionVotes,
-  refundGoalContributions,
-  adjustWalletCreditTx,
-  sweepWalletCreditsTx,
   moderateCustomEntryTx,
-} from '../../services/reversal.js';
+  refundGoalContributions,
+  refundPollOptionVotes,
+} from '../../services/incentiveReversal.js';
+import { setDonationStatusTx } from '../../services/reversal.js';
+import { adjustWalletCreditTx, sweepWalletCreditsTx } from '../../services/walletAdjust.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 import { proposeCustomEntryTx } from '../../services/spend.js';
 import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
