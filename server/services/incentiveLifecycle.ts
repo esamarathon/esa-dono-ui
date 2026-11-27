@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import { deleteUploadByUrl } from '../lib/uploads.js';
 import { resolveEventId } from './channels.js';
-import { refundGoalContributions, refundPollOptionVotes } from './reversal.js';
+import { refundGoalContributions, refundPollOptionVotes } from './incentiveReversal.js';
 import { withWebhooks, type EmitWebhook } from './webhooks/outbox.js';
 import {
   buildIncentiveCreatedPayload,

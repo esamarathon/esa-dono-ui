@@ -9,12 +9,9 @@ import request from 'supertest';
 import adminRouter from '../../routes/admin.js';
 import webhookRouter from '../../routes/webhook.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
-import {
-  setDonationStatusTx,
-  setClaimStatusTx,
-  reverseSpendTx,
-  moderateCustomEntryTx,
-} from '../../services/reversal.js';
+import { setDonationStatusTx } from '../../services/reversal.js';
+import { reverseSpendTx, setClaimStatusTx } from '../../services/spendReversal.js';
+import { moderateCustomEntryTx } from '../../services/incentiveReversal.js';
 import { endEventTx, undoEventEndTx } from '../../services/eventEnd.js';
 import { assignUnusedTx } from '../../services/unusedPool.js';
 import prisma from '../../lib/prisma.js';

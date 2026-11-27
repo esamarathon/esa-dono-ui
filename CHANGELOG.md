@@ -7,6 +7,21 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Reversal destinations have one policy** (no behavior change): the preview
+  projection and the mutation of a reversed row's funding share one ADR-0011
+  §5/6 computation in `reversal.ts`, a terminal status change plans once per
+  transaction, and the Wallet-grant rule and the Payment-refund freeze read
+  from `poolAccounting.ts` (#295).
+
+- **Reversal workflows are thin modules around the row-return policy**
+  (no behavior change): `reversal.ts` splits into `reversalPolicy.ts` (the
+  ADR-0011 §5/6 destination policy and row mechanics), `spendReversal.ts`,
+  `incentiveReversal.ts` and `walletAdjust.ts`; each module changes for one
+  reason, and `unusedPool.ts` no longer imports the terminal-status
+  workflow (#301).
+
 ## [0.13.0] — 2026-11-27
 
 ### Added
@@ -26,14 +41,6 @@ breaking changes.
   returns that Event's or Channel's total. An Event total counts its assigned
   donations; unassigned donations count in the overall total only. Slugs
   resolve whether active or not, like `GET /api/tiltify/campaigns/{id}`.
-
-### Changed
-
-- **Reversal destinations have one policy** (no behavior change): the preview
-  projection and the mutation of a reversed row's funding share one ADR-0011
-  §5/6 computation in `reversal.ts`, a terminal status change plans once per
-  transaction, and the Wallet-grant rule and the Payment-refund freeze read
-  from `poolAccounting.ts` (#295).
 
 ### Changed
 

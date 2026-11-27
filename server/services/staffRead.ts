@@ -5,7 +5,8 @@ import {
   readDonationAccountingTx,
   readRewardFundingTx,
 } from './poolAccounting.js';
-import { claimStatusReasonTx, previewDonationReversalTx } from './reversal.js';
+import { previewDonationReversalTx } from './reversal.js';
+import { claimStatusReasonTx } from './spendReversal.js';
 import type { previewPoolShrinkTx } from './paymentRefundShrink.js';
 
 type Tx = Prisma.TransactionClient;
