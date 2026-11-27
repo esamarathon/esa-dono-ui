@@ -6,7 +6,7 @@ import {
   readDonationAccountingTx,
 } from './poolAccounting.js';
 import { goalRemainingCents } from './spend.js';
-import { reverseSpendTx } from './reversal.js';
+import { reverseSpendTx } from './spendReversal.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 
 type Tx = Prisma.TransactionClient;

@@ -105,18 +105,28 @@ vi.mock('../../services/webhooks/delivery.js', async (importOriginal) => ({
 
 import prisma from '../../lib/prisma.js';
 import adminRouter from '../../routes/admin.js';
-import * as reversal from '../../services/reversal.js';
+import * as incentiveReversal from '../../services/incentiveReversal.js';
+import * as spendReversal from '../../services/spendReversal.js';
+import * as walletAdjust from '../../services/walletAdjust.js';
 
 vi.mock('../../services/reversal.js', () => ({
-  adjustWalletCreditTx: vi.fn(),
+  setDonationStatusTx: vi.fn(),
+  previewDonationReversalTx: vi.fn(),
+}));
+vi.mock('../../services/spendReversal.js', () => ({
+  acknowledgeChargebackClaimTx: vi.fn(),
+  previewSpendReversalTx: vi.fn(),
+  reverseSpendTx: vi.fn(),
+  setClaimStatusTx: vi.fn(),
+}));
+vi.mock('../../services/incentiveReversal.js', () => ({
+  previewIncentiveReversalTx: vi.fn(),
   refundGoalContributions: vi.fn(),
   refundPollOptionVotes: vi.fn(),
-  reverseSpendTx: vi.fn(),
-  setDonationStatusTx: vi.fn(),
+}));
+vi.mock('../../services/walletAdjust.js', () => ({
+  adjustWalletCreditTx: vi.fn(),
   sweepWalletCreditsTx: vi.fn(),
-  previewDonationReversalTx: vi.fn(),
-  setClaimStatusTx: vi.fn(),
-  acknowledgeChargebackClaimTx: vi.fn(),
 }));
 
 // Loose alias for configuring the mocked Prisma client with partial fixtures.
@@ -269,7 +279,7 @@ describe('Admin donor management', () => {
 
   it('POST /donors/:id/adjust-balance preserves the response shape', async () => {
     px.donor.findUnique.mockResolvedValue({ email: 'a@b.com' });
-    vi.mocked(reversal.adjustWalletCreditTx).mockResolvedValue({
+    vi.mocked(walletAdjust.adjustWalletCreditTx).mockResolvedValue({
       success: true,
       balance_before: 500,
       balance_after: 1500,
@@ -304,7 +314,7 @@ describe('Admin donor management', () => {
   it.each(['claim', 'vote', 'contribution'])(
     'POST /donors/:id/reverse-spend returns success for %s',
     async (spend_type) => {
-      vi.mocked(reversal.reverseSpendTx).mockResolvedValue();
+      vi.mocked(spendReversal.reverseSpendTx).mockResolvedValue();
       const res = await request(createApp())
         .post('/api/admin/donors/d1/reverse-spend')
         .send({ spend_type, spend_id: 's1' })
@@ -326,27 +336,33 @@ describe('Admin donor management', () => {
   it.each([
     [
       '/donors/d1/adjust-balance',
-      reversal.adjustWalletCreditTx,
+      walletAdjust.adjustWalletCreditTx,
       { amount_cents: -100, type: 'MANUAL' },
       400,
       'Adjustment would result in negative balance',
     ],
     [
       '/donors/d1/reverse-spend',
-      reversal.reverseSpendTx,
+      spendReversal.reverseSpendTx,
       { spend_type: 'claim', spend_id: 'c1' },
       400,
       'Claim already reversed',
     ],
     [
       '/donors/d1/reverse-spend',
-      reversal.reverseSpendTx,
+      spendReversal.reverseSpendTx,
       { spend_type: 'vote', spend_id: 'v1' },
       404,
       'Vote not found',
     ],
-    ['/polls/options/o1/refund', reversal.refundPollOptionVotes, {}, 404, 'Poll option not found'],
-    ['/goals/g1/refund', reversal.refundGoalContributions, {}, 404, 'Goal not found'],
+    [
+      '/polls/options/o1/refund',
+      incentiveReversal.refundPollOptionVotes,
+      {},
+      404,
+      'Poll option not found',
+    ],
+    ['/goals/g1/refund', incentiveReversal.refundGoalContributions, {}, 404, 'Goal not found'],
   ])('maps Reversal errors for %s', async (path, action, body, status, error) => {
     vi.mocked(action).mockRejectedValueOnce(Object.assign(new Error(error), { status }));
     const res = await request(createApp())
@@ -358,8 +374,8 @@ describe('Admin donor management', () => {
   });
 
   it.each([
-    ['/polls/options/o1/refund', reversal.refundPollOptionVotes],
-    ['/goals/g1/refund', reversal.refundGoalContributions],
+    ['/polls/options/o1/refund', incentiveReversal.refundPollOptionVotes],
+    ['/goals/g1/refund', incentiveReversal.refundGoalContributions],
   ])('preserves the refund summary for %s', async (path, action) => {
     vi.mocked(action).mockResolvedValueOnce({ refunded_count: 2, refunded_cents: 750 });
     const res = await request(createApp())

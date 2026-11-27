@@ -6,7 +6,7 @@ import { previewEventEndTx, endEventTx, undoEventEndTx } from '../../services/ev
 import { assertCanActivateEvent, updateEvent } from '../../services/events.js';
 import { assignUnusedTx } from '../../services/unusedPool.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
-import { reverseSpendTx } from '../../services/reversal.js';
+import { reverseSpendTx } from '../../services/spendReversal.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
 const events: string[] = [],

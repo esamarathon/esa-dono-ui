@@ -3,15 +3,16 @@ import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { withWebhooks } from '../../services/webhooks/outbox.js';
+import { setDonationStatusTx, previewDonationReversalTx } from '../../services/reversal.js';
 import {
-  setDonationStatusTx,
-  previewDonationReversalTx,
+  acknowledgeChargebackClaimTx,
   reverseSpendTx,
+  setClaimStatusTx,
+} from '../../services/spendReversal.js';
+import {
   refundGoalContributions,
   refundPollOptionVotes,
-  setClaimStatusTx,
-  acknowledgeChargebackClaimTx,
-} from '../../services/reversal.js';
+} from '../../services/incentiveReversal.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
 import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 

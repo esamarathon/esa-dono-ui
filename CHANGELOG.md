@@ -7,6 +7,15 @@ breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Reversal workflows are thin modules around the row-return policy**
+  (no behavior change): `reversal.ts` splits into `reversalPolicy.ts` (the
+  ADR-0011 §5/6 destination policy and row mechanics), `spendReversal.ts`,
+  `incentiveReversal.ts` and `walletAdjust.ts`; each module changes for one
+  reason, and `unusedPool.ts` no longer imports the terminal-status
+  workflow (#301).
+
 ## [0.13.0] — 2026-11-27
 
 ### Added

@@ -12,12 +12,8 @@ import {
   readPoolCreditEventTx,
   readPoolCreditSummaryTx,
 } from '../../services/poolCredit.js';
-import {
-  reverseSpendTx,
-  setClaimStatusTx,
-  setDonationStatusTx,
-  previewDonationReversalTx,
-} from '../../services/reversal.js';
+import { previewDonationReversalTx, setDonationStatusTx } from '../../services/reversal.js';
+import { reverseSpendTx, setClaimStatusTx } from '../../services/spendReversal.js';
 import { readDonationAccountingTx } from '../../services/poolAccounting.js';
 
 vi.mock('../../services/webhooks/dispatcher.js', () => ({ wakeDispatcher: vi.fn() }));
