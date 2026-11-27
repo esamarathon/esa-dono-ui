@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import { withWebhooks } from './webhooks/outbox.js';
+import { assertNoRequestedPaymentRefundTx } from './poolAccounting.js';
 
 /** Where a donation is routed. Both null = unassigned (PRD-0002 §E5, §E6). */
 export interface DonationRoute {
@@ -61,8 +62,7 @@ export async function resolveDonationRoute(
 export async function assignDonationChannel(donationId: string, channelId: unknown) {
   if (typeof channelId !== 'string' || !channelId) throw httpError(400, 'channel_id is required');
   return withWebhooks(async (tx, _emit, publisher) => {
-    if (await tx.paymentRefund.count({ where: { donation_id: donationId, status: 'REQUESTED' } }))
-      throw httpError(409, 'A Payment refund is requested for this donation');
+    await assertNoRequestedPaymentRefundTx(tx, donationId);
     const donation = await tx.donation.findUnique({ where: { id: donationId } });
     if (!donation) throw httpError(404, 'Donation not found');
     if (donation.channel_id || donation.event_id) {

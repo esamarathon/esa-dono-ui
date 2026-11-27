@@ -2,8 +2,12 @@ import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
 import { countsTowardTotals } from '../lib/donationTotals.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
-import { readDonationAccountingTx } from './poolAccounting.js';
-import { readRewardFundingTx } from './rewardFunding.js';
+import {
+  assertNoRequestedPaymentRefundTx,
+  liveRowWhere,
+  readDonationAccountingTx,
+  readRewardFundingTx,
+} from './poolAccounting.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -40,7 +44,7 @@ async function returnRowFundingTx(
   });
   if (redemptions.length) {
     for (const redemption of redemptions) {
-      await assertNoRequestedRefundTx(tx, redemption.credit.donation_id);
+      await assertNoRequestedPaymentRefundTx(tx, redemption.credit.donation_id);
       if (
         redemption.credit.donation_id === terminalDonationId ||
         redemption.credit.donation.status === 'CHARGEBACK'
@@ -57,7 +61,7 @@ async function returnRowFundingTx(
     }
     return;
   }
-  await assertNoRequestedRefundTx(tx, row.donation_id);
+  await assertNoRequestedPaymentRefundTx(tx, row.donation_id);
   const donation = row.donation_id
     ? await tx.donation.findUniqueOrThrow({ where: { id: row.donation_id } })
     : null;
@@ -147,7 +151,7 @@ export async function moderateCustomEntryTx(
   const option = await tx.pollOption.findUnique({ where: { custom_entry_id: entry.id } });
   if (!option) throw httpError(404, 'Associated poll option not found');
   const votes = await tx.pollVote.findMany({
-    where: { poll_option_id: option.id, reversed_at: null },
+    where: { poll_option_id: option.id, ...liveRowWhere() },
     orderBy: { created_at: 'desc' },
   });
   if (!votes.length) throw httpError(404, 'Associated funding vote not found');
@@ -158,7 +162,7 @@ export async function moderateCustomEntryTx(
   const donationIds = [
     ...new Set(votes.flatMap((vote) => (vote.donation_id ? [vote.donation_id] : []))),
   ];
-  for (const id of donationIds) await assertNoRequestedRefundTx(tx, id);
+  for (const id of donationIds) await assertNoRequestedPaymentRefundTx(tx, id);
   const before = await publisher.snapshot(donationIds);
   if (status === 'APPROVED') {
     const cents = votes.reduce((sum, vote) => sum + vote.amount_cents, 0);
@@ -257,7 +261,7 @@ export async function refundGoalContributions(
   const goal = await tx.fundGoal.findUnique({ where: { id: goalId } });
   if (!goal) throw httpError(404, 'Goal not found');
   const contributions = await tx.fundContribution.findMany({
-    where: { goal_id: goalId, reversed_at: null },
+    where: { goal_id: goalId, ...liveRowWhere() },
     orderBy: { created_at: 'asc' },
   });
   const ids = [
@@ -293,7 +297,7 @@ export async function refundPollOptionVotes(
   const option = await tx.pollOption.findUnique({ where: { id: optionId } });
   if (!option) throw httpError(404, 'Poll option not found');
   const votes = await tx.pollVote.findMany({
-    where: { poll_option_id: optionId, reversed_at: null },
+    where: { poll_option_id: optionId, ...liveRowWhere() },
     orderBy: { created_at: 'asc' },
   });
   const ids = [...new Set(votes.flatMap((row) => (row.donation_id ? [row.donation_id] : [])))];
@@ -312,14 +316,6 @@ export async function refundPollOptionVotes(
   }
   await publisher.publish(ids, before);
   return { refunded_count: votes.length, refunded_cents: refundedCents };
-}
-
-async function assertNoRequestedRefundTx(tx: Tx, donationId: string | null) {
-  if (
-    donationId &&
-    (await tx.paymentRefund.count({ where: { donation_id: donationId, status: 'REQUESTED' } }))
-  )
-    throw httpError(409, 'A Payment refund is requested for this donation');
 }
 
 async function reverseClaimRowTx(tx: Tx, claim: { id: string; reward_id: string }, actor: string) {
@@ -347,7 +343,7 @@ async function reverseVoteRowTx(
     await decrementPollTalliesTx(tx, option.id, vote.poll_id, vote.amount_cents);
   else if (
     option.status === 'PENDING_APPROVAL' &&
-    !(await tx.pollVote.count({ where: { poll_option_id: option.id, reversed_at: null } }))
+    !(await tx.pollVote.count({ where: { poll_option_id: option.id, ...liveRowWhere() } }))
   )
     await tx.pollOption.update({ where: { id: option.id }, data: { status: 'REJECTED' } });
 }
@@ -383,7 +379,7 @@ export async function previewDonationReversalTx(
   const donation = await readDonationAccountingTx(tx, donationId);
   if (donation.status === 'REFUNDED' || donation.status === 'CHARGEBACK')
     throw httpError(400, 'Donation is refunded/charged back and cannot change status');
-  await assertNoRequestedRefundTx(tx, donationId);
+  await assertNoRequestedPaymentRefundTx(tx, donationId);
   if (status === 'CHARGEBACK' && donation.amount_cents === 0)
     throw httpError(400, 'Cannot record a chargeback for zero money');
   const retained = donation.allocations.reward.filter((row) => row.status === 'FULFILLED');
@@ -452,7 +448,7 @@ export async function setDonationStatusTx(
     throw httpError(400, 'Donation is refunded/charged back and cannot change status');
   if (donation.status === status) throw httpError(400, 'Donation already has this status');
   if (!['REFUNDED', 'CHARGEBACK'].includes(status)) throw httpError(400, 'Invalid status');
-  await assertNoRequestedRefundTx(tx, donationId);
+  await assertNoRequestedPaymentRefundTx(tx, donationId);
   const initial = await readDonationAccountingTx(tx, donationId);
   const affectedIds = new Set([donationId]);
   for (const allocation of initial.allocations.reward) {
@@ -646,18 +642,18 @@ export async function previewIncentiveReversalTx(tx: Tx, kind: 'goal' | 'option'
   if (!target) throw httpError(404, 'Incentive not found');
   const rows =
     kind === 'goal'
-      ? await tx.fundContribution.findMany({ where: { goal_id: id, reversed_at: null } })
-      : await tx.pollVote.findMany({ where: { poll_option_id: id, reversed_at: null } });
+      ? await tx.fundContribution.findMany({ where: { goal_id: id, ...liveRowWhere() } })
+      : await tx.pollVote.findMany({ where: { poll_option_id: id, ...liveRowWhere() } });
   const destinations: ReversalDestination[] = [];
   for (const row of rows) {
-    await assertNoRequestedRefundTx(tx, row.donation_id);
+    await assertNoRequestedPaymentRefundTx(tx, row.donation_id);
     destinations.push(...(await rowReturnPreviewTx(tx, row, kind === 'goal' ? 'goal' : 'poll')));
   }
   return { destinations };
 }
 
 async function assertSpendSourceTx(tx: Tx, donationId: string | null) {
-  await assertNoRequestedRefundTx(tx, donationId);
+  await assertNoRequestedPaymentRefundTx(tx, donationId);
   if (
     donationId &&
     (await tx.donation.findUniqueOrThrow({ where: { id: donationId } })).status === 'CHARGEBACK'

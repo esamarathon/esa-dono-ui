@@ -28,9 +28,8 @@ import {
   resolvePaymentRefundItem,
   resolvePaymentRefundShipping,
 } from '../../services/paymentRefund.js';
-import { readDonationAccountingTx } from '../../services/poolAccounting.js';
+import { readDonationAccountingTx, readRewardFundingTx } from '../../services/poolAccounting.js';
 import { applyPoolCreditTx, readPoolCreditEventTx } from '../../services/poolCredit.js';
-import { readRewardFundingTx } from '../../services/rewardFunding.js';
 
 const stripe = vi.hoisted(() => ({
   createPaymentRefund: vi.fn(),

@@ -8,7 +8,12 @@ import {
   type PoolCategory,
 } from '@dono/shared';
 import { httpError } from '../lib/httpError.js';
-import { readDonationAccountingTx } from './poolAccounting.js';
+import {
+  categoryBudgetRemainingCents,
+  liveClaimWhere,
+  readDonationAccountingTx,
+  requestedPaymentRefundWhere,
+} from './poolAccounting.js';
 import { textWordTokens } from './blockedWords.js';
 
 type Tx = Prisma.TransactionClient;
@@ -93,7 +98,7 @@ async function fundSpend(
               event_id: true,
               pledge_amount_cents: true,
               status: true,
-              payment_refunds: { where: { status: 'REQUESTED' }, select: { id: true } },
+              payment_refunds: { where: requestedPaymentRefundWhere, select: { id: true } },
             },
           },
         },
@@ -114,10 +119,11 @@ async function fundSpend(
         throw httpError(409, 'Pool credit changed or source unavailable; refresh and review');
       const accounting = await readDonationAccountingTx(tx, credit.donation_id);
       if (
-        accounting.pools[category].live_cents +
-          accounting.pools[category].outstanding_credit_cents +
-          accounting.failed_payment_wallet_credit_cents >
-        accounting.pledge_amount_cents!
+        categoryBudgetRemainingCents(
+          accounting.pools[category],
+          accounting.pledge_amount_cents!,
+          accounting.failed_payment_wallet_credit_cents,
+        ) < 0
       )
         throw httpError(409, 'Source category budget is inconsistent');
       await tx.poolCredit.update({
@@ -155,11 +161,11 @@ async function fundSpend(
   const accounting = await readDonationAccountingTx(tx, donationId);
   const budget = accounting.pools[category];
   if (
-    budget.live_cents +
-      budget.outstanding_credit_cents +
-      donation.failed_payment_wallet_credit_cents +
-      cents >
-    donation.pledge_amount_cents
+    categoryBudgetRemainingCents(
+      budget,
+      donation.pledge_amount_cents,
+      donation.failed_payment_wallet_credit_cents,
+    ) < cents
   ) {
     throw httpError(400, 'Pool budget exceeded or reserved');
   }
@@ -253,8 +259,7 @@ export async function claimRewardTx(
     const physical = await tx.rewardClaim.aggregate({
       where: {
         donation_id: donationId,
-        reversed_at: null,
-        status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+        ...liveClaimWhere(),
         ...(confirmed ? { reward_id: { in: confirmed.items.map((item) => item.target_id) } } : {}),
       },
       _sum: { amount_cents: true },

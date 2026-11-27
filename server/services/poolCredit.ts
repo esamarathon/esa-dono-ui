@@ -17,6 +17,7 @@ import {
   type CreditSpend,
 } from './spend.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
+import { requestedPaymentRefundWhere } from './poolAccounting.js';
 type Tx = Prisma.TransactionClient;
 const categories: PoolCategory[] = ['reward', 'poll', 'goal'];
 const zero = (): CreditAmounts => ({ reward: 0, poll: 0, goal: 0 });
@@ -32,7 +33,7 @@ const grantSelect = {
       created_at: true,
       status: true,
       pledge_amount_cents: true,
-      payment_refunds: { where: { status: 'REQUESTED' }, select: { id: true } },
+      payment_refunds: { where: requestedPaymentRefundWhere, select: { id: true } },
     },
   },
 } satisfies Prisma.PoolCreditSelect;
