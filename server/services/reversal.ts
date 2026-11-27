@@ -4,9 +4,11 @@ import { countsTowardTotals } from '../lib/donationTotals.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import {
   assertNoRequestedPaymentRefundTx,
+  assertPaymentRefundFreeze,
   liveRowWhere,
   readDonationAccountingTx,
   readRewardFundingTx,
+  walletCreditGrantCents,
 } from './poolAccounting.js';
 
 type Tx = Prisma.TransactionClient;
@@ -27,73 +29,43 @@ async function returnRowFundingTx(
   reason: string,
   terminalDonationId?: string,
 ) {
-  // Check canonical redemption funding BEFORE the legacy-null Wallet fallback.
-  const redemptions = await tx.poolCreditRedemption.findMany({
-    where:
-      category === 'reward'
-        ? { claim_id: row.id }
-        : category === 'poll'
-          ? { vote_id: row.id }
-          : { contribution_id: row.id },
-    select: {
-      amount_cents: true,
-      reduced_cents: true,
-      credit_id: true,
-      credit: { select: { donation_id: true, donation: { select: { status: true } } } },
-    },
-  });
-  if (redemptions.length) {
-    for (const redemption of redemptions) {
-      await assertNoRequestedPaymentRefundTx(tx, redemption.credit.donation_id);
-      if (
-        redemption.credit.donation_id === terminalDonationId ||
-        redemption.credit.donation.status === 'CHARGEBACK'
-      )
-        continue;
+  for (const source of await planRowReturnTx(tx, row, category, terminalDonationId)) {
+    await assertNoRequestedPaymentRefundTx(tx, source.assert_donation_id);
+    if (source.action === 'restore-credit')
       await tx.poolCredit.update({
-        where: { id: redemption.credit_id },
+        where: { id: source.credit_id! },
         data: {
-          remaining_cents: { increment: redemption.amount_cents - redemption.reduced_cents },
+          remaining_cents: { increment: source.amount_cents },
           cleared_at: null,
           cleared_by: null,
         },
       });
-    }
-    return;
-  }
-  await assertNoRequestedPaymentRefundTx(tx, row.donation_id);
-  const donation = row.donation_id
-    ? await tx.donation.findUniqueOrThrow({ where: { id: row.donation_id } })
-    : null;
-  // Old terminal rows are not repaired, and cannot mint credit for lost money.
-  if (donation?.status === 'CHARGEBACK') return;
-  if (donation?.pledge_amount_cents != null) {
-    if (row.source === 'moderator' || row.amount_cents === 0) return;
-    await tx.poolCredit.create({
-      data: {
-        donation_id: donation.id,
-        category,
-        amount_cents: row.amount_cents,
-        remaining_cents: row.amount_cents,
-        created_by: actor,
-        ...(category === 'reward'
-          ? { source_claim_id: row.id }
-          : category === 'poll'
-            ? { source_vote_id: row.id }
-            : { source_contribution_id: row.id }),
-      },
-    });
-  } else {
-    await adjustWalletTx(
-      tx,
-      row.donor_id,
-      row.amount_cents,
-      'REFUND',
-      reason,
-      actor,
-      row.id,
-      row.donation_id,
-    );
+    else if (source.action === 'create-credit')
+      await tx.poolCredit.create({
+        data: {
+          donation_id: source.donation_id!,
+          category,
+          amount_cents: row.amount_cents,
+          remaining_cents: row.amount_cents,
+          created_by: actor,
+          ...(category === 'reward'
+            ? { source_claim_id: row.id }
+            : category === 'poll'
+              ? { source_vote_id: row.id }
+              : { source_contribution_id: row.id }),
+        },
+      });
+    else if (source.action === 'wallet-credit')
+      await adjustWalletTx(
+        tx,
+        row.donor_id,
+        row.amount_cents,
+        'REFUND',
+        reason,
+        actor,
+        row.id,
+        row.donation_id,
+      );
   }
 }
 
@@ -370,6 +342,74 @@ async function reverseContributionRowTx(
   });
 }
 
+/** Asserts every funding source of a non-retained claim and collects every donation the reversal touches. */
+async function walkReversalSourcesTx(
+  tx: Tx,
+  state: Awaited<ReturnType<typeof readDonationAccountingTx>>,
+): Promise<Set<string>> {
+  const affectedIds = new Set([state.id]);
+  for (const allocation of state.allocations.reward) {
+    const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
+    const funding = await readRewardFundingTx(tx, claim);
+    for (const id of funding.donation_ids) {
+      // Retaining a fulfilled claim never changes another source's funding.
+      if (allocation.status !== 'FULFILLED') await assertSpendSourceTx(tx, id);
+      affectedIds.add(id);
+    }
+  }
+  return affectedIds;
+}
+
+/** Pure ADR-0011 §5/6 computation shared by preview and commit. */
+function planDonationReversal(
+  state: Awaited<ReturnType<typeof readDonationAccountingTx>>,
+  status: 'REFUNDED' | 'CHARGEBACK',
+  walletBalanceCents: number,
+) {
+  const retained = state.allocations.reward.filter((row) => row.status === 'FULFILLED');
+  const claims = state.allocations.reward.filter((row) => row.status !== 'FULFILLED');
+  const cents = (rows: { amount_cents: number }[]) =>
+    rows.reduce((sum, row) => sum + row.amount_cents, 0);
+  const reversedCents =
+    cents(claims) + cents(state.allocations.poll) + cents(state.allocations.goal);
+  const desired = walletCreditGrantCents(state, status, {
+    retained_cents: cents(retained),
+    reversed_cents: reversedCents,
+  });
+  return {
+    retained,
+    claims,
+    preview: {
+      donation_id: state.id,
+      status,
+      accounting: state.pledge_amount_cents === null ? ('LEGACY' as const) : ('POOLED' as const),
+      wallet_adjustment_cents: Math.max(desired, -walletBalanceCents),
+      money_before_cents: countsTowardTotals(state.status) ? state.amount_cents : 0,
+      money_after_cents: countsTowardTotals(status) ? state.amount_cents : 0,
+      reversed_rows: {
+        reward: claims.length,
+        poll: state.allocations.poll.length,
+        goal: state.allocations.goal.length,
+      },
+      retained_claim_ids: retained.map((row) => row.id),
+      reversed_allocation_ids: {
+        reward: claims.map((row) => row.id),
+        poll: state.allocations.poll.map((row) => row.id),
+        goal: state.allocations.goal.map((row) => row.id),
+      },
+      cleared_unused_cents: {
+        poll: state.pools.poll.unused_cents,
+        goal: state.pools.goal.unused_cents,
+      },
+      cleared_pool_credit_cents: {
+        reward: state.pools.reward.outstanding_credit_cents,
+        poll: state.pools.poll.outstanding_credit_cents,
+        goal: state.pools.goal.outstanding_credit_cents,
+      },
+    },
+  };
+}
+
 /** Same computation is used for preview and commit, always inside the caller's tx. */
 export async function previewDonationReversalTx(
   tx: Tx,
@@ -379,58 +419,15 @@ export async function previewDonationReversalTx(
   const donation = await readDonationAccountingTx(tx, donationId);
   if (donation.status === 'REFUNDED' || donation.status === 'CHARGEBACK')
     throw httpError(400, 'Donation is refunded/charged back and cannot change status');
-  await assertNoRequestedPaymentRefundTx(tx, donationId);
+  assertPaymentRefundFreeze(donation.payment_refund_requested);
   if (status === 'CHARGEBACK' && donation.amount_cents === 0)
     throw httpError(400, 'Cannot record a chargeback for zero money');
-  const retained = donation.allocations.reward.filter((row) => row.status === 'FULFILLED');
-  const claims = donation.allocations.reward.filter((row) => row.status !== 'FULFILLED');
-  for (const allocation of claims) {
-    const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
-    for (const id of (await readRewardFundingTx(tx, claim)).donation_ids)
-      await assertSpendSourceTx(tx, id);
-  }
-  const cents = (rows: { amount_cents: number }[]) =>
-    rows.reduce((sum, row) => sum + row.amount_cents, 0);
-  const reversedCents =
-    cents(claims) + cents(donation.allocations.poll) + cents(donation.allocations.goal);
-  const desired =
-    donation.pledge_amount_cents === null
-      ? reversedCents - (status === 'CHARGEBACK' ? donation.amount_cents : 0)
-      : (status === 'CHARGEBACK'
-          ? donation.wallet_applied_cents
-          : donation.pledge_amount_cents - cents(retained)) - donation.wallet_credit_granted_cents;
+  await walkReversalSourcesTx(tx, donation);
   const donor = await tx.donor.findUniqueOrThrow({
     where: { id: donation.donor_id },
     select: { balance_remaining: true },
   });
-  return {
-    donation_id: donationId,
-    status,
-    accounting: donation.pledge_amount_cents === null ? ('LEGACY' as const) : ('POOLED' as const),
-    wallet_adjustment_cents: Math.max(desired, -donor.balance_remaining),
-    money_before_cents: countsTowardTotals(donation.status) ? donation.amount_cents : 0,
-    money_after_cents: countsTowardTotals(status) ? donation.amount_cents : 0,
-    reversed_rows: {
-      reward: claims.length,
-      poll: donation.allocations.poll.length,
-      goal: donation.allocations.goal.length,
-    },
-    retained_claim_ids: retained.map((row) => row.id),
-    reversed_allocation_ids: {
-      reward: claims.map((row) => row.id),
-      poll: donation.allocations.poll.map((row) => row.id),
-      goal: donation.allocations.goal.map((row) => row.id),
-    },
-    cleared_unused_cents: {
-      poll: donation.pools.poll.unused_cents,
-      goal: donation.pools.goal.unused_cents,
-    },
-    cleared_pool_credit_cents: {
-      reward: donation.pools.reward.outstanding_credit_cents,
-      poll: donation.pools.poll.outstanding_credit_cents,
-      goal: donation.pools.goal.outstanding_credit_cents,
-    },
-  };
+  return planDonationReversal(donation, status, donor.balance_remaining).preview;
 }
 
 /** ADR-0011 §5/6. NULL-D selects the legacy rule, including PAYMENT_REVIEW receipts. */
@@ -448,47 +445,46 @@ export async function setDonationStatusTx(
     throw httpError(400, 'Donation is refunded/charged back and cannot change status');
   if (donation.status === status) throw httpError(400, 'Donation already has this status');
   if (!['REFUNDED', 'CHARGEBACK'].includes(status)) throw httpError(400, 'Invalid status');
-  await assertNoRequestedPaymentRefundTx(tx, donationId);
   const initial = await readDonationAccountingTx(tx, donationId);
-  const affectedIds = new Set([donationId]);
-  for (const allocation of initial.allocations.reward) {
-    const claim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: allocation.id } });
-    const funding = await readRewardFundingTx(tx, claim);
-    for (const id of funding.donation_ids) {
-      // Retaining a fulfilled claim never changes another source's funding.
-      if (allocation.status !== 'FULFILLED' || !['REFUNDED', 'CHARGEBACK'].includes(status))
-        await assertSpendSourceTx(tx, id);
-      affectedIds.add(id);
-    }
-  }
+  assertPaymentRefundFreeze(initial.payment_refund_requested);
+  const affectedIds = await walkReversalSourcesTx(tx, initial);
   const before = await publisher.snapshot([...affectedIds]);
   let refundId: string | undefined;
   let granted = 0;
   if (status === 'REFUNDED' || status === 'CHARGEBACK') {
-    const preview = await previewDonationReversalTx(tx, donationId, status);
-    const state = await readDonationAccountingTx(tx, donationId);
-    for (const claim of state.allocations.reward) {
-      if (claim.status !== 'FULFILLED') {
-        const wholeClaim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: claim.id } });
-        const funding = await readRewardFundingTx(tx, wholeClaim);
-        if (funding.redemption_backed)
-          await returnRowFundingTx(
-            tx,
-            wholeClaim,
-            'reward',
-            actor,
-            'Terminal source reversal',
-            donationId,
-          );
-        await reverseClaimRowTx(tx, claim, actor);
-      } else if (status === 'CHARGEBACK')
+    if (status === 'CHARGEBACK' && initial.amount_cents === 0)
+      throw httpError(400, 'Cannot record a chargeback for zero money');
+    const donor = await tx.donor.findUniqueOrThrow({
+      where: { id: initial.donor_id },
+      select: { balance_remaining: true },
+    });
+    const { preview, retained, claims } = planDonationReversal(
+      initial,
+      status,
+      donor.balance_remaining,
+    );
+    for (const claim of claims) {
+      const wholeClaim = await tx.rewardClaim.findUniqueOrThrow({ where: { id: claim.id } });
+      const funding = await readRewardFundingTx(tx, wholeClaim);
+      if (funding.redemption_backed)
+        await returnRowFundingTx(
+          tx,
+          wholeClaim,
+          'reward',
+          actor,
+          'Terminal source reversal',
+          donationId,
+        );
+      await reverseClaimRowTx(tx, claim, actor);
+    }
+    if (status === 'CHARGEBACK')
+      for (const claim of retained)
         await tx.rewardClaim.update({
           where: { id: claim.id },
           data: { chargeback_flagged_at: new Date() },
         });
-    }
-    for (const vote of state.allocations.poll) await reverseVoteRowTx(tx, vote, actor);
-    for (const row of state.allocations.goal)
+    for (const vote of initial.allocations.poll) await reverseVoteRowTx(tx, vote, actor);
+    for (const row of initial.allocations.goal)
       await reverseContributionRowTx(tx, row, actor, status === 'CHARGEBACK');
     await tx.poolCredit.updateMany({
       where: { donation_id: donationId, remaining_cents: { gt: 0 } },
@@ -548,11 +544,32 @@ export interface ReversalDestination {
   credit_id: string | null;
   amount_cents: number;
 }
-async function rowReturnPreviewTx(
+/** One funding source behind a reversed row, and the write (if any) that returns it. */
+interface RowReturnSource {
+  destination: ReversalDestination['destination'];
+  donation_id: string | null;
+  credit_id: string | null;
+  amount_cents: number;
+  /** Freeze-checked before any write, including for sources that end up skipped. */
+  assert_donation_id: string | null;
+  /** Charged-back sources return nothing and stay out of the preview. */
+  hidden: boolean;
+  action: 'restore-credit' | 'create-credit' | 'wallet-credit' | 'none';
+}
+
+/**
+ * ADR-0011 §5/6 destination table for one reversed row, computed once for both
+ * the preview projection and the mutation. `terminalDonationId` marks sources
+ * cleared by their own donation's terminal reversal; they must not be restored
+ * twice, because that reversal already zeroes their credits.
+ */
+async function planRowReturnTx(
   tx: Tx,
   row: { id: string; donation_id: string | null; amount_cents: number; source?: string },
   category: 'reward' | 'poll' | 'goal',
-): Promise<ReversalDestination[]> {
+  terminalDonationId?: string,
+): Promise<RowReturnSource[]> {
+  // Check canonical redemption funding BEFORE the legacy-null Wallet fallback.
   const redemptions = await tx.poolCreditRedemption.findMany({
     where:
       category === 'reward'
@@ -573,32 +590,36 @@ async function rowReturnPreviewTx(
     },
   });
   if (redemptions.length)
-    return redemptions
-      .filter((r) => r.credit.donation.status !== 'CHARGEBACK')
-      .map((r) => ({
-        destination: r.credit.donation.event?.ended_at
-          ? category === 'reward'
-            ? 'Expired reward Pool credit'
-            : 'Unused pool money'
-          : 'Pool credit',
-        category,
-        donation_id: r.credit.donation_id,
-        credit_id: r.credit_id,
-        amount_cents: r.amount_cents - r.reduced_cents,
-      }));
+    return redemptions.map((redemption) => ({
+      destination: redemption.credit.donation.event?.ended_at
+        ? category === 'reward'
+          ? ('Expired reward Pool credit' as const)
+          : ('Unused pool money' as const)
+        : ('Pool credit' as const),
+      donation_id: redemption.credit.donation_id,
+      credit_id: redemption.credit_id,
+      amount_cents: redemption.amount_cents - redemption.reduced_cents,
+      assert_donation_id: redemption.credit.donation_id,
+      hidden: redemption.credit.donation.status === 'CHARGEBACK',
+      action:
+        redemption.credit.donation_id === terminalDonationId ||
+        redemption.credit.donation.status === 'CHARGEBACK'
+          ? ('none' as const)
+          : ('restore-credit' as const),
+    }));
   const donation = row.donation_id
     ? await tx.donation.findUniqueOrThrow({
         where: { id: row.donation_id },
-        select: { status: true, pledge_amount_cents: true, event: { select: { ended_at: true } } },
+        select: {
+          status: true,
+          pledge_amount_cents: true,
+          event: { select: { ended_at: true } },
+        },
       })
     : null;
-  if (donation?.status === 'CHARGEBACK') return [];
   return [
     {
-      category,
-      donation_id: row.donation_id,
-      credit_id: null,
-      amount_cents: row.amount_cents,
+      // Old terminal rows are not repaired, and cannot mint credit for lost money.
       destination:
         donation?.pledge_amount_cents == null
           ? 'Wallet credit'
@@ -607,8 +628,38 @@ async function rowReturnPreviewTx(
             : donation.event?.ended_at
               ? 'Expired reward Pool credit'
               : 'Pool credit',
+      donation_id: row.donation_id,
+      credit_id: null,
+      amount_cents: row.amount_cents,
+      assert_donation_id: row.donation_id,
+      hidden: donation?.status === 'CHARGEBACK',
+      action:
+        donation?.status === 'CHARGEBACK'
+          ? 'none'
+          : donation?.pledge_amount_cents == null
+            ? 'wallet-credit'
+            : row.source === 'moderator' || row.amount_cents === 0
+              ? 'none'
+              : 'create-credit',
     },
   ];
+}
+
+async function rowReturnPreviewTx(
+  tx: Tx,
+  row: { id: string; donation_id: string | null; amount_cents: number; source?: string },
+  category: 'reward' | 'poll' | 'goal',
+): Promise<ReversalDestination[]> {
+  const sources = await planRowReturnTx(tx, row, category);
+  return sources
+    .filter((source) => !source.hidden)
+    .map(({ destination, donation_id, credit_id, amount_cents }) => ({
+      destination,
+      category,
+      donation_id,
+      credit_id,
+      amount_cents,
+    }));
 }
 /** Read-only destination projection of the existing reversal policy. Mutation rechecks all locks. */
 export async function previewSpendReversalTx(tx: Tx, donorId: string, kind: string, id: string) {

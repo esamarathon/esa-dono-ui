@@ -9,6 +9,7 @@ import {
   liveCreditBackedClaimWhere,
   liveDirectClaimWhere,
   liveRowWhere,
+  walletCreditGrantCents,
 } from '../../services/poolAccounting.js';
 
 const donors: string[] = [],
@@ -190,6 +191,36 @@ it('counts a vote while it is not reversed', async () => {
     where: { donation_id: f.donation.id, ...liveRowWhere() },
   });
   expect(live.map((row) => row.id)).toEqual([vote.id]);
+});
+it('computes the Wallet credit a reversal grants', () => {
+  const pooled = {
+    pledge_amount_cents: 1000,
+    wallet_applied_cents: 400,
+    wallet_credit_granted_cents: 100,
+    amount_cents: 1000,
+  };
+  // Pooled REFUNDED: D minus retained rows minus prior Wallet grants.
+  expect(
+    walletCreditGrantCents(pooled, 'REFUNDED', { retained_cents: 300, reversed_cents: 700 }),
+  ).toBe(600);
+  // Pooled CHARGEBACK: original Wallet funding minus prior grants.
+  expect(
+    walletCreditGrantCents(pooled, 'CHARGEBACK', { retained_cents: 300, reversed_cents: 700 }),
+  ).toBe(300);
+  // Legacy: the reversed money itself.
+  expect(
+    walletCreditGrantCents({ ...pooled, pledge_amount_cents: null }, 'REFUNDED', {
+      retained_cents: 0,
+      reversed_cents: 700,
+    }),
+  ).toBe(700);
+  // Legacy chargeback claws back what the bank took.
+  expect(
+    walletCreditGrantCents({ ...pooled, pledge_amount_cents: null }, 'CHARGEBACK', {
+      retained_cents: 0,
+      reversed_cents: 700,
+    }),
+  ).toBe(-300);
 });
 it('computes what a category can still take', () => {
   // D=1000 with 100 failed-payment credit, 300 live and 200 reserved leaves 400.

@@ -27,6 +27,14 @@ breaking changes.
 
 ### Changed
 
+- **Reversal destinations have one policy** (no behavior change): the preview
+  projection and the mutation of a reversed row's funding share one ADR-0011
+  §5/6 computation in `reversal.ts`, a terminal status change plans once per
+  transaction, and the Wallet-grant rule and the Payment-refund freeze read
+  from `poolAccounting.ts` (#295).
+
+### Changed
+
 - **The pooled accounting rules have one home** (no behavior change):
   `poolAccounting.ts` now owns allocation liveness, the category budget and the
   REQUESTED Payment-refund freeze, and absorbs `rewardFunding.ts`. Every
