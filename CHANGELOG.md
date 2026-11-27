@@ -7,6 +7,8 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-11-27
+
 ### Changed
 
 - **Reversal destinations have one policy** (no behavior change): the preview
