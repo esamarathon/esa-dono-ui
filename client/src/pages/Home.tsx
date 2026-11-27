@@ -1,60 +1,34 @@
 import { Link } from 'react-router-dom';
-import { useCampaign } from '../context/CampaignContext';
-import ProgressBar from '../components/ProgressBar';
-import LoadingSpinner from '../components/LoadingSpinner';
 
-function fmt(cents: number) {
-  return `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-}
+/**
+ * Static homepage identity (#148): the public aggregate total, goal bar and
+ * "% of goal" retired with GET /api/campaign (the stream overlay owns the
+ * public fundraising display). The name and description moved here from the
+ * retired server stub (server/routes/campaign.ts).
+ */
+const CAMPAIGN_NAME = 'ESA Charity Marathon';
+const CAMPAIGN_DESCRIPTION =
+  'A charity speedrunning channel raising money for a great cause. Watch runners tackle games at incredible speeds while supporting charity!';
 
 export default function Home() {
-  const { campaign, raisedCents, goalCents, error } = useCampaign();
-
-  if (error)
-    return (
-      <div className="p-8" style={{ color: 'var(--red)' }}>
-        {error}
-      </div>
-    );
-  if (!campaign) return <LoadingSpinner />;
-
   return (
     <div className="max-w-3xl mx-auto p-8">
       <div className="text-center mb-8">
         <p className="font-mono text-sm font-bold tracking-[0.35em] uppercase text-d-yellow mb-2">
           European Speedrunner Assembly
         </p>
-        <h1 className="font-display text-5xl uppercase text-off-white mb-2">
-          {campaign.name ?? campaign.title ?? 'Campaign'}
-        </h1>
+        <h1 className="font-display text-5xl uppercase text-off-white mb-2">{CAMPAIGN_NAME}</h1>
       </div>
-      {campaign.description && (
-        <p className="text-off-white/55 mb-6 text-center font-body text-sm">
-          {campaign.description}
-        </p>
-      )}
-      {campaign.logo?.src && (
-        <img src={campaign.logo.src} alt="Campaign logo" className="w-48 mb-6 rounded-sm mx-auto" />
-      )}
-      <div className="btrl-panel p-6">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-3">
-          <span className="font-data font-bold text-xl text-off-white/55">raised</span>
-          <span className="font-data font-bold text-2xl sm:text-3xl text-d-yellow">
-            {fmt(raisedCents)} / {fmt(goalCents)}
-          </span>
-        </div>
-        <ProgressBar value={raisedCents} max={goalCents} />
-        <p className="text-center font-data text-xl text-off-white/55 mt-3">
-          {goalCents > 0 ? `${Math.round((raisedCents / goalCents) * 100)}% of goal` : ''}
-        </p>
-
+      <p className="text-off-white/55 mb-6 text-center font-body text-sm">{CAMPAIGN_DESCRIPTION}</p>
+      <img src="/brand/emblem-dark.svg" alt="ESA emblem" className="w-48 mb-6 rounded-sm mx-auto" />
+      <div className="btrl-panel p-6 text-center">
         {/* Primary CTA — incentive cart wizard */}
         <Link
           to="/donate"
-          className="inline-block mt-6 w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
+          className="inline-block w-full text-center font-display text-2xl tracking-wide uppercase text-black no-underline py-4 px-6 rounded-sm transition-opacity hover:opacity-90"
           style={{ background: 'var(--d-yellow)' }}
         >
-          donate now
+          Donate now
         </Link>
       </div>
     </div>

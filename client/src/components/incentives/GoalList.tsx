@@ -29,6 +29,7 @@ export default function GoalList() {
   } = useDraftPledge();
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounce syncing an edited amount to an already-in-cart goal — see the
   // matching pattern in PollList for why.
@@ -38,6 +39,7 @@ export default function GoalList() {
     const timers = cartSyncTimers.current;
     return () => {
       Object.values(timers).forEach(clearTimeout);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
     };
   }, []);
 
@@ -73,7 +75,8 @@ export default function GoalList() {
       label: goal.title,
     });
     setFlashId(goal.id);
-    setTimeout(() => setFlashId((id) => (id === goal.id ? null : id)), 300);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId((id) => (id === goal.id ? null : id)), 300);
   };
 
   const syncCartAmount = (goal: Goal, value: string) => {
@@ -119,10 +122,9 @@ export default function GoalList() {
 
   return (
     <div>
-      <h2 className="font-display text-3xl uppercase text-off-white mb-2">support fund goals</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">Support fund goals</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
-        Choose contributions from your goal Pool. Unused amounts top up your selections in
-        proportion.
+        Choose amounts from your goal Pool. Unused amounts top up your selections in proportion.
       </p>
       {goals.map((g) => {
         const unavailable = g.is_active === false;
@@ -139,7 +141,7 @@ export default function GoalList() {
                     className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                     style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
                   >
-                    no longer available
+                    No longer available
                   </span>
                 )}
               </div>
@@ -160,7 +162,10 @@ export default function GoalList() {
                     onRemove={() => removeFromCart('GOAL', g.id)}
                     flash={flashId === g.id}
                   />
-                  <ShareLinkButton path={`/goals?goal=${g.id}`} />
+                  <ShareLinkButton
+                    path={`/goals?goal=${g.id}`}
+                    label="Copy a link that starts a donation with this goal selected"
+                  />
                 </div>
               )}
             </div>
@@ -171,7 +176,7 @@ export default function GoalList() {
             />
             <div className="flex justify-between font-data text-sm text-off-white/55 mt-1">
               <span>{fmt(g.current_cents)} raised</span>
-              <span>goal: {fmt(g.target_cents)}</span>
+              <span>Goal: {fmt(g.target_cents)}</span>
             </div>
           </Card>
         );

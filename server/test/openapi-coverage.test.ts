@@ -312,6 +312,7 @@ describe('OpenAPI route coverage', () => {
     const app = express();
     const { default: webhookRouter } = await import('../routes/webhook.js');
     const { default: campaignRouter } = await import('../routes/campaign.js');
+    const { default: scheduleRouter } = await import('../routes/schedule.js');
     const { default: donorRouter } = await import('../routes/donor.js');
     const { default: rewardsRouter } = await import('../routes/rewards.js');
     const { default: pollsRouter } = await import('../routes/polls.js');
@@ -324,11 +325,13 @@ describe('OpenAPI route coverage', () => {
     const { default: moderatorRouter } = await import('../routes/moderator.js');
     const { default: auctionsRouter } = await import('../routes/auctions.js');
     const { default: tiltifyRouter } = await import('../routes/tiltify.js');
+    const { default: feedbackRouter } = await import('../routes/feedback.js');
 
     app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), webhookRouter);
     app.use(express.json());
     app.get('/api/health', (_req, _res) => {});
     app.use('/api/campaign', campaignRouter);
+    app.use('/api/schedule', scheduleRouter);
     app.use('/api/donor', donorRouter);
     app.use('/api/rewards', rewardsRouter);
     app.use('/api/polls', pollsRouter);
@@ -340,6 +343,7 @@ describe('OpenAPI route coverage', () => {
     app.use('/api/admin', adminRouter);
     app.use('/api/moderator', moderatorRouter);
     app.use('/api/auctions', auctionsRouter);
+    app.use('/api/feedback', feedbackRouter);
     app.use('/api/tiltify', tiltifyRouter);
 
     const expressRoutes = extractRoutes(app);

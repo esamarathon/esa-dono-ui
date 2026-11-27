@@ -48,7 +48,7 @@ export default function ModeratorUnusedPoolMoney() {
         }
       })
       .catch((e) => {
-        if (current) setError(apiErrorMessage(e, 'Could not load Unused pool money'));
+        if (current) setError(apiErrorMessage(e, 'Could not load unused pool money'));
       })
       .finally(() => {
         if (current) setLoading(false);
@@ -73,6 +73,8 @@ export default function ModeratorUnusedPoolMoney() {
         setError(apiErrorMessage(e, 'Could not load eligible targets'));
     }
   };
+  // A goal target takes only its remaining need; the button states the real amount.
+  const selectedTarget = picker?.data.targets.find((item) => item.id === target) ?? null;
   const assign = async () => {
     if (!picker || busy) return;
     setBusy(true);
@@ -106,7 +108,7 @@ export default function ModeratorUnusedPoolMoney() {
   };
   return (
     <div>
-      <h1 className="font-display text-4xl uppercase mb-6">Unused pool money</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">unused pool money</h1>
       <p className="font-body text-sm mb-4">
         Assign all of one category to an open target. Incentive amounts are not money totals.
       </p>
@@ -157,7 +159,7 @@ export default function ModeratorUnusedPoolMoney() {
                   donation.unused_cents[category] > 0 && (
                     <div key={category}>
                       <span>
-                        {category}: {money(donation.unused_cents[category])} Unused pool money{' '}
+                        {category}: {money(donation.unused_cents[category])} unused pool money{' '}
                       </span>
                       <button
                         disabled={busy || !donation.channel_id}
@@ -201,7 +203,8 @@ export default function ModeratorUnusedPoolMoney() {
         >
           <p>
             Assign all {money(picker.data.amount_cents)}. Impact is computed by the server and
-            checked again on assignment.
+            checked again on assignment. A fund goal takes only what its target still needs; the
+            rest stays Unused pool money.
           </p>
           {picker.data.targets.map((item) => (
             <label key={item.id} className="block my-3">
@@ -229,7 +232,12 @@ export default function ModeratorUnusedPoolMoney() {
             disabled={busy || !target || picker.data.amount_cents <= 0}
             onClick={assign}
           >
-            assign all {money(picker.data.amount_cents)}
+            {selectedTarget &&
+            selectedTarget.after_cents - selectedTarget.before_cents < picker.data.amount_cents
+              ? `assign ${money(
+                  selectedTarget.after_cents - selectedTarget.before_cents,
+                )} of ${money(picker.data.amount_cents)}`
+              : `assign all ${money(picker.data.amount_cents)}`}
           </button>
         </Modal>
       )}

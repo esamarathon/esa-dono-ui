@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import donorRouter from '../../routes/donor.js';
 import { createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -88,7 +88,7 @@ describe('GET /api/donor', () => {
     const email = `chan-${Date.now()}-${Math.random()}@example.com`;
     const { token, donor } = await makeDonor(email);
     const channel = await createTestChannel(prisma, {
-      name: `Main Marathon ${crypto.randomUUID()}`,
+      name: `Stream 1 ${crypto.randomUUID()}`,
     });
     const channeled = await prisma.donation.create({
       data: {

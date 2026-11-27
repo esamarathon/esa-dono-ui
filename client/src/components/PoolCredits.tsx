@@ -11,6 +11,8 @@ import type {
 import { applyPoolCredits, getPoolCreditEvent, getPoolCredits } from '../api/donor';
 import { apiErrorMessage } from '../types';
 import ProgressBar from './ProgressBar';
+import RewardClaimModal from './incentives/RewardClaimModal';
+import { claimFieldsFor } from '../lib/rewardClaimFields';
 const categories: PoolCategory[] = ['poll', 'goal', 'reward'];
 const labels = { reward: 'Rewards', poll: 'Polls', goal: 'Goals' };
 const fmt = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -92,7 +94,7 @@ function WalletFooter({ wallet }: { wallet: number }) {
     <p className="mt-5 pt-3 border-t font-data text-sm text-off-white/65">
       Wallet credit {fmt(wallet)} · for new donations only.{' '}
       <Link to="/donate" className="underline">
-        Open normal draft pledge
+        Start a new donation
       </Link>
     </p>
   );
@@ -163,6 +165,7 @@ function CreditPlanner({
   const [state, setState] = useState<CreditEvent | null>(null);
   const [picks, setPicks] = useState<CreditSelection[]>([]);
   const [review, setReview] = useState<CreditApplyRequest | null>(null);
+  const [claiming, setClaiming] = useState<CreditEvent['catalog']['rewards'][number] | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
@@ -280,7 +283,7 @@ function CreditPlanner({
             .find((p) => p.id === pick.poll_id)
             ?.options.find((o) => o.id === pick.target_id)?.label;
   const tag = (channel: { name: string } | null) => (
-    <span className="ml-2 font-data text-xs uppercase text-off-white/55">
+    <span className="ml-2 font-data text-sm uppercase text-off-white/55">
       {channel?.name ?? 'SHARED'}
     </span>
   );
@@ -311,7 +314,7 @@ function CreditPlanner({
                 document.getElementById('credit-panel')?.scrollIntoView({ behavior: 'smooth' })
               }
             >
-              review ↓
+              Review ↓
             </button>
           </div>
           <fieldset
@@ -390,42 +393,76 @@ function CreditPlanner({
                     {tag(r.channel)}
                   </p>
                   <p>{r.remaining === null ? 'Unlimited stock' : `${r.remaining} left`}</p>
-                  <div className="flex items-center gap-3 mt-2">
-                    <button
-                      aria-label={`Remove ${r.title}`}
-                      disabled={!quantity(r.id)}
-                      onClick={() =>
-                        select({
-                          kind: 'REWARD',
-                          target_id: r.id,
-                          unit_price_cents: r.cost_cents,
-                          reward_type: r.type,
-                          quantity: quantity(r.id) - 1,
-                        })
-                      }
-                    >
-                      −
-                    </button>
-                    <output aria-label={`${r.title} quantity`}>{quantity(r.id)}</output>
-                    <button
-                      aria-label={`Add ${r.title}`}
-                      disabled={
-                        remaining.reward < r.cost_cents ||
-                        (r.remaining !== null && quantity(r.id) >= r.remaining)
-                      }
-                      onClick={() =>
-                        select({
-                          kind: 'REWARD',
-                          target_id: r.id,
-                          unit_price_cents: r.cost_cents,
-                          reward_type: r.type,
-                          quantity: quantity(r.id) + 1,
-                        })
-                      }
-                    >
-                      +
-                    </button>
-                  </div>
+                  {claimFieldsFor(r).length === 0 ? (
+                    <div className="flex items-center gap-3 mt-2">
+                      <button
+                        aria-label={`Remove ${r.title}`}
+                        disabled={!quantity(r.id)}
+                        onClick={() =>
+                          select({
+                            kind: 'REWARD',
+                            target_id: r.id,
+                            unit_price_cents: r.cost_cents,
+                            reward_type: r.type,
+                            quantity: quantity(r.id) - 1,
+                          })
+                        }
+                      >
+                        −
+                      </button>
+                      <output aria-label={`${r.title} quantity`}>{quantity(r.id)}</output>
+                      <button
+                        aria-label={`Add ${r.title}`}
+                        disabled={
+                          remaining.reward < r.cost_cents ||
+                          (r.remaining !== null && quantity(r.id) >= r.remaining)
+                        }
+                        onClick={() =>
+                          select({
+                            kind: 'REWARD',
+                            target_id: r.id,
+                            unit_price_cents: r.cost_cents,
+                            reward_type: r.type,
+                            quantity: quantity(r.id) + 1,
+                          })
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : (
+                    // Field-carrying rewards stay quantity-1 from the donor UI; their
+                    // claim answer is collected before the pick is staged (#78).
+                    <div className="flex items-center gap-3 mt-2">
+                      {quantity(r.id) ? (
+                        <button
+                          aria-label={`Remove ${r.title}`}
+                          onClick={() =>
+                            select({
+                              kind: 'REWARD',
+                              target_id: r.id,
+                              unit_price_cents: r.cost_cents,
+                              reward_type: r.type,
+                              quantity: 0,
+                            })
+                          }
+                        >
+                          Remove
+                        </button>
+                      ) : (
+                        <button
+                          aria-label={`Add ${r.title}`}
+                          disabled={
+                            remaining.reward < r.cost_cents ||
+                            (r.remaining !== null && r.remaining <= 0)
+                          }
+                          onClick={() => setClaiming(r)}
+                        >
+                          Add
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </article>
               ))}
             </section>
@@ -545,6 +582,30 @@ function CreditPlanner({
           ))}
         </ul>
       </details>
+      {claiming && (
+        <RewardClaimModal
+          reward={claiming}
+          intro={
+            <p className="font-body text-sm text-off-white/55 mb-3">
+              This will use your reward credit for{' '}
+              <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
+            </p>
+          }
+          submitLabel="Add reward"
+          onSubmit={(data) => {
+            select({
+              kind: 'REWARD',
+              target_id: claiming.id,
+              unit_price_cents: claiming.cost_cents,
+              reward_type: claiming.type,
+              quantity: 1,
+              claim_data: data,
+            });
+            setClaiming(null);
+          }}
+          onClose={() => setClaiming(null)}
+        />
+      )}
     </>
   );
 }

@@ -1,7 +1,13 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { readDonationAccountingTx, type CategoryAmounts } from './poolAccounting.js';
-import { confirmedRewardType } from './rewardFunding.js';
+import {
+  categoryBudgetRemainingCents,
+  confirmedRewardType,
+  liveRowWhere,
+  readDonationAccountingTx,
+  requestedPaymentRefundWhere,
+  type CategoryAmounts,
+} from './poolAccounting.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -14,7 +20,7 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
     blockers.push(undo ? 'Event has not ended' : 'Event has already ended');
   if (event.is_active) blockers.push('Deactivate the Event first');
   const requested = await tx.paymentRefund.count({
-    where: { donation: { event_id: eventId }, status: 'REQUESTED' },
+    where: { donation: { event_id: eventId }, ...requestedPaymentRefundWhere },
   });
   if (!undo && requested) blockers.push('A Payment refund is requested for this Event');
   const donations = await tx.donation.findMany({
@@ -27,7 +33,9 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
         // Credit-funded claims are never physical, even when this reward id
         // also appeared as PHYSICAL in the source donation's original pledge.
         where: {
-          reversed_at: null,
+          ...liveRowWhere(),
+          // Refund-window eligibility, not liveness: only a claim that is not
+          // fulfilled can still take a Payment refund.
           status: { in: ['PENDING', 'CANCELLING'] },
           credit_redemptions: { none: {} },
         },
@@ -75,16 +83,17 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
       // Restoring RAW credit is unsafe only when the real category budget
       // would overflow. A post-end assignment funded by original Unused is fine.
       if (
-        budget.live_cents +
-          budget.outstanding_credit_cents +
-          state.failed_payment_wallet_credit_cents <=
-        donation.pledge_amount_cents
+        categoryBudgetRemainingCents(
+          budget,
+          donation.pledge_amount_cents,
+          state.failed_payment_wallet_credit_cents,
+        ) >= 0
       )
         continue;
       const where = {
         donation_id: donation.id,
         source: 'moderator',
-        reversed_at: null,
+        ...liveRowWhere(),
         allocated_at: { gte: event.ended_at },
       };
       const rows =
@@ -120,7 +129,6 @@ export async function previewEventEndTx(tx: Tx, eventId: string, undo = false) {
 
 async function changeEndTx(tx: Tx, eventId: string, slug: unknown, actor: string, undo: boolean) {
   if (!actor) throw httpError(400, 'Event end actor required');
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const preview = await previewEventEndTx(tx, eventId, undo);
   if (slug !== preview.slug) throw httpError(400, 'Type the Event slug to confirm');
   if (!preview.can_apply) throw httpError(409, preview.blockers.join('; '));

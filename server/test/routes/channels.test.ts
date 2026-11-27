@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import channelsRouter from '../../routes/channels.js';
 import adminRouter from '../../routes/admin.js';
 import moderatorRouter from '../../routes/moderator.js';
 import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();
@@ -191,6 +191,75 @@ describe('Channels', () => {
       // Soft-deleted, not removed — still fetchable via admin list.
       const listRes = await request(createApp()).get('/api/admin/channels').set(auth);
       expect(listRes.body.some((s: any) => s.id === createRes.body.id)).toBe(true);
+    });
+
+    it('sets, updates and clears the Crew Corner schedule slug (#286)', async () => {
+      const createRes = await request(createApp())
+        .post('/api/admin/channels')
+        .send({
+          name: `Schedule Channel ${crypto.randomUUID()}`,
+          schedule_slug: 'esa2026',
+        })
+        .set(auth);
+      expect(createRes.status).toBe(200);
+      expect(createRes.body.schedule_slug).toBe('esa2026');
+      createdChannelIds.push(createRes.body.id);
+
+      const stored = await prisma.channel.findUnique({ where: { id: createRes.body.id } });
+      expect(stored?.schedule_slug).toBe('esa2026');
+
+      const updateRes = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ schedule_slug: ' esa2027 ' })
+        .set(auth);
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.schedule_slug).toBe('esa2027');
+
+      const cleared = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ schedule_slug: '' })
+        .set(auth);
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.schedule_slug).toBeNull();
+
+      const bad = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ schedule_slug: '../esa/other-org' })
+        .set(auth);
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toMatch(/schedule_slug/);
+    });
+
+    it('sets and clears the Crew Corner stream id (#286)', async () => {
+      const createRes = await request(createApp())
+        .post('/api/admin/channels')
+        .send({
+          name: `Stream Channel ${crypto.randomUUID()}`,
+          schedule_slug: 'esa2026',
+          schedule_stream_id: ' 4 ',
+        })
+        .set(auth);
+      expect(createRes.status).toBe(200);
+      // Digit strings are accepted (the admin form sends strings) and stored
+      // as integers.
+      expect(createRes.body.schedule_stream_id).toBe(4);
+      createdChannelIds.push(createRes.body.id);
+
+      const cleared = await request(createApp())
+        .put(`/api/admin/channels/${createRes.body.id}`)
+        .send({ schedule_stream_id: '' })
+        .set(auth);
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.schedule_stream_id).toBeNull();
+
+      for (const value of [0, -2, 3.5, 'abc', true]) {
+        const bad = await request(createApp())
+          .put(`/api/admin/channels/${createRes.body.id}`)
+          .send({ schedule_stream_id: value })
+          .set(auth);
+        expect(bad.status).toBe(400);
+        expect(bad.body.error).toMatch(/schedule_stream_id/);
+      }
     });
 
     it('creates a channel with a caller-chosen id, once', async () => {

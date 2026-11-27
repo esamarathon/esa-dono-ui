@@ -13,6 +13,7 @@ A donation platform for ESA charity events integrating with Stripe for payment p
 
 | Topic                                         | Guide                                                          |
 | --------------------------------------------- | -------------------------------------------------------------- |
+| Admin: new Event setup                        | [docs/admin-event-setup.md](docs/admin-event-setup.md)         |
 | Local development & tests                     | [docs/local-development.md](docs/local-development.md)         |
 | Environment variables                         | [docs/environment-variables.md](docs/environment-variables.md) |
 | Webhooks & metrics (Prometheus)               | [docs/webhooks-and-metrics.md](docs/webhooks-and-metrics.md)   |
@@ -26,7 +27,7 @@ A donation platform for ESA charity events integrating with Stripe for payment p
 
 ```bash
 # Clone and install
-git clone https://github.com/Codescales/esa-dono-ui.git
+git clone https://github.com/esamarathon/esa-dono-ui.git
 cd esa-dono-ui
 npm install
 
@@ -35,7 +36,8 @@ cp .env.example .env
 # Edit .env with your Stripe credentials and other values
 
 # Initialize the database
-cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 
 # Start (server on :3001, client on :5173)
 npm run dev
@@ -49,10 +51,10 @@ server/           Express 4 API (ESM, tsx)
 packages/shared/  Cross-cutting types (@dono/shared)
 ```
 
-- **Database**: SQLite via Prisma. All monetary values are integer cents.
+- **Database**: SQLite or PostgreSQL via Prisma, selected by `DATABASE_URL` in the same image. All monetary values are integer cents. See [database setup](docs/database.md).
 - **Stripe integration**: hosted Checkout sessions for pledges; the `checkout.session.completed` webhook drives donations (see `server/services/stripe.ts`).
-- **Webhook flow**: HMAC-SHA256 signature verification → `processDonation()` (upserts donor, credits balance, sends magic link, auto-fulfills pledges).
-- **Pledge/Cart system**: Donors select incentives before donating. Pledge resolves by token or email fallback.
+- **Webhook flow**: HMAC-SHA256 signature verification → `intakeDonation()` in `server/services/donation.ts` (upserts donor, credits balance, sends magic link, auto-fulfills pledges).
+- **Pledge/Cart system**: Donors select incentives before donating. A pledge resolves by its token.
 - **Moderator/admin access**: Donors have a `role` (`USER`/`MODERATOR`/`ADMIN`) resolved on every authenticated request from the `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (never granted as a side effect of donating — see `server/lib/roles.ts`). `MODERATOR_API_KEY`/`ADMIN_API_KEY` provide operational fallback access to moderator routes independent of donor roles.
 - **Metrics**: `GET /api/metrics` (Prometheus format) gated by `METRICS_API_KEY` — see [Webhooks & Metrics](docs/webhooks-and-metrics.md).
 - **Outbound event delivery**: admin-configured destinations (HTTP or RabbitMQ) receive donation/incentive events via a persistent, per-destination FIFO outbox with retry/backoff — see [Outbound Event Delivery](docs/outbound-events.md).

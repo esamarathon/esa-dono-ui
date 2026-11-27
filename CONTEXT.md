@@ -34,8 +34,42 @@ guess which concept is meant.
 | **Payment refund**    | Returning money to the donor's original payment method. The money leaves the charity, so the Money total drops. Used only to cancel a physical reward before its Event ends.                                                                                                                                                                                                                                                           | refund (alone), card refund, Stripe refund    |
 | **Chargeback**        | The bank taking a donation's money back from the charity. The Money total drops.                                                                                                                                                                                                                                                                                                                                                       | dispute (in domain text), reversal (alone)    |
 | **Shared incentive**  | A reward, poll, goal or auction that belongs to an Event but to no Channel. It is available on every Channel of that Event and on no other Event. To use it in a later Event, copy it.                                                                                                                                                                                                                                                 | global incentive, unowned incentive           |
-| **Default goal list** | A Channel's ordered list of goals that receive goal-Pool money the donor did not direct. The first goal on the list that can still take money receives it. Polls have no default.                                                                                                                                                                                                                                                      | default goal, fallback goal, catch-all        |
+| **Default goal list** | A Channel's ordered list of goals that receive goal-Pool money the donor did not direct, up to each goal's remaining need (a goal is never funded past its target). Polls have no default.                                                                                                                                                                                                                                             | default goal, fallback goal, catch-all        |
 | **Money total**       | The money raised by a Channel or an Event. Incentive progress is not money: the sum of incentive totals can be more than the money total.                                                                                                                                                                                                                                                                                              | amount raised (for incentives)                |
+
+## Donor-facing display
+
+Donor-facing copy follows these rules; internal code, staff screens and the Tiltify
+wire keep the glossary words above (decided in the donation-experience feedback
+consolidation map, ticket "Terminology: donate/Stream 1/Stream 2/incentives/bid wars/
+reward keywords"):
+
+- Donors read **donate** as the verb and the money word ("Donate", "Donation amount").
+  Donor copy never says "contribute" or "contribution". **Pledge** is internal
+  (Draft pledge, Pending pledge, Pledge amount) and is not shown to donors.
+- The Channels of a live Event display as **Stream 1**, **Stream 2**, … — neutral
+  ordinals, never "Main"/"Bonus". Descriptive text belongs in the channel description,
+  not the name.
+- Category display words match the code and wire words: **Rewards**, **Polls**,
+  **Fund goals**. "Bid war" and "incentives" (for the goal category) are community
+  words the help page may acknowledge but not adopt.
+- A **donation acknowledgement** is the donor strip's brief note that a donation
+  happened: the donor's display name and amount ("Sam donated $25.00", a blank
+  name reads "Anonymous"), or an aggregate count during a burst ("3 donations in
+  the last minute"). It never shows the donor's comment and does not announce
+  itself to screen readers.
+- Reward type words (digital, physical, shoutout, custom) carry an in-place definition
+  on the reward card, sourced from one shared copy set the Help page also renders.
+- A CUSTOM reward's answer is **required** when staff set a Custom Label (its answer
+  field label); the fallback "Additional info" answer and the shoutout message are
+  optional. A required answer is rejected blank on the client and with a 400 at every
+  claim entry point (pledge, direct claim, Pool-credit spend). Every collected claim
+  answer — including the shoutout message — is capped at 200 characters with a
+  visible counter.
+- The donor's reusable donation funding reads **wallet credit** (never "wallet
+  balance"). The wallet unlock is described as **the link in your donation email**
+  (never "magic link"); staff copy keeps "magic link". Donor-facing copy uses sentence
+  case and a 14px minimum text size (copy/label/typography cleanup ticket).
 
 ## "Event" versus "webhook message"
 

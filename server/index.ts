@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import cors from 'cors';
 import webhookRouter from './routes/webhook.js';
 import campaignRouter from './routes/campaign.js';
+import scheduleRouter from './routes/schedule.js';
 import donorRouter from './routes/donor.js';
 import rewardsRouter from './routes/rewards.js';
 import pollsRouter from './routes/polls.js';
@@ -92,6 +93,7 @@ app.get('/api/docs', (_req: Request, res: Response) => {
 });
 
 app.use('/api/campaign', campaignRouter);
+app.use('/api/schedule', scheduleRouter);
 app.use('/api/donor', donorRouter);
 app.use('/api/rewards', rewardsRouter);
 app.use('/api/polls', pollsRouter);

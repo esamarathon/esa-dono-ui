@@ -1,8 +1,17 @@
 import Card from '../components/Card';
+import { REWARD_TYPE_DEFINITIONS } from '../lib/rewardTypeDefinitions';
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  id,
+  children,
+}: {
+  title: string;
+  id?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card className="mb-6">
+    <Card id={id} className="mb-6">
       <h2 className="font-display text-3xl uppercase text-off-white mb-3">{title}</h2>
       <div className="space-y-3 font-body text-sm text-off-white/55">{children}</div>
     </Card>
@@ -16,30 +25,33 @@ function Term({ children }: { children: React.ReactNode }) {
 export default function Help() {
   return (
     <div className="max-w-2xl mx-auto p-8">
-      <h1 className="font-display text-4xl uppercase mb-6">help</h1>
+      <h1 className="font-display text-4xl uppercase mb-6">Help</h1>
 
-      <Section title="incentive types & categories">
+      <Section title="Incentive types & categories" id="reward-types">
         <p>
-          The contribute flow is organized into three categories: <Term>rewards</Term>,{' '}
+          The donate flow is organized into three categories: <Term>rewards</Term>,{' '}
           <Term>polls</Term>, and <Term>fund goals</Term>.
         </p>
         <p>
-          <Term>Rewards</Term> are fixed-cost items you add to your cart. Each has one of four
-          types:
+          You start by choosing a channel and a <Term>donation amount</Term>, then split that amount
+          across the three categories. Each category has its own Pool showing how much of your
+          donation it uses; unused amounts top up your selections in proportion.
+        </p>
+        <p>
+          <Term>Rewards</Term> are fixed-cost items you select. Each has one of four types:
         </p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <Term>digital</Term> — delivered electronically (a code, art, etc.); no shipping.
+            <Term>Digital</Term> — {REWARD_TYPE_DEFINITIONS.DIGITAL}.
           </li>
           <li>
-            <Term>physical</Term> — a shipped item; shipping is arranged through Stripe, and this
-            platform never collects or stores your shipping address.
+            <Term>Physical</Term> — {REWARD_TYPE_DEFINITIONS.PHYSICAL}.
           </li>
           <li>
-            <Term>shoutout</Term> — a shoutout, with an optional message you can attach.
+            <Term>Shoutout</Term> — {REWARD_TYPE_DEFINITIONS.SHOUTOUT}.
           </li>
           <li>
-            <Term>custom</Term> — anything else, described by its own label.
+            <Term>Custom</Term> — {REWARD_TYPE_DEFINITIONS.CUSTOM}.
           </li>
         </ul>
         <p>Rewards may have a limited quantity and can sell out.</p>
@@ -49,38 +61,36 @@ export default function Help() {
           either approved automatically or held for moderator review.
         </p>
         <p>
-          <Term>Fund goals</Term> are pooled targets. You contribute any amount (minimum $1.00)
-          toward a goal, which completes once fully funded.
+          <Term>Fund goals</Term> are pooled targets. You put any amount (minimum $1.00) toward a
+          goal, which completes once fully funded.
         </p>
         <p>
           Every donation is routed to exactly one <Term>channel</Term>. An incentive is either
           shared (available on every channel of its event) or tied to a specific channel, and you
-          can't mix incentives from two channels in a single cart.
+          can't mix incentives from two channels in one donation.
         </p>
       </Section>
 
-      <Section title="wallet & payments">
+      <Section title="Wallet & payments">
         <p>
           There are no accounts or passwords. Your wallet is identified by email and unlocked with
-          the magic link emailed after each donation. You can also sign in with Google, Discord, or
-          Twitch.
+          the link in your donation email. You can also sign in with Google, Discord, or Twitch.
         </p>
         <p>
-          Every donation credits your wallet balance (the donation amount, minus any shipping cost).
-          You spend that balance on rewards, polls, and goals.
+          Every donation adds to your <Term>wallet credit</Term> (the donation amount, minus any
+          shipping cost). You spend that credit on rewards, polls, and fund goals.
         </p>
         <p>
-          At checkout, your wallet balance automatically offsets the <Term>incentive items</Term> in
-          your cart. The <Term>additional contribution</Term> you add on top is always charged as
-          real money and is never covered by your balance.
+          At review, your wallet credit applies to your donation amount; anything beyond it is
+          charged as new money through Stripe.
         </p>
         <p>
-          If your wallet balance covers the entire cart and there is no additional contribution,
-          your pledge is fulfilled immediately — no payment is taken.
+          If your wallet credit covers your entire donation, it is fulfilled immediately — no
+          payment is taken.
         </p>
         <p>
           The one exception is <Term>physical rewards</Term>: those always go through Stripe
-          checkout to handle shipping (and any shipping fee), even when your balance covers the item
+          checkout to handle shipping (and any shipping fee), even when your credit covers the item
           cost.
         </p>
         <p>
@@ -89,15 +99,15 @@ export default function Help() {
         </p>
       </Section>
 
-      <Section title="refunds">
+      <Section title="Refunds">
         <p>
-          Refunds are returned to your <Term>wallet balance</Term>, not automatically to your card.
-          An admin can reverse a reward claim, poll vote, or goal contribution, restoring the funds
-          to your balance.
+          Refunds are returned to your <Term>wallet credit</Term>, not automatically to your card.
+          An admin can reverse a reward claim, poll vote, or goal donation, restoring the funds to
+          your credit.
         </p>
         <p>
-          Funds are also returned to your balance automatically when a poll option or goal you
-          contributed to is removed, or when a custom write-in is rejected.
+          Funds are also returned to your credit automatically when a poll option or goal you funded
+          is removed, or when a custom write-in is rejected.
         </p>
         <p>
           To request a refund, or a return of funds to your payment card, contact the event
@@ -105,23 +115,31 @@ export default function Help() {
         </p>
       </Section>
 
-      <Section title="physical items">
+      <Section title="Physical items">
         <p>
           Physical rewards are shipped items. Shipping is arranged through Stripe's checkout; this
           platform does not collect or store your shipping address.
         </p>
         <p>
-          After your pledge is fulfilled, the claim appears in your wallet as <Term>pending</Term>.
-          The team ships the item and marks it <Term>fulfilled</Term> once it's on its way.
+          After your donation is fulfilled, the claim appears in your wallet as <Term>pending</Term>
+          . The team ships the item and marks it <Term>fulfilled</Term> once it's on its way.
         </p>
       </Section>
 
-      <Section title="your data (gdpr)">
+      <Section title="Your data (GDPR)" id="your-data-gdpr">
         <p>
           This platform stores only what it needs to route your donation: your email address, an
           optional donor name, and any comment or write-in you submit. It never collects or stores
           your shipping address. There are no passwords. Card details are held by Stripe, never by
           this platform.
+        </p>
+        <p>
+          We never use your email for marketing, never sell it, and share it only with Stripe, our
+          payment processor.
+        </p>
+        <p>
+          Beyond your donation, we may also email you an auction offer if you win a bid, or a
+          sign-in link if you request one.
         </p>
         <p>
           Moderators never see your email address — only admins can. To request access to,

@@ -1,11 +1,10 @@
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import Navbar from './components/Navbar';
-import GlobalProgressBar from './components/GlobalProgressBar';
+import ScheduleStrip from './components/ScheduleStrip';
 import FeedbackButton from './components/FeedbackButton';
 import BroadcastBanner from './components/BroadcastBanner';
 import { DraftPledgeProvider } from './context/DraftPledgeContext';
-import { CampaignProvider } from './context/CampaignContext';
 import { track } from './lib/tracing';
 import Home from './pages/Home';
 import DonateFlow, { LegacyIncentiveRedirect } from './pages/DonateFlow';
@@ -25,6 +24,7 @@ import AdminDonationDetail from './pages/admin/AdminDonationDetail';
 import AdminSimulate from './pages/admin/AdminSimulate';
 import AdminDonors from './pages/admin/AdminDonors';
 import AdminBlockedWords from './pages/admin/AdminBlockedWords';
+import AdminFeedback from './pages/admin/AdminFeedback';
 import AdminFeatureFlags from './pages/admin/AdminFeatureFlags';
 import AdminBroadcast from './pages/admin/AdminBroadcast';
 import AdminPledges from './pages/admin/AdminPledges';
@@ -66,9 +66,10 @@ export default function App() {
           <Route path="goals" element={<AdminGoals />} />
           <Route path="donations" element={<AdminDonations />} />
           <Route path="donations/:id" element={<AdminDonationDetail />} />
-          <Route path="simulate" element={<AdminSimulate />} />
+          <Route path="add-donation" element={<AdminSimulate />} />
           <Route path="pledges" element={<AdminPledges />} />
           <Route path="blocked-words" element={<AdminBlockedWords />} />
+          <Route path="feedback" element={<AdminFeedback />} />
           <Route path="feature-flags" element={<AdminFeatureFlags />} />
           <Route path="broadcast" element={<AdminBroadcast />} />
           <Route path="auctions" element={<AdminAuctions />} />
@@ -93,29 +94,27 @@ export default function App() {
           element={
             <div className="min-h-screen flex flex-col">
               <BroadcastBanner />
-              <CampaignProvider>
-                <DraftPledgeProvider>
-                  <PageViewTracker />
-                  <Navbar />
-                  <GlobalProgressBar />
-                  <FeedbackButton />
-                  <div className="flex-1">
-                    <Routes>
-                      <Route path="/" element={<Home />} />
-                      <Route path="/donate" element={<DonateFlow />} />
-                      <Route path="/donate/:eventSlug" element={<DonateFlow />} />
-                      <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
-                      <Route path="/pledge/:token" element={<PledgeReturn />} />
-                      <Route path="/wallet" element={<MyWallet />} />
-                      <Route path="/help" element={<Help />} />
-                      <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
-                      <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
-                      <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
-                      <Route path="/auctions" element={<Auctions />} />
-                    </Routes>
-                  </div>
-                </DraftPledgeProvider>
-              </CampaignProvider>
+              <DraftPledgeProvider>
+                <PageViewTracker />
+                <Navbar />
+                <ScheduleStrip />
+                <FeedbackButton />
+                <div className="flex-1">
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/donate" element={<DonateFlow />} />
+                    <Route path="/donate/:eventSlug" element={<DonateFlow />} />
+                    <Route path="/donate/:eventSlug/:channelSlug" element={<DonateFlow />} />
+                    <Route path="/pledge/:token" element={<PledgeReturn />} />
+                    <Route path="/wallet" element={<MyWallet />} />
+                    <Route path="/help" element={<Help />} />
+                    <Route path="/rewards" element={<LegacyIncentiveRedirect tab="rewards" />} />
+                    <Route path="/polls" element={<LegacyIncentiveRedirect tab="polls" />} />
+                    <Route path="/goals" element={<LegacyIncentiveRedirect tab="goals" />} />
+                    <Route path="/auctions" element={<Auctions />} />
+                  </Routes>
+                </div>
+              </DraftPledgeProvider>
             </div>
           }
         />

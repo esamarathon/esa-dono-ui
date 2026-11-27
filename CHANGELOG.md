@@ -7,15 +7,282 @@ breaking changes.
 
 ## [Unreleased]
 
-Planned version: **0.3.0** — amount-first donations with independent incentive Pools
-(#151, PRD-0003).
+### Changed
 
-**Release preparation only.** Kollekt claim retirement and prompter rendering remain
-release blockers, and the corrected browser matrix must be rerun. This version bump
-does not clear those gates or authorize deployment.
+- **Reversal destinations have one policy** (no behavior change): the preview
+  projection and the mutation of a reversed row's funding share one ADR-0011
+  §5/6 computation in `reversal.ts`, a terminal status change plans once per
+  transaction, and the Wallet-grant rule and the Payment-refund freeze read
+  from `poolAccounting.ts` (#295).
+
+- **Reversal workflows are thin modules around the row-return policy**
+  (no behavior change): `reversal.ts` splits into `reversalPolicy.ts` (the
+  ADR-0011 §5/6 destination policy and row mechanics), `spendReversal.ts`,
+  `incentiveReversal.ts` and `walletAdjust.ts`; each module changes for one
+  reason, and `unusedPool.ts` no longer imports the terminal-status
+  workflow (#301).
+
+- **Tiltify-compatible Event lists now contain the Event's shared incentives**, like
+  Tiltify team-level incentives (ADR-0012 rollout step 3); Channel lists keep them.
+  Deploy esa-layouts-v2#9 first, or overlays that read both lists show shared polls
+  twice. Deploy Kollekt#44 only after this release.
+
+## [0.13.0] — 2026-11-27
+
+### Added
+
+- **The aggregate donation total stays available to API consumers as
+  `GET /api/campaign`** (#148 amendment): the donor site keeps no public total
+  or goal — the stream overlay owns the public fundraising display — but
+  external tools can still read the total. New minimal shape
+  `{ "total_raised_cents": <integer cents> }`, same money-total rule as
+  `GET /api/admin/stats`. Not compatible with the pre-0.10.0 response (name,
+  description, `amount_raised`, `goal`); the new shape carries no goal.
+
+- **`GET /api/campaign` can scope the total to an Event or Channel**: pass
+  `?event=<event-slug>` or `?channel=<channel-slug>` (exactly one; both or a
+  malformed value is a 400, unknown slugs are 404) and the same
+  `{ "total_raised_cents": … }` shape
+  returns that Event's or Channel's total. An Event total counts its assigned
+  donations; unassigned donations count in the overall total only. Slugs
+  resolve whether active or not, like `GET /api/tiltify/campaigns/{id}`.
+
+### Changed
+
+- **The pooled accounting rules have one home** (no behavior change):
+  `poolAccounting.ts` now owns allocation liveness, the category budget and the
+  REQUESTED Payment-refund freeze, and absorbs `rewardFunding.ts`. Every
+  allocation query in the money modules builds its filter from it, so a rule
+  change is one edit instead of eleven.
+
+### Fixed
+
+- **The frontend image scans clean at HIGH/CRITICAL again**: the nginx runner
+  base shipped `libxml2` `2.13.9-r3`, which carries six HIGH CVEs
+  (CVE-2026-86138/86139/86140/86142/86143/11979, all fixed by `2.13.9-r5`);
+  the image's CVE floor bump now installs `libxml2>=2.13.9-r5`.
+
+## [0.12.1] — 2026-11-25
+
+### Fixed
+
+- **Feature-flag toggles survive a database-wipe re-seed when the environment
+  says so** (follow-up to the nightly staging reset): the seed installs a fresh
+  flag with the `SEED_FLAG_<NAME>` initial state (e.g.
+  `SEED_FLAG_DONATION_ACKNOWLEDGEMENTS=on`) instead of always disabled —
+  previously every nightly reset silently turned toggled flags (and with them
+  the donation acknowledgements) back off.
+
+## [0.12.0] — 2026-11-24
+
+### Changed
+
+- **The strip's schedule source is Crew Corner's published schedule API** (#286):
+  `GET /api/schedule` now reads
+  `{SCHEDULE_SOURCE_BASE_URL}/api/v1/events/{eventSlug}/schedule?source=published&format=horaro`
+  (anonymous, published-only) instead of Horaro — Horaro is Crew Corner's
+  downstream mirror and is never read donor-side again. A Channel stores a
+  `schedule_slug` (the Crew Corner event slug; renamed from
+  `horaro_schedule_slug`) plus an optional `schedule_stream_id`; the admin
+  fields are "Schedule event slug" and "Schedule stream id". The strip's output,
+  cache, poll and hide rules are unchanged. Staging seeds `DEMO_SCHEDULE_SLUG`
+  (and optionally `DEMO_SCHEDULE_STREAM_ID`).
+
+## [0.11.1] — 2026-11-24
+
+### Fixed
+
+- **The demo seed now keeps the Channel's Horaro schedule slug** (#148 follow-up):
+  `seed-dev.sh` stores `DEMO_HORARO_SLUG` on the demo Channels, so the nightly
+  staging reset no longer leaves the "Live / Up next" strip unconfigured (and the
+  acknowledgements hidden with it).
+
+## [0.11.0] — 2026-11-23
+
+### Added
+
+- **Brief donation acknowledgements in the donor strip** (#250): after a donation
+  that counts toward money totals, the "Live / Up next" strip replaces the schedule
+  text in place for a few seconds — "Sam donated $25.00" (hidden or blank names read
+  "Anonymous"; donor comments never show) or "N donations in the last minute" during
+  a burst — then returns to the schedule. Acknowledgements cover every donation to
+  the strip's Event and ride the existing `GET /api/schedule` read (now polled every
+  ~15 s), gated by the new `donation-acknowledgements` feature flag, which is
+  **off by default** — until an admin enables it, the strip stays schedule-only.
+
+## [0.10.0] — 2026-11-23
+
+### Changed
+
+- **"Live / Up next" schedule strip replaces the public fundraising total** (#148): the
+  strip above the navbar shows what is live and what is next from the Channel's Horaro
+  schedule (new optional Channel field **Horaro schedule slug** in admin event setup;
+  the server fetches `https://horaro.org/esa/{slug}.json` with a ~60 s cache and serves
+  the computed slots at `GET /api/schedule`). The homepage hero keeps its name,
+  description, logo and the "Donate now" CTA; the raised amount, progress bar and
+  "% of goal" are gone. The strip renders nothing whenever the state is unclear (no
+  Channel or slug, nothing scheduled, several active Events, failing schedule read).
+  Donation acknowledgements in the strip are a later step (#250).
+
+### Removed
+
+- **The public aggregate total and goal** (#148): `GET /api/campaign` and its OpenAPI
+  entry are removed (the homepage's static name/description moved into the client) and
+  `CAMPAIGN_GOAL_CENTS` is retired from docker-compose, `.env.example` and the docs.
+  Donation counting rules, admin accounting totals and `GET /api/campaign/broadcast`
+  are unchanged.
+
+## [0.9.0] — 2026-11-22
+
+### Changed
+
+- **Donor copy, label and typography pass** (#80): donor-facing copy is sentence case
+  with a 14px minimum text size, and the working labels from the poll-flow and
+  reward-claim tickets get their final strings ("Confirm this poll", "Unsaved changes",
+  the `Unsaved poll edits` confirmation modal, "Poll votes start at $1.00.",
+  "Add write-in", "Add: {title}", "Add reward", `0 / 200` answer counters with
+  `(optional; 200 characters maximum)` markers). Copy-link buttons carry per-context
+  tooltips and matching aria-labels. Donor copy says "wallet credit" (never "wallet
+  balance") and "the link in your donation email" (never "magic link"), the Help page
+  is rewritten to the amount-first flow, and the shoutout message counts as a claim
+  answer for the 200-character cap (`claimAnswerError`).
+- **Donor terminology: donate, Stream 1 / Stream 2** (#73): donor-facing copy says
+  "donate"/"donation" (the amount field reads "Donation amount ($)") and no longer
+  shows "pledge" or "contribute" — both stay internal domain words. The seeded demo
+  channels rename from "Main Marathon"/"Bonus Stream" to "Stream 1"/"Stream 2" (seed,
+  staging docs and test fixtures only).
+
+## [0.8.0] — 2026-11-21
+
+### Changed
+
+- **Poll flow redesign** (#76): poll option amounts start empty (placeholder `0.00`,
+  plain money text input without number spinners) and stage locally — typing an
+  amount selects an option, clearing it stages a removal, and the per-option add
+  button is gone. Each poll card has one "confirm this poll" button (working label)
+  that commits adds, edits and removals together; staged edits are ephemeral, show
+  an "unsaved changes" marker, and are discarded when leaving the polls tab after a
+  warning at "review →". Write-in label and amount stage through the same confirm.
+  Poll write-ins now default to a 40-character maximum when `max_entry_chars` is
+  unset (shared `DEFAULT_MAX_ENTRY_CHARS`; the write-in form and the server both
+  fall back to it, and a moderator-set value still overrides).
+
+## [0.7.0] — 2026-11-21
+
+### Added
+
+- **Feature flags**: the seed installs the default flags (`feedback`, `auctions`)
+  disabled, so they are visible and toggleable under `/admin/feature-flags`;
+  re-seeding preserves operator toggles. Every flag's use and purpose is now
+  documented in `docs/admin-event-setup.md` § Feature flags.
+- **Reward claim required fields and keyword definitions** (#78): a CUSTOM reward whose
+  staff set a Custom Label requires a non-blank claim answer (200-character cap, live
+  counter), enforced inline in the reward modal and with a 400 at every claim entry
+  point (pledge staging, direct claim, Pool-credit spend). Pool-credit reward picks
+  carry the answer per claim (`CreditSelection.claim_data`). The reward card's type
+  badge shows the shared digital/physical/shoutout/custom definitions with a "more in
+  Help" link; the definitions live in one client constant shared with the Help page.
+  The simulator sends answers for labeled CUSTOM rewards.
+
+## [0.6.0] — 2026-11-21
+
+### Added
+
+- **Email/privacy disclosure in checkout** (#81): the checkout email field gets an
+  InfoTip explaining how the email is used (identify the donation, take payment
+  through Stripe, send the donation email with the wallet link) and stating that it
+  is never used for marketing, never sold, and shared only with Stripe. "More in
+  Help" links to the Help "your data (gdpr)" section, which gains the promise and
+  the full send list (auction offer emails, sign-in links). The InfoTip component
+  can now host a link and Help sections have anchor ids.
+
+### Fixed
+
+- Release tooling: `npm run release` rewrites only the workspace versions in
+  `package-lock.json`, never a third-party package's own version (which
+  desynced `npm ci`), and refuses a bump that would.
+- Simulated donations: the admin `simulate-donation` boundary accepts
+  `send_email: false` so synthetic donors (the simulator's `@demo.test`
+  mailboxes) no longer trigger magic-link emails that bounce against the SMTP
+  relay. The token is still returned, so simulation is unchanged; recorded real
+  donations keep sending mail by default.
+
+## [0.5.0] — 2026-11-21
+
+### Changed
+
+- **Goals** (#201, #252): every goal write is capped at the goal's live remaining
+  target amount. The surplus follows a waterfall: the donor's other goal
+  selections in proportion, the Default goal list, the primary Channel's list,
+  the eligible goal closest to completion, then Unused pool money. Pool-credit
+  fulfillment caps at the pick (the remainder stays credit), moderator
+  assignment caps at the target (the remainder stays Unused pool money), and
+  Wallet spend caps so the remainder never leaves the wallet.
+
+### Fixed
+
+- Release machinery: `tag-version` promotes the release images itself on main,
+  resolves the release tag locally before promotion, and publishes the GitHub
+  Release for the version tag (#244, #246, #248).
+- Frontend image: bump the libxml2 floor to 2.13.9-r3 (CVE-2026-86144, HIGH).
+
+## [0.4.0] — 2026-11-16
+
+### Added
+
+- **Feedback queue** (ported from the esa-crew-corner feedback bubble): the
+  floating donor widget now captures the whole page (html2canvas-pro, with the
+  scroll-pin, closed-`<details>` and unsized-SVG fixes), a DOM snapshot with the
+  page's live form values, and a bounded diagnostics record (client errors and
+  failed fetches; passwords, file inputs and secrets in URLs are never
+  captured). Reports persist to a new `Feedback` table with their files under
+  `FEEDBACK_DIR` (prod default `/data/feedback`); Discord
+  (`DISCORD_FEEDBACK_WEBHOOK_URL`) and staff email (`FEEDBACK_RECIPIENTS` over
+  the existing `SMTP_*` relay) are best-effort notifications after the row is
+  durable. Admins get a resolver queue at `/admin/feedback` (open/answered/all
+  filters, screenshot and snapshot viewers, Handle form) plus a terminal CLI
+  (`npm run feedback --workspace server`) sharing the same resolve path.
+  Submission stays gated on the `feedback` feature flag and its IP rate limit.
+  New environment variables: `FEEDBACK_DIR`, `FEEDBACK_RECIPIENTS`,
+  `INSTANCE_LABEL` (passthrough added to `docker-compose.yml`).
+
+### Changed
+
+- **Staff views** (#238): grouped sidebar navigation for admin and moderator
+  (overview / event content / money / platform / support) with a distinct icon
+  per item, an always-visible location bar (page label left, the moderator
+  channel filter right), shared login card and sidebar footer, and the
+  `/admin/simulate` route renamed to `/admin/add-donation` to match the nav
+  label. No API changes.
+
+### Fixed
+
+- Feedback: never show the captured screenshot back to the sender (#233).
+- Demo reset: the baseline restores the feedback agent donor and re-enables
+  the feedback flag (#234, #235).
+- Frontend image: bump the libxslt floor to 1.1.43-r4 so the cached apk layer
+  resolves.
+- Dependencies: seven dependencies bumped without code changes (#237).
+
+## [0.3.0] — 2026-10-31
+
+Amount-first donations with independent incentive Pools (#151, PRD-0003). The same
+backend image now runs on SQLite or PostgreSQL, selected by `DATABASE_URL`.
+
+**Not in this release:** the Kollekt integration and the overlay prompter rendering are
+deferred to those repositories. Shared incentives stay visible through Channel lists, Event
+incentive lists stay empty (#204), and a cold cross-Channel pooled-credit reference stays
+unsupported until [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) lands. The
+corrected 0.3.0 browser matrix has not been rerun, and this entry does not by itself
+authorize deployment.
 
 ### Upgrade notes
 
+- **Database provider selection:** `DATABASE_URL` now chooses the Prisma client and the
+  migration history — an absolute `file:` URL for SQLite, `postgresql:` or `postgres:`
+  for PostgreSQL. The target database has its own data: changing the URL does not copy
+  data, and SQLite-to-PostgreSQL transfer is not included. PostgreSQL needs permission
+  to apply DDL migrations, including trigger functions. See `docs/database.md`.
 - **Breaking pledge API change:** `POST /api/pledge` requires
   `pledge_amount_cents`, a stable `draft_id`, and the reviewed `plan`. Old requests
   using `top_up_cents` are rejected. A changed plan returns 409 for confirmation;
@@ -33,9 +300,11 @@ does not clear those gates or authorize deployment.
 - Subscribe Stripe to checkout expiry, asynchronous payment success/failure and
   `refund.*`, in addition to completed checkout. Native `donation.updated`
   subscriptions are opt-in; existing Destinations are not changed automatically.
-- Coordinate the parent test/staging callers and
-  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44). Cold cross-Channel
-  credit references need its owner-aware lookup support. Ordinary Channel incentive
+- Coordinate the parent test/staging callers. The
+  [Kollekt PR #44](https://github.com/esamarathon/kollekt/pull/44) owner-aware lookup is
+  deferred out of 0.3.0: until it lands, a cold cross-Channel credit reference stays
+  unsupported, while an unchanged Kollekt keeps reading and claiming through the same
+  endpoints. Ordinary Channel incentive
   lists, overlay scope, donation routing and stable IDs remain unchanged.
 - **Shared incentives now belong to one Event** (ADR-0012). A migration assigns
   every reward, poll, goal and auction an Event. With two or more Events, a shared
@@ -49,13 +318,13 @@ does not clear those gates or authorize deployment.
   inactive Channel returns 404; an incentive not available on that Channel returns 400
   with no Wallet debit. Update callers, including the parent test caller patch.
   Simulator decision logs recorded before this change send no `channel_id`; regenerate them.
-- **Tiltify-compatible Event lists now contain the Event's shared incentives**, like
-  Tiltify team-level incentives (ADR-0012 rollout step 3); Channel lists keep them.
-  Deploy esa-layouts-v2#9 first, or overlays that read both lists show shared polls
-  twice. Deploy Kollekt#44 only after this release.
 
 ### Added
 
+- PostgreSQL support alongside SQLite from one image: `DATABASE_URL` selects the client
+  and the separate migration history, so moving to PostgreSQL needs no source edit or
+  rebuild.
+- Branded Wallet emails with the ESA emblem, a thank-you line and a plain-text fallback.
 - Staff can create a Channel with a fixed `id` (a lowercase UUID). The demo seed uses this,
   so a nightly reset keeps the same Channel ids and consumers such as Kollekt do not
   collect a stale Campaign per reset.
@@ -108,6 +377,12 @@ does not clear those gates or authorize deployment.
 
 ### Fixed
 
+- The donate review requires an email address before checkout, so a payment is not
+  started without one.
+- Staff donation lists load in batches below SQLite's bind-variable limit, so lists of
+  a thousand donations or more no longer crash the endpoint.
+- The donor Wallet hides auction sections while auctions are disabled, and the browser
+  tab icon is the ESA cube instead of a missing file.
 - The demo reset seeds a backend that is on several Docker networks. It used to join
   their names into one invalid network name, so the reset dropped the database and
   then failed to re-seed it.
@@ -145,8 +420,13 @@ does not clear those gates or authorize deployment.
 
 ### Security
 
+- Patch libexpat in the frontend image to 2.10.0 (CVE-2026-113351, CVE-2026-117610,
+  CVE-2026-118370).
+- Require patched libexpat in the frontend image (CVE-2026-77214).
 - Update proxy-addr to 2.0.8 and Sharp/native bindings to 0.35.5, including patched
   libvips dependencies.
+- Patch body-parser (CVE-2026-111181), follow-redirects (CVE-2026-111755,
+  CVE-2026-111756, CVE-2026-116689) and multer (CVE-2026-113872).
 
 ## [0.2.0] — 2026-09-29
 
@@ -335,6 +615,8 @@ continues on `dev`.
   CI and the security scan also run on `dev` pushes.
 - Dependencies: multer, nodemailer and sharp bumped to fix HIGH Trivy CVEs.
 
-[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/esamarathon/esa-dono-ui/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.4.0
+[0.3.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.3.0
 [0.2.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.2.0
 [0.1.0]: https://github.com/esamarathon/esa-dono-ui/releases/tag/0.1.0

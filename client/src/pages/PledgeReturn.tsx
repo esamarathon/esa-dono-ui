@@ -30,7 +30,7 @@ export default function PledgeReturn() {
 
   useEffect(() => {
     if (!token) {
-      setError('No pledge token provided.');
+      setError('No donation token provided.');
       return;
     }
     track('pledge_return', { 'pledge.token': token });
@@ -90,7 +90,7 @@ export default function PledgeReturn() {
         }
       } catch {
         if (cancelled) return;
-        setError('Could not load pledge status.');
+        setError('Could not load donation status.');
         return;
       }
 
@@ -113,12 +113,12 @@ export default function PledgeReturn() {
     return (
       <div className="max-w-xl mx-auto p-8">
         <Card>
-          <h2 className="font-display text-3xl uppercase text-off-white mb-4">pledge status</h2>
+          <h2 className="font-display text-3xl uppercase text-off-white mb-4">Donation status</h2>
           <p className="font-body text-sm" style={{ color: 'var(--red)' }}>
             {error}
           </p>
           <Link to="/" className="btrl-button inline-block mt-4">
-            back to home
+            Back to home
           </Link>
         </Card>
       </div>
@@ -135,28 +135,29 @@ export default function PledgeReturn() {
   return (
     <div className="max-w-xl mx-auto p-8">
       <Card>
-        <h2 className="font-display text-3xl uppercase text-off-white mb-4">pledge status</h2>
+        <h2 className="font-display text-3xl uppercase text-off-white mb-4">Donation status</h2>
 
         {isFulfilled ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(92,189,125,.16)' }}>
             <p className="font-data text-sm" style={{ color: 'var(--green)' }}>
-              Your pledge has been fulfilled! Check your email for the magic link.
+              Your donation has been fulfilled! Check your email — the link in it unlocks your
+              wallet.
             </p>
           </div>
         ) : creditOnly ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(208,152,70,.16)' }}>
             <p className="font-data text-sm" style={{ color: 'var(--d-yellow)' }}>
-              Payment received as Wallet credit. The original incentives were not fulfilled.
+              Payment received as wallet credit. The original incentives were not fulfilled.
               {pledge.payment_state === 'PAYMENT_REVIEW'
                 ? ' This payment needs admin review.'
-                : ' This was an old-shape pledge paid after the transition.'}
+                : ' This was an old-shape donation paid after the transition.'}
             </p>
           </div>
         ) : isExpired ? (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(208,152,70,.16)' }}>
             <p className="font-data text-sm" style={{ color: 'var(--d-yellow)' }}>
-              {pledge.status === 'EXPIRED' ? 'This pledge has expired. ' : ''}
-              Non-payment confirmed. Any held Wallet credit has been released.
+              {pledge.status === 'EXPIRED' ? 'This donation has expired. ' : ''}
+              Non-payment confirmed. Any held wallet credit has been released.
             </p>
           </div>
         ) : timedOut ? (
@@ -168,13 +169,13 @@ export default function PledgeReturn() {
         ) : (
           <div className="mb-4 p-3 rounded-sm" style={{ background: 'rgba(115,78,158,.3)' }}>
             <p className="font-data text-sm text-off-white">
-              Processing your pledge... this review stays read-only until payment is confirmed.
+              Processing your donation... this review stays read-only until payment is confirmed.
             </p>
           </div>
         )}
 
         <div className="btrl-panel p-4 mb-4">
-          <p className="font-data text-sm text-off-white/55 mb-1">pledge total</p>
+          <p className="font-data text-sm text-off-white/55 mb-1">Donation total</p>
           <p className="font-display text-3xl text-d-yellow">
             {pledge.format === 'POOLED' ? fmt(pledge.pledge_amount_cents) : '—'}
           </p>
@@ -193,7 +194,7 @@ export default function PledgeReturn() {
         {pledge.format === 'LEGACY' && pledge.items.length > 0 && (
           <div className="mb-4">
             <h3 className="font-data font-bold text-sm text-off-white mb-2 uppercase tracking-wider">
-              items
+              Items
             </h3>
             <div className="space-y-1">
               {pledge.items.map((item, i) => (
@@ -202,8 +203,8 @@ export default function PledgeReturn() {
                     {item.kind === 'REWARD'
                       ? 'Reward'
                       : item.kind === 'POLL_VOTE'
-                        ? 'Poll Vote'
-                        : 'Goal Contribution'}
+                        ? 'Poll vote'
+                        : 'Goal donation'}
                   </span>
                   <span className="font-data text-d-yellow">{fmt(item.amount_cents)}</span>
                 </div>
@@ -214,14 +215,14 @@ export default function PledgeReturn() {
 
         <div className="flex gap-3">
           <Link to="/" className="btrl-button">
-            back to home
+            Back to home
           </Link>
           <Link to="/wallet" className="btrl-button btrl-button-outline">
-            my wallet
+            My wallet
           </Link>
           {!isFulfilled && !creditOnly && draftFlow?.draft && (
             <Link to={draftFlow.draft.path} className="btrl-button btrl-button-outline">
-              resume donation
+              Resume donation
             </Link>
           )}
         </div>

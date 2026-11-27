@@ -14,7 +14,7 @@ services:
       - OTEL_TRACES_ENABLED=${OTEL_TRACES_ENABLED:-false}
       - NODE_ENV=production
       - PORT=3001
-      - DATABASE_URL=file:/data/dono.db
+      - DATABASE_URL=${DATABASE_URL:-file:/data/dono.db}
       - UPLOADS_DIR=/data/uploads
       # Stripe integration
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -22,7 +22,6 @@ services:
       - STRIPE_CURRENCY=${STRIPE_CURRENCY:-usd}
       - STRIPE_SHIPPING_RATE_ID=${STRIPE_SHIPPING_RATE_ID:-}
       - STRIPE_SHIPPING_ALLOWED_COUNTRIES=${STRIPE_SHIPPING_ALLOWED_COUNTRIES:-US}
-      - CAMPAIGN_GOAL_CENTS=${CAMPAIGN_GOAL_CENTS:-500000}
       # Auth
       - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       - MODERATOR_API_KEY=${MODERATOR_API_KEY:-}
@@ -32,6 +31,8 @@ services:
       # endpoint entirely (it 404s rather than serving unauthenticated).
       - METRICS_API_KEY=${METRICS_API_KEY:-}
       - METRICS_REFRESH_MS=${METRICS_REFRESH_MS:-45000}
+      # Donor strip's schedule source: Crew Corner's published schedule API (#286).
+      - SCHEDULE_SOURCE_BASE_URL=${SCHEDULE_SOURCE_BASE_URL:-https://crewcorner.esamarathon.com}
       # Proxy hops in front of Express (#140): 1 = the frontend nginx only; 2 when
       # another reverse proxy (Caddy, Traefik, a load balancer) sits in front of it.
       # Wrong here, and every client shares one rate-limit bucket.
@@ -62,10 +63,19 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
-      # Feedback widget (server/routes/feedback.ts). Leave empty to disable
-      # (503); the `feedback` feature flag must also be enabled.
+      # Feedback queue (server/routes/feedback.ts). Reports persist to the
+      # database and FEEDBACK_DIR first; Discord and email are best-effort
+      # notifications on top. The `feedback` feature flag must also be enabled
+      # (admin/staff UI → feature flags).
       - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}
       - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL:-}
+      # Report files (screenshot + DOM snapshot) live under /data so they
+      # survive a container rebuild. Set FEEDBACK_RECIPIENTS (comma-separated)
+      # to email new reports to staff through the SMTP_* relay above; unset =
+      # email skipped (the queue page and Discord still work).
+      - FEEDBACK_DIR=/data/feedback
+      - FEEDBACK_RECIPIENTS=${FEEDBACK_RECIPIENTS:-}
+      - INSTANCE_LABEL=${INSTANCE_LABEL:-}
     volumes:
       - dono-data:/data
     restart: unless-stopped

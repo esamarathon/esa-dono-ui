@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { databaseProvider } from '../lib/database.js';
+import { createDatabaseClient } from '../lib/databaseClient.js';
 
 process.env.ADMIN_API_KEY = 'test-admin-key';
 process.env.METRICS_API_KEY = 'test-metrics-key';
@@ -19,6 +20,11 @@ process.env.RATE_LIMIT_API = '100000';
 // random. Readers also block writers, so a second PrismaClient waits on the
 // lock and fails with P1008. WAL mode makes one fsync per commit and lets
 // readers run during a write. The mode is stored in the DB file.
-const prisma = new PrismaClient();
-await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL');
-await prisma.$disconnect();
+if (databaseProvider(process.env.DATABASE_URL) === 'sqlite') {
+  const prisma = createDatabaseClient();
+  try {
+    await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL');
+  } finally {
+    await prisma.$disconnect();
+  }
+}

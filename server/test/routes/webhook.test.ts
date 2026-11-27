@@ -1,11 +1,16 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import express from 'express';
 import request from 'supertest';
 import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { planPledge } from '@dono/shared';
 import { createPledge, createCheckoutForPledge } from '../../services/pledge.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 import webhookRouter from '../../routes/webhook.js';
 
 const stripe = vi.hoisted(() => ({ create: vi.fn(), retrieve: vi.fn(), expire: vi.fn() }));
@@ -90,7 +95,7 @@ beforeEach(() => {
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test');
 });
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS fail_legacy_webhook');
+  await dropFailTrigger(prisma, 'fail_legacy_webhook');
   await prisma.auction.updateMany({
     where: { id: { in: auctions } },
     data: { current_offer_id: null },
@@ -155,9 +160,13 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
     const donation = await prisma.donation.create({
       data: { donor_id: donor.id, external_id: `cs_${crypto.randomUUID()}`, amount_cents: 1000 },
     });
-    await prisma.$executeRawUnsafe(
-      `CREATE TRIGGER fail_legacy_webhook BEFORE INSERT ON BalanceAdjustment WHEN NEW.donor_id = '${donor.id}' BEGIN SELECT RAISE(ABORT, 'late legacy ledger failure'); END`,
-    );
+    await createFailTrigger(prisma, {
+      name: 'fail_legacy_webhook',
+      table: 'BalanceAdjustment',
+      operation: 'INSERT',
+      when: `NEW."donor_id" = '${donor.id}'`,
+      message: 'late legacy ledger failure',
+    });
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       expect(
@@ -174,7 +183,7 @@ describe('Stripe webhook with real SQLite intake/reconciliation', () => {
       status: 'COMPLETED',
       refund_id: null,
     });
-    await prisma.$executeRawUnsafe('DROP TRIGGER fail_legacy_webhook');
+    await dropFailTrigger(prisma, 'fail_legacy_webhook');
     expect(
       (await notify('checkout.session.async_payment_failed', { id: donation.external_id })).status,
     ).toBe(200);

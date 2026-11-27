@@ -28,11 +28,9 @@ export type EmitWebhook = (
  * can never lose them. Use this at every emit site instead of calling
  * `emitWebhookMessage` directly.
  *
- * Emit after the change it describes. The transaction then already holds
- * SQLite's write lock, so concurrent callers queue behind it. A transaction whose
- * first statement is a read and which writes later can deadlock against another
- * such transaction (both hold a read lock, neither can upgrade) until Prisma's
- * timeout.
+ * The database client serializes transactions before application reads, using
+ * the SQLite write lock or a PostgreSQL transaction-scoped advisory lock.
+ * Emit after the change it describes, inside that same transaction.
  */
 export async function withWebhooks<T>(
   fn: (tx: WebhookTx, emit: EmitWebhook, publisher: DonationPublisher) => Promise<T>,

@@ -1,13 +1,21 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import adminRouter from '../../routes/admin.js';
-import { createLegacyPledge as createPledge, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import {
+  createLegacyPledge as createPledge,
+  DEFAULT_EVENT_ID,
+  ensureDefaultEvent,
+} from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 import { createTestChannel } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const AUTH = { Authorization: 'Bearer key_admin_test-admin-key' };
 
 function createApp() {

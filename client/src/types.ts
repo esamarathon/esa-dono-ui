@@ -35,6 +35,15 @@ export interface Donor {
   is_frozen?: boolean;
 }
 
+/** Donor identity returned by the GET /api/auth/session probe (issue #135). */
+export type SessionDonor = Pick<Donor, 'id' | 'email' | 'balance_remaining' | 'role'>;
+
+/**
+ * GET /api/auth/session response. The probe always answers 200 — a missing
+ * session is the expected logged-out answer, never an error (issue #135).
+ */
+export type SessionInfo = { authenticated: false } | { authenticated: true; donor: SessionDonor };
+
 export interface DonationRecord {
   id: string;
   amount_cents: number;
@@ -196,6 +205,10 @@ export interface Channel {
   slug: string;
   event_id: string;
   is_active: boolean;
+  /** Crew Corner event slug for the donor-site schedule strip (#286). */
+  schedule_slug?: string | null;
+  /** Optional Crew Corner stream id for the donor-site schedule strip (#286). */
+  schedule_stream_id?: number | null;
   /** Ordered own/shared goal ids. Ineligible entries are preserved. */
   default_goals?: string[];
   default_goal?: { id: string; title: string } | null;
@@ -336,15 +349,35 @@ export interface AuctionWin {
   donor?: { email?: string };
 }
 
-export interface Campaign {
-  name?: string;
-  title?: string;
-  description?: string;
-  logo?: { src?: string };
-  amount_raised?: { value?: string };
-  total_amount_raised?: { value?: string };
-  goal?: { value?: string };
-  fundraising_goal?: { value?: string };
+/** One slot of the schedule strip, from the Crew Corner published schedule (#148, #286). */
+export interface ScheduleSlot {
+  game: string;
+  players: string;
+}
+
+/**
+ * One acknowledgement candidate from GET /api/schedule (#250): an Event
+ * donation of the last minute that counts toward money totals. `display_name`
+ * already applies the D2/D5 mapping (blank or hidden reads "Anonymous"); the
+ * donor's comment is never sent. `amount_cents` is integer cents.
+ */
+export interface ScheduleRecentDonation {
+  id: string;
+  display_name: string;
+  amount_cents: number;
+  created_at: string;
+}
+
+/**
+ * GET /api/schedule result. Null slots mean the strip renders nothing (D6).
+ * `recent_donations` is present only while the `donation-acknowledgements`
+ * feature flag is on and the strip renders (D3/D11); it is the Event's
+ * ack-eligible donations of the last minute (D8).
+ */
+export interface Schedule {
+  live: ScheduleSlot | null;
+  next: ScheduleSlot | null;
+  recent_donations?: ScheduleRecentDonation[];
 }
 
 /** A browser-local donor selection. Live prices are revalidated before review. */
@@ -620,7 +653,9 @@ export type WebhookMessageType =
 export interface WebhookEndpoint {
   id: string;
   url: string;
-  secret: string;
+  // #127: responses never carry the signing secret or the AMQP password.
+  has_secret: boolean;
+  has_amqp_url: boolean;
   is_active: boolean;
   event_types: string[];
   verify_ssl: boolean;
@@ -629,9 +664,15 @@ export interface WebhookEndpoint {
   updated_at: string;
   destination_type: 'HTTP' | 'RABBITMQ';
   payload_format: 'NATIVE' | 'TILTIFY';
+  // Password masked as `****`; null when absent or invalid.
   amqp_url: string | null;
   amqp_exchange: string;
   amqp_routing_key: string | null;
+}
+
+/** Create and rotate-secret disclose the secret once, on top of the safe shape. */
+export interface WebhookDestinationWithSecret extends WebhookEndpoint {
+  secret: string;
 }
 
 export interface WebhookDelivery {

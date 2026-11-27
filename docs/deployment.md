@@ -17,7 +17,7 @@ npm workspaces monorepo
 - **Payments**: Stripe Checkout (`checkout.session.completed` webhook).
 - **Auth**: magic-link email tokens + OAuth (Google / Discord / Twitch). No
   passwords. Donors are identified by email.
-- **Data**: SQLite via Prisma, single file. All money is integer cents.
+- **Data**: SQLite or PostgreSQL via Prisma, selected by `DATABASE_URL`. SQLite uses a single file. All money is integer cents.
 - **Production** ships two images: `backend` (Express, non-root `dono`, UID 1001) and `frontend` (nginx-unprivileged SPA, proxies `/api/` → backend).
 
 ```
@@ -62,7 +62,8 @@ Stripe/SMTP/OAuth unset degrades gracefully (see table below).
 ### 3. Initialize the database
 
 ```bash
-cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 ```
 
 ### 4. Run
@@ -161,9 +162,11 @@ docker compose --env-file .env.production up -d
 ```
 
 - Frontend: `http://localhost:8080` (port via `FRONTEND_PORT`, default 8080).
-- SQLite persisted in the named volume `dono-data` (mounted at `/data`).
-- Backend runs `prisma migrate deploy` on every startup (entrypoint) — safe to
-  redeploy new images without manual DB steps.
+- SQLite persists in the named volume `dono-data` (mounted at `/data`). PostgreSQL
+  uses the service named in `DATABASE_URL`; uploaded images still need the volume.
+- The entrypoint selects and deploys the provider's migrations on every startup.
+  The same image supports both providers; changing the URL does not transfer data.
+  See [Database Management](database.md).
 
 ### 4. Verify
 
@@ -176,7 +179,7 @@ Behind an external proxy, also check that each visitor gets their own rate-limit
 counter (run from two different networks, e.g. your machine and the server):
 
 ```bash
-curl -sI https://donations.example.com/api/campaign | grep -i x-ratelimit-remaining
+curl -sI https://donations.example.com/api/schedule | grep -i x-ratelimit-remaining
 ```
 
 Each network should count down from `RATE_LIMIT_API` (default 600) on its own.
@@ -272,6 +275,72 @@ network with the backend and list that network's subnet
 
 ---
 
+## Releases
+
+Versioning is Semantic Versioning; before 1.0.0 a minor release may contain breaking
+changes. The version lives in four manifests (root, `client`, `server`, `packages/shared`
+`package.json`), their `package-lock.json` entries, and `server/openapi.yaml`
+`info.version`. `CHANGELOG.md` follows Keep a Changelog and is the single source of the
+GitHub Release notes.
+
+### Planned lifecycle
+
+The donation-experience change list (map #72) ships one step per minor release, in the
+order settled by #251. Each step must leave `dev` in a complete, deployable state; a step
+never rides another step's release.
+
+| Version | Step                                                              | Tickets  |
+| ------- | ----------------------------------------------------------------- | -------- |
+| 0.5.0   | Cap goal contributions at the remaining target                    | #201     |
+| 0.6.0   | Email/privacy disclosure in checkout                              | #81      |
+| 0.7.0   | Reward claim required fields and keyword definitions              | #78      |
+| 0.8.0   | Poll flow redesign                                                | #76      |
+| 0.9.0   | Terminology and copy/typography pass                              | #73, #80 |
+| 0.10.0  | Public fundraising total, progress bar, live-activity replacement | #148     |
+| 0.11.0  | Donation acknowledgements in the donor strip                      | #250     |
+| 0.12.0  | Crew Corner schedule source                                       | #286     |
+
+- **Implementation order is not release granularity.** #78 and #76 may be implemented in
+  parallel; they still land and release one at a time. #73 has no implementation step of
+  its own and shares the #80 release.
+- **A patch release between steps does not consume a minor.** `0.5.1` leaves the next
+  step on `0.6.0`.
+- **To change this granularity, amend the decision in #251** rather than regrouping
+  releases implicitly. The GitHub issues remain the source of truth for ticket scope and
+  status; this table records only the planned release mapping.
+
+### Cutting a release
+
+The mechanics are owned by `docs/agents/release.md`; for the planned steps above:
+
+1. Each feature PR against `dev` carries one bullet under `## [Unreleased]` in
+   `CHANGELOG.md` (CI's Changelog job; `no-changelog` for docs/CI-only PRs).
+2. After the step's last feature PR is merged and green, open the `dev` → `main` release
+   PR and run `npm run release -- X.Y.Z`. Pass the version explicitly: the script
+   otherwise derives the bump from commit types, which does not encode the planned mapping
+   above. It rewrites all six version fields and turns `[Unreleased]` into
+   `## [X.Y.Z] — YYYY-MM-DD`.
+3. The `release-guard` CI job must pass: every version field agrees, the version is
+   greater than the latest bare tag, the dated section has bullets, and `[Unreleased]` is
+   empty again.
+4. Merge to `main`. The `main` push's `tag-version` job creates the bare `X.Y.Z` tag,
+   promotes the `<sha>` images of that merge commit to `:X.Y.Z`, and publishes the GitHub
+   Release from the matching changelog section. `dev` pushes only ever get `X.Y.Z-dev`.
+
+### Release rules
+
+- **Immutable, one tag per version.** The `release-tags-immutable` ruleset and the
+  workflow both refuse to reuse a published version; bump instead. An existing tag means
+  "already tagged; skip", so a re-push cannot move a release.
+- **Immutable release images.** `:X.Y.Z` is created once from the exact `:<sha>` image
+  that passed the smoke test and never overwritten; `:latest` follows `main` only.
+- **The CHANGELOG section must exist before the `main` merge.** The workflow extracts
+  `## [X.Y.Z]` from `CHANGELOG.md` for the Release page and fails on an empty section.
+- **A release tag is not a deployment.** Deploying a pinned release (with its append-only
+  migrations) and the runtime acceptance holds are separate, see Operations below.
+
+---
+
 ## Configuration reference
 
 | Variable                            | Required       | Default                                                    | Purpose                                                            |
@@ -285,7 +354,6 @@ network with the backend and list that network's subnet
 | `STRIPE_CURRENCY`                   | no             | `usd`                                                      | checkout currency                                                  |
 | `STRIPE_SHIPPING_RATE_ID`           | no             | —                                                          | ShippingRate for PHYSICAL rewards                                  |
 | `STRIPE_SHIPPING_ALLOWED_COUNTRIES` | no             | `US`                                                       | countries for shipping collection                                  |
-| `CAMPAIGN_GOAL_CENTS`               | no             | `500000`                                                   | home-page goal (integer cents)                                     |
 | `GOOGLE_CLIENT_ID/SECRET`           | no             | —                                                          | Google SSO (unset → disabled)                                      |
 | `DISCORD_CLIENT_ID/SECRET`          | no             | —                                                          | Discord SSO (unset → disabled)                                     |
 | `TWITCH_CLIENT_ID/SECRET`           | no             | —                                                          | Twitch SSO (unset → disabled)                                      |
@@ -369,12 +437,17 @@ reset cycle. See `docs/STAGING_SEED.md` for detailed staging instructions.
 
 ### Migrations
 
-Handled automatically by the backend entrypoint (`prisma migrate deploy`). To
-create a new migration during development:
+Handled automatically by the backend entrypoint, which selects the migration
+history from `DATABASE_URL`. From the source checkout, use:
 
 ```bash
-cd server && npx prisma migrate dev --name <name> && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 ```
+
+Model changes need new migrations in both provider histories. The canonical model
+schema stays SQLite; generation derives the PostgreSQL schema. Preserve the custom
+checks, partial indexes and triggers on both providers. See [Database Management](database.md).
 
 **Migrations that need a reset.** `20260928211407_event_channel_identity` (#114)
 switches ids to UUIDs and adds Event, slugs and a primary Channel. It applies to an
@@ -426,10 +499,11 @@ schema. Follow the guard below before considering a backup restore; otherwise fi
 ### Amount-first transition: one release between Events
 
 This is an operator procedure, **not authorization to deploy**. Rehearse on a disposable
-copy first. Ship the complete pooled release, not individual slices. Cold/warm cross-Channel
-Kollekt hydration requires the coordinated PR44 fix and scoped ESA lookup described in
-`docs/api-consumers.md`; ordinary own/shared lists stay unchanged. Until the actual pinned
-runtime report and final release review pass, release acceptance is **PENDING**. Do not
+copy first. Ship the complete pooled release, not individual slices. The scoped ESA lookup in
+`docs/api-consumers.md` is available, but the coordinated Kollekt PR44 fix is deferred, so
+cold and warm cross-Channel hydration stays unsupported until it lands; ordinary own/shared
+lists stay unchanged. Until the actual pinned runtime report and the corrected browser matrix
+pass, release acceptance is **PENDING**. Do not
 prewarm caches, widen producer lists, reassign donations or drop assertions to clear a HOLD.
 
 Tools: `server/scripts/transition-cli.ts --help` (run with `node --import tsx` from
@@ -794,9 +868,9 @@ curl -s -H "Authorization: Bearer key_metrics_$METRICS_API_KEY" http://localhost
 7. **Role escalation is impossible via donation.** Roles come only from the
    `ADMIN_EMAILS`/`MODERATOR_EMAILS` allowlists (gated on a verified OAuth
    email) or an explicit `PATCH /api/admin/donors/:id/role`.
-8. **`prisma generate` must run** before `typecheck`/`test` (the Prisma client is
-   generated, not committed). CI does this; replicate locally after any schema
-   change.
+8. **`npm run db:generate --workspace server` must run** before `typecheck`/`test`.
+   Both Prisma clients and the derived PostgreSQL schema are generated, not
+   committed. CI does this; repeat locally after installation or a model change.
 9. **`TRUST_PROXY` equals the number of proxies in front of the backend**
    (the frontend nginx counts as one). Adding or removing a proxy (TLS
    terminator, load balancer, CDN) changes it. Wrong in either direction breaks
@@ -837,6 +911,7 @@ For high-traffic campaigns, see the README's "Future / Production at Scale"
 diagram: horizontally scale frontend replicas behind a load balancer (one more proxy
 hop: raise `TRUST_PROXY`; with several backend replicas the in-memory rate-limit
 counters are per replica, so the effective limit multiplies), scale the
-backend tier, and migrate SQLite → PostgreSQL (`datasource.provider` +
-`DATABASE_URL`) with a read replica. A dedicated webhook-sender container is the
-future path to decouple webhook ingestion from API serving.
+backend tier only after adding database-backed coordination for webhook dispatch.
+PostgreSQL is selected by `DATABASE_URL` in the same image, but financial transactions
+remain serialized and database selection does not transfer existing SQLite data.
+Read replicas and a dedicated webhook-sender container remain future work.

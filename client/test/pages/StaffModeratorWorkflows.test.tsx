@@ -3,9 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn() }));
 vi.mock('../../src/api/moderator', () => ({ default: api }));
+vi.mock('../../src/api/staffKeys');
 import ModeratorLayout from '../../src/pages/moderator/ModeratorLayout';
 import ModeratorDonations from '../../src/pages/moderator/ModeratorDonations';
 import ModeratorClaims from '../../src/pages/moderator/ModeratorClaims';
+import { validateModeratorKey } from '../../src/api/staffKeys';
 const donations = [
   {
     id: 'a',
@@ -47,6 +49,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('moderator_key', 'test');
   localStorage.setItem('donation_draft_v1', 'untouched');
+  // The stored moderator key is accepted by the layout's validation probe.
+  vi.mocked(validateModeratorKey).mockResolvedValue('valid');
 });
 it('uses the real routed staff provider for live allocations, global Channel selection and assignment Undo without browser-draft coupling', async () => {
   api.get.mockImplementation((path: string) =>

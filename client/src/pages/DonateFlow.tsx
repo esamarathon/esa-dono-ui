@@ -4,6 +4,7 @@ import { useDraftPledge, type IncentiveCategory } from '../context/DraftPledgeCo
 import { getPublicEvent } from '../api/events';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
+import InfoTip from '../components/InfoTip';
 import ShareLinkButton from '../components/ShareLinkButton';
 import RewardList from '../components/incentives/RewardList';
 import PollList from '../components/incentives/PollList';
@@ -16,6 +17,16 @@ function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 const TABS: IncentiveCategory[] = ['rewards', 'polls', 'goals'];
+const TAB_LABELS: Record<IncentiveCategory, string> = {
+  rewards: 'Rewards',
+  polls: 'Polls',
+  goals: 'Fund goals',
+};
+const POOL_LABELS = {
+  reward: 'Rewards Pool',
+  poll: 'Polls Pool',
+  goal: 'Fund goals Pool',
+} as const;
 export function LegacyIncentiveRedirect({ tab }: { tab: IncentiveCategory }) {
   const location = useLocation();
   const search = new URLSearchParams(location.search);
@@ -41,6 +52,10 @@ export default function DonateFlow() {
   const [confirmation, setConfirmation] = useState<NonNullable<typeof success>['receipt'] | null>(
     null,
   );
+  /** Uncommitted poll edits staged in PollList (#76); leaving the polls tab discards them. */
+  const [pollEditsStaged, setPollEditsStaged] = useState(false);
+  /** "Unsaved poll edits" confirmation before Review → discards staged edits (#80 D8). */
+  const [confirmReview, setConfirmReview] = useState(false);
   const location = useLocation();
   const { eventSlug, channelSlug } = useParams<{ eventSlug?: string; channelSlug?: string }>();
   const [amount, setAmount] = useState(draft ? (draft.amountCents / 100).toFixed(2) : '10');
@@ -50,6 +65,10 @@ export default function DonateFlow() {
   const consumedSelection = useRef('');
   const consumedTab = useRef('');
   const amountCents = draft?.amountCents;
+  /** Live remaining need per goal, so the review models the target cap (#201). */
+  const goalRemaining = Object.fromEntries(
+    flow.goals.map((goal) => [goal.id, Math.max(0, goal.target_cents - goal.current_cents)]),
+  );
   const pendingToken = draft?.pendingToken;
   const draftChannelId = draft?.channelId;
   const hasDraft = draft !== null;
@@ -189,16 +208,18 @@ export default function DonateFlow() {
   if (draft?.pendingToken)
     return (
       <div className="max-w-3xl mx-auto p-8">
-        <h2 className="font-display text-3xl uppercase mb-4">Pending pledge — read-only review</h2>
+        <h2 className="font-display text-3xl uppercase mb-4">
+          Pending donation — read-only review
+        </h2>
         {paymentChecking && <p role="status">Checking payment before loading your draft...</p>}
         {errors}
         {pending ? (
           <>
             <p className="font-data text-sm mb-4">
               {pending.payment_state === 'PAYMENT_REVIEW'
-                ? 'Payment received as Wallet credit. The original incentives were not fulfilled. This payment needs admin review.'
+                ? 'Payment received as wallet credit. The original incentives were not fulfilled. This payment needs admin review.'
                 : pending.payment_state === 'LEGACY_PAID'
-                  ? 'Old-shape payment received as Wallet credit. The original incentives were not fulfilled.'
+                  ? 'Old-shape payment received as wallet credit. The original incentives were not fulfilled.'
                   : pending.payment_state === 'OPEN'
                     ? 'Continue the same checkout, or cancel it before editing or switching Channel.'
                     : 'Payment status is not confirmed. Editing and new checkout are blocked.'}
@@ -207,11 +228,13 @@ export default function DonateFlow() {
               <PledgeReview
                 plan={pending.plan}
                 defaultGoal={flow.defaultGoal}
+                defaultGoalChain={flow.defaultGoalChain}
+                goalRemaining={goalRemaining}
                 previewError={flow.previewError}
               />
             ) : (
               <section aria-label="Legacy review">
-                <p>Legacy pledge — original items are read-only; no pooled pledge amount.</p>
+                <p>Legacy donation — original items are read-only; no pooled donation amount.</p>
                 {pending.items.map((item, index) => (
                   <p key={index} className="font-data text-sm">
                     {item.kind}: {item.target_id} — {fmt(item.amount_cents)}
@@ -228,7 +251,7 @@ export default function DonateFlow() {
                 disabled={busy}
                 onClick={() => void flow.continuePayment()}
               >
-                continue to payment
+                Continue to payment
               </button>
             )}
             {pending.format === 'POOLED' &&
@@ -238,7 +261,7 @@ export default function DonateFlow() {
                   disabled={busy}
                   onClick={() => void flow.editPending()}
                 >
-                  edit — cancel payment first
+                  Edit — cancel payment first
                 </button>
               )}
           </>
@@ -248,7 +271,7 @@ export default function DonateFlow() {
           disabled={busy || paymentChecking}
           onClick={() => void flow.checkPayment()}
         >
-          check payment
+          Check payment
         </button>
       </div>
     );
@@ -258,7 +281,7 @@ export default function DonateFlow() {
       <div className="max-w-3xl mx-auto p-8">
         <p role="alert">{linkError}</p>
         <Link to="/donate" className="btrl-button">
-          back to donations
+          Back to donations
         </Link>
       </div>
     );
@@ -303,7 +326,10 @@ export default function DonateFlow() {
                 >
                   {c.name}
                 </button>
-                <ShareLinkButton path={`/donate?channel=${c.id}`} />
+                <ShareLinkButton
+                  path={`/donate?channel=${c.id}`}
+                  label={`Copy a link to donate to ${c.name}`}
+                />
               </div>
             ))}
           </div>
@@ -313,26 +339,48 @@ export default function DonateFlow() {
         )}
       </div>
       {flow.pendingChannelId && (
-        <Modal title="switch Channel?" onClose={flow.cancelChannelSwitch}>
+        <Modal title="Switch Channel?" onClose={flow.cancelChannelSwitch}>
           <p className="font-body text-sm mb-4">
-            Switching removes your current Channel's selections. Shared selections and your pledge
+            Switching removes your current Channel's selections. Shared selections and your donation
             amount stay.
           </p>
           <button
             className="btrl-button btrl-button-outline mr-3"
             onClick={flow.cancelChannelSwitch}
           >
-            cancel
+            Cancel
           </button>
           <button className="btrl-button" onClick={flow.confirmChannelSwitch}>
-            switch &amp; clear those items
+            Switch &amp; clear those items
+          </button>
+        </Modal>
+      )}
+      {confirmReview && (
+        <Modal title="Unsaved poll edits" onClose={() => setConfirmReview(false)}>
+          <p className="font-body text-sm mb-4">
+            Reviewing now discards the amounts you typed but haven't confirmed.
+          </p>
+          <button
+            className="btrl-button btrl-button-outline mr-3"
+            onClick={() => setConfirmReview(false)}
+          >
+            Go back
+          </button>
+          <button
+            className="btrl-button"
+            onClick={() => {
+              setConfirmReview(false);
+              void flow.review();
+            }}
+          >
+            Discard and review
           </button>
         </Modal>
       )}
       {step === 'amount' ? (
         <div className="btrl-panel p-6">
           <h2 className="font-mono text-sm tracking-widest uppercase text-d-yellow mb-2">
-            1 · how much?
+            1 · How much?
           </h2>
           <p className="font-body text-sm text-off-white/60 mb-4">
             Your donation counts in full toward rewards, and polls, and fund goals.
@@ -349,9 +397,9 @@ export default function DonateFlow() {
             ))}
           </div>
           <label className="font-data text-sm">
-            Pledge amount ($)
+            Donation amount ($)
             <input
-              aria-label="Pledge amount ($)"
+              aria-label="Donation amount ($)"
               type="number"
               min="1"
               step="0.01"
@@ -362,7 +410,7 @@ export default function DonateFlow() {
           </label>
           {!validAmount && (
             <p className="font-data text-sm mt-2" role="alert">
-              Minimum pledge amount is $1.00.
+              Minimum donation amount is $1.00.
             </p>
           )}
           <div className="flex flex-wrap gap-3 mt-6">
@@ -371,14 +419,14 @@ export default function DonateFlow() {
               disabled={!validAmount || !selectedChannelId || busy}
               onClick={() => confirm('browse')}
             >
-              choose incentives →
+              Choose incentives →
             </button>
             <button
               className="btrl-button btrl-button-outline"
               disabled={!validAmount || !selectedChannelId || busy}
               onClick={() => confirm('review')}
             >
-              just donate {validAmount ? fmt(cents) : ''} + message
+              Just donate {validAmount ? fmt(cents) : ''} + message
             </button>
           </div>
         </div>
@@ -394,21 +442,21 @@ export default function DonateFlow() {
                 disabled={busy}
                 onClick={() => flow.setStep('amount')}
               >
-                edit amount {fmt(draft!.amountCents)}
+                Edit amount {fmt(draft!.amountCents)}
               </button>
               <div className="flex gap-3 flex-1">
                 {(['reward', 'poll', 'goal'] as const).map((category) => (
                   <div
                     key={category}
                     role="meter"
-                    aria-label={`${category} Pool`}
+                    aria-label={POOL_LABELS[category]}
                     aria-valuemin={0}
                     aria-valuemax={draft!.amountCents}
                     aria-valuenow={plan?.usage_cents[category] ?? 0}
                     className="flex-1 font-data text-sm"
                     style={{ color: plan?.overage_cents[category] ? 'var(--red)' : undefined }}
                   >
-                    {category} Pool
+                    {POOL_LABELS[category]}
                     <br />
                     {fmt(plan?.usage_cents[category] ?? 0)} / {fmt(draft!.amountCents)}
                     <div className="h-1 mt-1" style={{ background: 'rgba(239,238,236,.16)' }}>
@@ -428,9 +476,17 @@ export default function DonateFlow() {
               <button
                 className="btrl-button"
                 disabled={over || !plan || busy || !selectedChannelId}
-                onClick={() => void flow.review()}
+                onClick={() => {
+                  // Staged poll edits are ephemeral and never enter the review (#76).
+                  // Warn before discarding them (#80 D8).
+                  if (pollEditsStaged) {
+                    setConfirmReview(true);
+                    return;
+                  }
+                  void flow.review();
+                }}
               >
-                review →
+                Review →
               </button>
             </div>
             {over && (
@@ -440,7 +496,7 @@ export default function DonateFlow() {
                   .map((category) => (
                     <p key={category}>
                       Your {category} selections add up to {fmt(plan!.usage_cents[category])}, more
-                      than your {fmt(draft!.amountCents)} pledge.
+                      than your {fmt(draft!.amountCents)} donation.
                     </p>
                   ))}
                 <button
@@ -449,7 +505,7 @@ export default function DonateFlow() {
                     flow.confirmAmount(Math.max(...Object.values(plan!.usage_cents)), 'browse')
                   }
                 >
-                  raise my donation to {fmt(Math.max(...Object.values(plan!.usage_cents)))}
+                  Raise my donation to {fmt(Math.max(...Object.values(plan!.usage_cents)))}
                 </button>
               </div>
             )}
@@ -471,56 +527,78 @@ export default function DonateFlow() {
                 }}
                 onClick={() => flow.setTab(t)}
               >
-                {t}
+                {TAB_LABELS[t]}
               </button>
             ))}
           </div>
-          {tab === 'rewards' ? <RewardList /> : tab === 'polls' ? <PollList /> : <GoalList />}
+          {tab === 'rewards' ? (
+            <RewardList />
+          ) : tab === 'polls' ? (
+            <PollList onStagedChange={setPollEditsStaged} />
+          ) : (
+            <GoalList />
+          )}
         </>
       ) : (
-        <div className="btrl-panel p-6">
+        <form
+          className="btrl-panel p-6"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void flow.checkout();
+          }}
+        >
           <h2 className="font-mono text-sm tracking-widest uppercase text-d-yellow mb-4">
-            3 · review
+            3 · Review
           </h2>
           <button
+            type="button"
             className="btrl-button btrl-button-outline mb-4"
             disabled={busy}
             onClick={() => flow.setStep('browse')}
           >
-            edit selections
+            Edit selections
           </button>
           <button
+            type="button"
             className="btrl-button btrl-button-outline mb-4 ml-3"
             disabled={busy}
             onClick={() => flow.setStep('amount')}
           >
-            edit amount
+            Edit amount
           </button>
           {plan && (
             <PledgeReview
               plan={plan}
               selections={draft!.selections}
               defaultGoal={flow.defaultGoal}
+              defaultGoalChain={flow.defaultGoalChain}
+              goalRemaining={goalRemaining}
               previewError={flow.previewError}
             />
           )}
           {!plan || over ? (
             <p role="alert">
-              Selections exceed the pledge amount or are invalid. Edit selections or raise the
+              Selections exceed the donation amount or are invalid. Edit selections or raise the
               amount before paying.
             </p>
           ) : null}
-          <label className="block font-data text-sm mb-3">
-            Email address (optional)
+          <div className="block font-data text-sm mb-3">
+            <label htmlFor="donate-email">Email address (required)</label>{' '}
+            <InfoTip
+              text="We use your email to identify your donation, take payment through Stripe, and send your donation email — the link in it unlocks your wallet. We never use it for marketing, never sell it, and share it only with Stripe."
+              link={{ href: '/help#your-data-gdpr', label: 'More in Help' }}
+            />
             <input
+              id="donate-email"
               type="email"
-              aria-label="Email address (optional)"
+              required
+              aria-label="Email address (required)"
               className="block w-full px-3 py-2 mt-1"
               value={flow.email}
               disabled={busy}
               onChange={(e) => flow.setEmail(e.target.value)}
             />
-          </label>
+          </div>
           <label className="block font-data text-sm mb-3">
             Display name (optional; empty = Anonymous)
             <input
@@ -549,29 +627,30 @@ export default function DonateFlow() {
           </p>
           {!flow.reviewReady && !busy && (
             <button
+              type="button"
               className="btrl-button btrl-button-outline mb-3"
               onClick={() => void flow.review()}
             >
-              refresh review
+              Refresh review
             </button>
           )}
           {flow.corrected && (
-            <button className="btrl-button mb-3" onClick={flow.confirmCorrected}>
-              confirm corrected review
+            <button type="button" className="btrl-button mb-3" onClick={flow.confirmCorrected}>
+              Confirm corrected review
             </button>
           )}
           <button
+            type="submit"
             className="btrl-button w-full"
             disabled={
               busy || !flow.reviewReady || !plan || over || flow.corrected || !selectedChannelId
             }
-            onClick={() => void flow.checkout()}
           >
             {busy
-              ? 'checking review...'
-              : `confirm & pay ${fmt(plan?.new_money_cents ?? 0)}${plan?.requires_shipping ? ' + shipping' : ''}`}
+              ? 'Checking review...'
+              : `Confirm & pay ${fmt(plan?.new_money_cents ?? 0)}${plan?.requires_shipping ? ' + shipping' : ''}`}
           </button>
-        </div>
+        </form>
       )}
     </div>
   );

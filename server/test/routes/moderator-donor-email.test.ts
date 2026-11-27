@@ -43,6 +43,10 @@ describe('moderator routes never select/include donor.email', () => {
     '../../routes/moderator.ts',
     '../../routes/identityRoutes.ts',
     '../../services/reversal.ts',
+    '../../services/reversalPolicy.ts',
+    '../../services/spendReversal.ts',
+    '../../services/incentiveReversal.ts',
+    '../../services/walletAdjust.ts',
     '../../services/poolAccounting.ts',
     '../../services/accountingStats.ts',
     '../../services/unusedPool.ts',
@@ -51,7 +55,6 @@ describe('moderator routes never select/include donor.email', () => {
     '../../services/channels.ts',
     '../../services/events.ts',
     '../../services/staffRead.ts',
-    '../../services/rewardFunding.ts',
     '../../services/defaultGoal.ts',
   ])('has no donor.select.email pattern in %s code (comments excluded)', (file) => {
     const path = fileURLToPath(new URL(file, import.meta.url));

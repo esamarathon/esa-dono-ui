@@ -11,10 +11,10 @@ vi.mock('../../src/api/client', () => ({
 }));
 
 import { getOAuthProviders } from '../../src/api/auth';
-import { getCampaign } from '../../src/api/campaign';
+import { getSchedule } from '../../src/api/schedule';
 import { getChannels } from '../../src/api/channels';
 import { getPublicEvents, getPublicEvent } from '../../src/api/events';
-import { getDonor, requestToken } from '../../src/api/donor';
+import { getDonor, getSession, requestToken } from '../../src/api/donor';
 import { getGoals } from '../../src/api/goals';
 import { getPolls } from '../../src/api/polls';
 import { getRewards } from '../../src/api/rewards';
@@ -32,10 +32,17 @@ describe('public API helpers', () => {
     expect(mocks.get).toHaveBeenCalledWith('/auth/providers');
   });
 
-  it('getCampaign returns the campaign payload', async () => {
-    mocks.get.mockResolvedValue({ data: { name: 'x' } });
-    await expect(getCampaign()).resolves.toEqual({ name: 'x' });
-    expect(mocks.get).toHaveBeenCalledWith('/campaign');
+  it('getSchedule returns the computed schedule without a channel by default', async () => {
+    const payload = { live: { game: 'Celeste', players: 'TGH' }, next: null };
+    mocks.get.mockResolvedValue({ data: payload });
+    await expect(getSchedule()).resolves.toEqual(payload);
+    expect(mocks.get).toHaveBeenCalledWith('/schedule', { params: {} });
+  });
+
+  it('getSchedule passes the channel slug as a query param when provided', async () => {
+    mocks.get.mockResolvedValue({ data: { live: null, next: null } });
+    await expect(getSchedule('stream-1')).resolves.toEqual({ live: null, next: null });
+    expect(mocks.get).toHaveBeenCalledWith('/schedule', { params: { channel: 'stream-1' } });
   });
 
   it('getChannels returns the channels array', async () => {
@@ -64,6 +71,12 @@ describe('public API helpers', () => {
     mocks.get.mockResolvedValue({ data: { email: 'a@b.c' } });
     await expect(getDonor()).resolves.toEqual({ email: 'a@b.c' });
     expect(mocks.get).toHaveBeenCalledWith('/donor');
+  });
+
+  it('getSession returns the session probe payload', async () => {
+    mocks.get.mockResolvedValue({ data: { authenticated: false } });
+    await expect(getSession()).resolves.toEqual({ authenticated: false });
+    expect(mocks.get).toHaveBeenCalledWith('/auth/session');
   });
 
   it('requestToken posts the email', async () => {

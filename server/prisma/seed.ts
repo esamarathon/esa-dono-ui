@@ -2,7 +2,8 @@
  * Prisma seed script for development.
  *
  * Creates persistent moderator and admin accounts that survive restarts,
- * along with a banner displaying the moderator key for easy access.
+ * along with a banner displaying the moderator key for easy access, and
+ * installs the default feature flags (disabled; existing toggles preserved).
  *
  * Run via: `npx prisma db seed` (from server/ directory)
  */
@@ -21,6 +22,7 @@ loadEnv({ path: envPath });
 import prisma from '../lib/prisma.js';
 import { availableSlugFrom } from '../lib/slugs.js';
 import { assertCanActivateEvent } from '../services/events.js';
+import { ensureDefaultFeatureFlags } from '../services/featureFlags.js';
 
 const DEV_MODERATOR_EMAIL = 'moderator@localhost';
 const DEV_ADMIN_EMAIL = 'admin@localhost';
@@ -106,6 +108,13 @@ async function main() {
     });
   }
   console.log(`✓ Banner created/updated with moderator and admin keys`);
+
+  // Install the default feature flags so they are visible and toggleable in
+  // the admin UI. Idempotent: existing toggles are preserved on re-seed.
+  await ensureDefaultFeatureFlags();
+  console.log(
+    `✓ Default feature flags installed (SEED_FLAG_* initial states; toggles preserved on re-seed)`,
+  );
 
   const { event, channel } = await ensureActiveEvent();
   console.log(

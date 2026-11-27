@@ -14,13 +14,27 @@ interface ChannelForm {
   slug: string;
   event_id: string;
   is_active: boolean;
+  schedule_slug: string;
+  schedule_stream_id: string;
   default_goals: string[];
 }
 
-const EMPTY: ChannelForm = { name: '', slug: '', event_id: '', is_active: true, default_goals: [] };
+const EMPTY: ChannelForm = {
+  name: '',
+  slug: '',
+  event_id: '',
+  is_active: true,
+  schedule_slug: '',
+  schedule_stream_id: '',
+  default_goals: [],
+};
 
 const SLUG_HELP =
   'Changing a slug breaks overlay bindings and published links, so it is blocked while active.';
+const SCHEDULE_HELP =
+  'Optional. The Crew Corner event slug (for example esa2026) behind the Live / Up next strip on the donation site.';
+const STREAM_HELP =
+  'Optional. The Crew Corner stream id to show on this channel; empty shows the event\u2019s first stream.';
 
 type ChannelModal = 'create' | Channel | null;
 
@@ -62,6 +76,8 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       slug: s.slug,
       event_id: s.event_id,
       is_active: s.is_active,
+      schedule_slug: s.schedule_slug ?? '',
+      schedule_stream_id: s.schedule_stream_id != null ? String(s.schedule_stream_id) : '',
       default_goals: s.default_goals ?? [],
     });
     setModal(s);
@@ -75,6 +91,8 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
       ...(form.slug ? { slug: form.slug } : {}),
       ...(form.event_id ? { event_id: form.event_id } : {}),
       is_active: form.is_active,
+      schedule_slug: form.schedule_slug.trim(),
+      schedule_stream_id: form.schedule_stream_id.trim(),
       ...(modal !== 'create' ? { default_goals: form.default_goals } : {}),
     };
     try {
@@ -141,7 +159,10 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <ShareLinkButton path={`/donate?channel=${s.id}`} />
+                <ShareLinkButton
+                  path={`/donate?channel=${s.id}`}
+                  label={`Copy a link to donate to ${s.name}`}
+                />
                 <button
                   onClick={() => openEdit(s)}
                   className="font-mono text-sm tracking-wider uppercase text-d-yellow hover:text-off-white"
@@ -189,6 +210,38 @@ export default function ChannelsManager({ client }: { client: AxiosInstance }) {
               onChange={(e) => setForm((d) => ({ ...d, slug: e.target.value }))}
             />
             <p className="font-body text-sm text-off-white/55 mt-1">{SLUG_HELP}</p>
+          </div>
+          <div className="mb-3">
+            <label
+              htmlFor="channel_schedule_slug"
+              className="block font-data font-bold text-sm mb-1 text-off-white"
+            >
+              Schedule event slug
+            </label>
+            <input
+              id="channel_schedule_slug"
+              className="w-full px-3 py-2 text-sm"
+              placeholder="esa2026"
+              value={form.schedule_slug}
+              onChange={(e) => setForm((d) => ({ ...d, schedule_slug: e.target.value }))}
+            />
+            <p className="font-body text-sm text-off-white/55 mt-1">{SCHEDULE_HELP}</p>
+          </div>
+          <div className="mb-3">
+            <label
+              htmlFor="channel_schedule_stream_id"
+              className="block font-data font-bold text-sm mb-1 text-off-white"
+            >
+              Schedule stream id
+            </label>
+            <input
+              id="channel_schedule_stream_id"
+              className="w-full px-3 py-2 text-sm"
+              placeholder="empty = the event's first stream"
+              value={form.schedule_stream_id}
+              onChange={(e) => setForm((d) => ({ ...d, schedule_stream_id: e.target.value }))}
+            />
+            <p className="font-body text-sm text-off-white/55 mt-1">{STREAM_HELP}</p>
           </div>
           <div className="mb-3">
             <label className="block font-data font-bold text-sm mb-1 text-off-white">event</label>

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import tiltifyRouter from '../../routes/tiltify.js';
 import { buildTiltifyTotals } from '../../services/webhooks/tiltifyPayload.js';
@@ -18,7 +18,7 @@ import { buildTiltifyTotals } from '../../services/webhooks/tiltifyPayload.js';
  *   `id`, `name`, `options[]`; milestones and matches arrays.
  */
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const rand = () => crypto.randomUUID().replace(/-/g, '').slice(0, 8);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** kollekt `decimal.Parse(..., InvariantCulture)` and layouts `parseFloat` both accept this. */

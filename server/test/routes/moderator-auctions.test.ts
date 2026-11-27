@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterAll } from 'vitest';
+import { beforeAll, describe, it, expect, vi, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 
 vi.mock('../../services/stripe.js', () => ({
@@ -16,9 +16,13 @@ vi.mock('../../services/email.js', () => ({
 }));
 
 import moderatorRouter from '../../routes/moderator.js';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
 
-const prisma = new PrismaClient();
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
+
+const prisma = createDatabaseClient();
 
 function createApp() {
   const app = express();

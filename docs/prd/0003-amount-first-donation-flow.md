@@ -191,14 +191,16 @@ The slice that owns the schema chooses the exact names and shapes.
 2. the primary Channel's list, with only the entries eligible for the donation's Channel;
 3. the eligible goal closest to completion (smallest `target_cents − current_cents`), the Channel's own goals first, then shared goals.
 
-Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A manual or automatic switch for step 3 is deferred to #161 (`wayfinder:deferred`, after this PRD).
+Each goal receives at most `max(0, target_cents − current_cents)` from live values inside the write (#77, #201). Money a goal cannot take continues at step 1 of this order (skipping goals already full), so overshoot is never allowed; if no goal is eligible, the money is Unused pool money. A manual or automatic switch for step 3 is deferred to #161 (`wayfinder:deferred`, after this PRD).
 
 **A3. Polls have no default.** Poll money that no open selection takes is Unused pool money.
 
-**A4. Money freed at fulfillment.** A goal that completes or becomes inactive, or a poll that ends, between pledge and payment frees its money. The same rule runs again on that money:
+**A4. Money freed at fulfillment.** A goal that completes or becomes inactive, a goal that cannot take a selection's whole amount (the #201 cap), or a poll that ends, between pledge and payment frees its money. The same rule runs again on that money:
 
-- goals: the donor's other eligible goals (in proportion), then A2;
+- goals: the donor's other eligible goals (in proportion, repeated until no selected goal has room), then A2;
 - polls: the donor's other open options (in proportion), else Unused pool money.
+
+The chain-placed goal money is always an `auto` row, even when it lands on the donor's own other selections.
 
 **A5. Write-ins.**
 
@@ -231,6 +233,7 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 - On mobile, a sticky balance bar sits above the list.
 - Wallet credit is one muted line in the panel footer. It is spent only through a normal draft pledge.
 - The donor can spend part of the credit. The remainder stays credit and is never auto-allocated.
+- A goal pick is capped at the goal's live remaining need (#201), computed before the oldest-first draw; the unspent credit stays credit.
 - Credit that is positive but cannot be spent (no eligible item) stays visible, with the reason.
 - Choices that are not confirmed live in memory only.
 - "Where your credit came from" lists the history.
@@ -252,7 +255,7 @@ Overshoot is allowed. If no goal is eligible, the money is Unused pool money. A 
 **U2. Assign.**
 
 - A moderator assigns **all** of one category's unused money to one target, in one action.
-- A valid target is an `ACTIVE` option of an open poll, or an active goal that is not complete, of the donation's Channel or shared. Overshoot is allowed, and amounts under $1 are allowed.
+- A valid target is an `ACTIVE` option of an open poll, or an active goal that is not complete, of the donation's Channel or shared. A goal takes at most its remaining need (#201); the remainder stays Unused pool money. Amounts under $1 are allowed.
 - An unassigned donation (no Channel) is blocked until an admin assigns a Channel.
 - A stale amount returns 409.
 - The new row has `source = moderator`, plus `allocated_by` (the moderator's session email, else `'moderator'`, like `moderated_by`) and `allocated_at`.
@@ -565,7 +568,7 @@ A section in `docs/deployment.md` (or a linked doc) covers:
 - **Auto-allocation.**
   - Largest-remainder rounding and its tie rule.
   - One flat set across polls.
-  - The default goal chain (own list, primary list, closest to completion), with overshoot.
+  - The default goal chain (own list, primary list, closest to completion), capped at each goal's remaining need, with the remainder continuing down the chain to Unused pool money.
   - Money freed at fulfillment.
   - A pending write-in gets its share. `votePollTx` rejects a `REJECTED` option.
 - **Reversals.** One test per row of the ADR-0011 §5 table, and one per legacy rule (ADR-0011 §6). Moderator rows return to Unused pool money. A charged-back donation blocks reverse and "mark pending". Test through the Reversal module's interface (slice 0) against the SQLite test database, not with mocked Prisma.

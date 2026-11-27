@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { Prisma } from '@prisma/client';
 import {
+  DEFAULT_MAX_ENTRY_CHARS,
   MIN_SPEND_CENTS,
+  claimAnswerError,
   planPledge,
   type PledgePlan,
   type PledgeItemKind,
@@ -155,9 +157,6 @@ export async function createPledge(input: CreatePledgeInput) {
       throw httpError(400, 'draft_id is required (maximum 128 characters)');
     }
     const pledge = await prisma.$transaction(async (tx) => {
-      // Take SQLite's write lock before any read, so competing draft/Wallet
-      // attempts serialize instead of both trying to upgrade a read lock.
-      await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE draft_id = ${input.draft_id}`;
       const existing = await tx.pendingPledge.findFirst({
         where: {
           draft_id: input.draft_id,
@@ -228,6 +227,9 @@ export async function createPledge(input: CreatePledgeInput) {
                   Math.max(0, reward.quantity_total - reward.quantity_claimed - already),
                 );
           if (quantity === 0) continue;
+          // A labeled CUSTOM reward requires its claim answer (#78), at staging.
+          const answerError = claimAnswerError(item.data, reward);
+          if (answerError) throw httpError(400, answerError);
           quantities.set(reward.id, already + quantity);
           selection = {
             ...selection,
@@ -261,7 +263,7 @@ export async function createPledge(input: CreatePledgeInput) {
               tx,
               data.label,
               'Entry',
-              poll.max_entry_chars ?? 2147483647,
+              poll.max_entry_chars ?? DEFAULT_MAX_ENTRY_CHARS,
             );
             if (!label) throw httpError(400, 'POLL_CUSTOM requires a label');
             corrected = { ...item, data: { label } };
@@ -385,7 +387,6 @@ export async function createCheckoutForPledge(
 
 async function checkoutForPledge(pledgeToken: string, donor?: WalletDonor | null) {
   const pledge = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`UPDATE PendingPledge SET id = id WHERE pledge_token = ${pledgeToken}`;
     const stored = await tx.pendingPledge.findUniqueOrThrow({
       where: { pledge_token: pledgeToken },
       include: { items: true },

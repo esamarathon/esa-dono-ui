@@ -5,12 +5,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 const exec = promisify(execFile);
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const serverDir = fileURLToPath(new URL('../../', import.meta.url));
 let uploadsDir: string;
 let donorId: string;

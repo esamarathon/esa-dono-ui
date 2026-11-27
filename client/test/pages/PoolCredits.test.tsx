@@ -6,6 +6,7 @@ import MyWallet from '../../src/pages/MyWallet';
 import type { CreditAmounts, CreditEvent } from '@dono/shared';
 vi.mock('../../src/api/donor', () => ({
   getDonor: vi.fn(),
+  getSession: vi.fn(),
   getPoolCredits: vi.fn(),
   getPoolCreditEvent: vi.fn(),
   applyPoolCredits: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('../../src/api/pledge', () => ({
 vi.mock('../../src/lib/tracing', () => ({ track: vi.fn(), identifyDonor: vi.fn() }));
 import {
   getDonor,
+  getSession,
   getPoolCredits,
   getPoolCreditEvent,
   applyPoolCredits,
@@ -37,6 +39,9 @@ function creditScenario({
   rewardPriceCents,
   rewardStock,
   pollHistoryCents,
+  rewardType = 'DIGITAL',
+  customTypeLabel = null,
+  rewardTitle = 'Digital reward',
 }: Readonly<{
   walletCents: number;
   outstandingCents: CreditAmounts;
@@ -44,6 +49,9 @@ function creditScenario({
   rewardPriceCents: number;
   rewardStock: number;
   pollHistoryCents: number;
+  rewardType?: string;
+  customTypeLabel?: string | null;
+  rewardTitle?: string;
 }>) {
   const event: CreditEvent = {
     event: { id: 'e1', name: 'ESA Summer', slug: 'summer', ended_at: null },
@@ -54,10 +62,11 @@ function creditScenario({
       rewards: [
         {
           id: 'r1',
-          title: 'Digital reward',
+          title: rewardTitle,
           cost_cents: rewardPriceCents,
-          type: 'DIGITAL',
+          type: rewardType,
           remaining: rewardStock,
+          custom_type_label: customTypeLabel,
           channel: null,
         },
       ],
@@ -127,6 +136,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(applyPoolCredits).mockReset();
+  // MyWallet checks in via the always-200 session probe first (issue #135).
+  vi.mocked(getSession).mockResolvedValue({
+    authenticated: true,
+    donor: { id: 'd1', email: 'donor@example.com', role: 'USER', balance_remaining: 0 },
+  });
 });
 it('unconfirmed choices clear on leaving/re-entering under the same real provider', async () => {
   creditScenario({
@@ -369,4 +383,53 @@ it('routed real provider: visible set/max and whole units, one review/apply, his
   expect(await screen.findByText(/Credits applied/)).toBeInTheDocument();
   fireEvent.click(screen.getByText('Where your credit came from'));
   expect(screen.getByText(/Old poll/)).toBeInTheDocument();
+});
+
+it('collects the claim answer for a labeled CUSTOM reward and carries it per claim (#78)', async () => {
+  creditScenario({
+    walletCents: 0,
+    outstandingCents: { reward: 1000, poll: 0, goal: 0 },
+    availableCents: { reward: 1000, poll: 0, goal: 0 },
+    rewardPriceCents: 1000,
+    rewardStock: 2,
+    pollHistoryCents: 0,
+    rewardType: 'CUSTOM',
+    customTypeLabel: 'Your game pick',
+    rewardTitle: 'Pick the Next Game',
+  });
+  vi.mocked(applyPoolCredits).mockResolvedValue({
+    batch_id: 'batch1',
+    spent_cents: { reward: 1000, poll: 0, goal: 0 },
+    claim_ids: ['claim1'],
+    vote_ids: [],
+    contribution_ids: [],
+    donation_ids: [],
+  });
+  renderPage();
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Pick the Next Game' }));
+  expect(screen.getByText('Your game pick')).toBeInTheDocument();
+  expect(screen.queryByText('(optional)')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+  expect(screen.getByRole('alert')).toHaveTextContent(/Your game pick is required/);
+  expect(screen.getByText(/Add: Pick the Next Game/)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Your game pick'), { target: { value: 'Celeste' } });
+  expect(screen.getByText('7 / 200')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add reward' }));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Review 1 pick' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply credits' }));
+  await waitFor(() => expect(applyPoolCredits).toHaveBeenCalledTimes(1));
+  const request = vi.mocked(applyPoolCredits).mock.calls[0]![1];
+  expect(request.selections).toEqual([
+    {
+      kind: 'REWARD',
+      target_id: 'r1',
+      quantity: 1,
+      unit_price_cents: 1000,
+      reward_type: 'CUSTOM',
+      claim_data: { data: 'Celeste' },
+    },
+  ]);
 });

@@ -378,5 +378,5 @@ curl -X POST http://localhost:3001/api/webhooks/tiltify \
   -H "Content-Type: application/json" \
   -d '{"meta":{"event_type":"donation.completed"},"data":{"id":"test-123","donor_email":"test@example.com","donor_name":"Test","amount":{"value":"10.00"},"comment":"test"}}'
 
-# Simulate via admin UI: visit /admin/simulate
+# Simulate via admin UI: visit /admin/add-donation (route #238)
 ```

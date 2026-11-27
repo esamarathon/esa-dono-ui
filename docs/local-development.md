@@ -13,7 +13,8 @@ cp .env.example .env
 # Edit .env with your Stripe credentials and other values
 
 # Initialize the database
-cd server && npx prisma migrate dev --name init && npx prisma generate && cd ..
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
 cd server && npx prisma db seed && cd ..   # dev moderator/admin accounts + banner (see Dev Seed)
 
 # Start (server on :3001, client on :5173)
@@ -37,6 +38,9 @@ The seed script creates:
 - **Moderator account** (`moderator@localhost`) with role `MODERATOR`
 - **Admin account** (`admin@localhost`) with role `ADMIN`
 - **Banner** at the top of the app displaying the moderator and admin API keys
+- **Default feature flags** (`feedback`, `auctions`), installed disabled so they
+  show up under `/admin/feature-flags`; re-seeding preserves an operator's
+  toggles (see `docs/admin-event-setup.md` § Feature flags)
 - One active Event and an active primary Channel. Newly created Default goal lists
   are empty; re-seeding does not overwrite an operator's ordered list.
 
@@ -47,9 +51,10 @@ pledges add no money and pooled fulfillment creates no Wallet credit. To choose
 fallbacks, update `/api/admin/channels/:id` (or the moderator equivalent) with
 `default_goals: [goalId, …]`: own/shared ids only, in order; inactive/completed entries
 are preserved. See `docs/simulating-donations.md` for the simulator's real API boundaries.
-The amount-first donate UI and backend ship together. The coordinated parent callers
-and cold cross-Channel Kollekt dependency are described in `docs/api-consumers.md`;
-local tests or seeding do not establish the runtime release gates in `docs/deployment.md`.
+The amount-first donate UI and backend ship together. The coordinated parent callers are
+described in `docs/api-consumers.md`; the cold cross-Channel Kollekt dependency there is
+deferred out of 0.3.0. Local tests or seeding do not establish the runtime release gates in
+`docs/deployment.md`.
 
 The banner uses the keys from `MODERATOR_API_KEY` and `ADMIN_API_KEY` env vars (seed defaults:
 raw `dev-moderator-key` and `dev-admin-key`; configure matching backend keys explicitly).

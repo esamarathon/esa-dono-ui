@@ -11,7 +11,7 @@ function fmt(cents: number) {
 
 function timeLeft(endsAt: string): string {
   const ms = new Date(endsAt).getTime() - Date.now();
-  if (ms <= 0) return 'ended';
+  if (ms <= 0) return 'Ended';
   const hours = Math.floor(ms / 3_600_000);
   const minutes = Math.floor((ms % 3_600_000) / 60_000);
   if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h left`;
@@ -64,10 +64,10 @@ function AuctionCard({ auction, onBid }: { auction: Auction; onBid: () => void }
         <h2 className="font-data font-bold text-lg text-off-white">{auction.title}</h2>
         {isHighestBidder && (
           <span
-            className="font-data text-xs font-bold px-2 py-0.5 rounded-sm"
+            className="font-data text-sm font-bold px-2 py-0.5 rounded-sm"
             style={{ color: 'var(--green)', background: 'rgba(92,189,125,.16)' }}
           >
-            you're the highest bidder
+            You're the highest bidder
           </span>
         )}
       </div>
@@ -76,7 +76,7 @@ function AuctionCard({ auction, onBid }: { auction: Auction; onBid: () => void }
       )}
       <div className="flex justify-between items-center mb-3">
         <div>
-          <p className="font-data text-sm text-off-white/55">current bid</p>
+          <p className="font-data text-sm text-off-white/55">Current bid</p>
           <p className="font-display text-2xl text-d-yellow">
             {auction.current_bid_cents !== null
               ? fmt(auction.current_bid_cents)
@@ -98,13 +98,13 @@ function AuctionCard({ auction, onBid }: { auction: Auction; onBid: () => void }
             onChange={(e) => setAmount(e.target.value)}
           />
           <button onClick={submit} disabled={busy} className="btrl-button">
-            {busy ? 'bidding…' : 'bid'}
+            {busy ? 'Bidding…' : 'Bid'}
           </button>
         </div>
       )}
       {auction.min_next_bid_cents !== null && isOpen && (
-        <p className="font-data text-xs text-off-white/40 mt-1">
-          minimum next bid: {fmt(auction.min_next_bid_cents)}
+        <p className="font-data text-sm text-off-white/40 mt-1">
+          Minimum next bid: {fmt(auction.min_next_bid_cents)}
         </p>
       )}
       {error && (
@@ -153,7 +153,7 @@ export default function Auctions() {
   if (!isEnabled) {
     return (
       <div className="max-w-3xl mx-auto p-8">
-        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <h1 className="font-display text-4xl uppercase mb-2">Auctions</h1>
         <p className="font-body text-sm text-off-white/55">Auctions are not currently enabled.</p>
       </div>
     );
@@ -162,7 +162,7 @@ export default function Auctions() {
   if (error) {
     return (
       <div className="max-w-3xl mx-auto p-8">
-        <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+        <h1 className="font-display text-4xl uppercase mb-2">Auctions</h1>
         <p className="font-body text-sm" style={{ color: 'var(--red)' }}>
           {error}
         </p>
@@ -172,7 +172,7 @@ export default function Auctions() {
 
   return (
     <div className="max-w-3xl mx-auto p-8">
-      <h1 className="font-display text-4xl uppercase mb-2">auctions</h1>
+      <h1 className="font-display text-4xl uppercase mb-2">Auctions</h1>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Bidding requires a verified email and at least one prior donation. Bids are commitments, not
         wallet charges — the winner is invoiced via a payment link after the auction closes.

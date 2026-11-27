@@ -15,7 +15,7 @@ import {
   unusedTargetsTx,
   undoUnusedTx,
 } from '../services/unusedPool.js';
-import { moderateCustomEntryTx } from '../services/reversal.js';
+import { moderateCustomEntryTx } from '../services/incentiveReversal.js';
 import {
   createReward,
   updateReward,

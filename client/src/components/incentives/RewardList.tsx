@@ -1,29 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Card from '../Card';
-import Modal from '../Modal';
 import LoadingSpinner from '../LoadingSpinner';
 import ShareLinkButton from '../ShareLinkButton';
+import InfoTip from '../InfoTip';
 import { useDraftPledge } from '../../context/DraftPledgeContext';
+import { rewardTypeDefinition } from '../../lib/rewardTypeDefinitions';
+import { claimFieldsFor } from '../../lib/rewardClaimFields';
+import RewardClaimModal from './RewardClaimModal';
 import type { Reward } from '../../types';
 
 function fmt(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-interface FieldDef {
-  key: string;
-  label: string;
-  required: boolean;
-}
-
-// PHYSICAL rewards intentionally collect NO fields here. The donor adds the
-// item to the cart and completes Stripe Checkout to pay; no shipping address
-// is captured or stored by the platform.
-const FIELDS: Record<string, FieldDef[]> = {
-  SHOUTOUT: [{ key: 'message', label: 'Shoutout Message', required: false }],
-  PHYSICAL: [],
-  DIGITAL: [],
-};
+// Field-carrying rewards stay quantity-1 from this donor UI: they show a plain
+// "remove" button in the cart, never the quantity stepper (#50/#78).
+const fieldsFor = claimFieldsFor;
 
 export default function RewardList() {
   const {
@@ -36,19 +28,23 @@ export default function RewardList() {
     decrementRewardQuantity,
   } = useDraftPledge();
   const [claiming, setClaiming] = useState<Reward | null>(null);
-  const [formData, setFormData] = useState<Record<string, string>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear a pending flash highlight on unmount: it would otherwise set state
+  // after the component is gone.
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   if (loading) return <LoadingSpinner />;
 
   const inCart = (id: string) => cart.some((i) => i.kind === 'REWARD' && i.target_id === id);
   const cartQuantity = (id: string) =>
     cart.find((i) => i.kind === 'REWARD' && i.target_id === id)?.quantity ?? 1;
-
-  const fieldsFor = (reward: Reward): FieldDef[] =>
-    FIELDS[reward.type] ?? [
-      { key: 'data', label: reward.custom_type_label ?? 'Additional Info', required: false },
-    ];
 
   const commitAdd = (reward: Reward, data: Record<string, string>) => {
     addToCart({
@@ -59,7 +55,8 @@ export default function RewardList() {
       data,
     });
     setFlashId(reward.id);
-    setTimeout(() => setFlashId((id) => (id === reward.id ? null : id)), 300);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId((id) => (id === reward.id ? null : id)), 300);
   };
 
   const handleAddClick = (reward: Reward) => {
@@ -69,18 +66,11 @@ export default function RewardList() {
       return;
     }
     setClaiming(reward);
-    setFormData({});
-  };
-
-  const handleModalSubmit = () => {
-    if (!claiming) return;
-    commitAdd(claiming, formData);
-    setClaiming(null);
   };
 
   return (
     <div>
-      <h2 className="font-display text-3xl uppercase text-off-white mb-2">rewards</h2>
+      <h2 className="font-display text-3xl uppercase text-off-white mb-2">Rewards</h2>
       <p className="font-body text-sm text-off-white/55 mb-6">
         Choose rewards from your reward Pool. Each reward costs a fixed amount.
       </p>
@@ -109,7 +99,7 @@ export default function RewardList() {
                       className="inline-block font-mono text-sm tracking-wider uppercase px-2 py-0.5 rounded-sm mt-2"
                       style={{ background: 'rgba(224,90,90,.2)', color: 'var(--red)' }}
                     >
-                      no longer available
+                      No longer available
                     </span>
                   )}
                   <span
@@ -118,6 +108,14 @@ export default function RewardList() {
                   >
                     {r.type}
                   </span>
+                  {rewardTypeDefinition(r.type) && (
+                    <span className="inline-flex align-middle ml-1">
+                      <InfoTip
+                        text={rewardTypeDefinition(r.type)!}
+                        link={{ href: '/help#reward-types', label: 'More in Help' }}
+                      />
+                    </span>
+                  )}
                   {r.quantity_total !== null && (
                     <span className="font-mono text-sm text-off-white/55 ml-2">
                       {r.quantity_total - r.quantity_claimed} left
@@ -127,13 +125,16 @@ export default function RewardList() {
                 <div className="text-right ml-4">
                   <p className="font-display text-2xl text-d-yellow">{fmt(r.cost_cents)}</p>
                   <div className="flex items-center justify-end gap-2 mt-2">
-                    <ShareLinkButton path={`/rewards?reward=${r.id}`} />
+                    <ShareLinkButton
+                      path={`/rewards?reward=${r.id}`}
+                      label="Copy a link that starts a donation with this reward selected"
+                    />
                     {inCart(r.id) ? (
                       fieldsFor(r).length === 0 ? (
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => decrementRewardQuantity(r.id)}
-                            aria-label="decrease quantity"
+                            aria-label="Decrease quantity"
                             className="btrl-button btrl-button-outline text-sm w-8"
                           >
                             -
@@ -147,7 +148,7 @@ export default function RewardList() {
                               r.quantity_total !== null &&
                               cartQuantity(r.id) >= r.quantity_total - r.quantity_claimed
                             }
-                            aria-label="increase quantity"
+                            aria-label="Increase quantity"
                             className={`btrl-button text-sm w-8 ${flashId === r.id ? 'animate-add-flash' : ''}`}
                           >
                             +
@@ -158,7 +159,7 @@ export default function RewardList() {
                           onClick={() => removeFromCart('REWARD', r.id)}
                           className={`btrl-button btrl-button-outline text-sm ${flashId === r.id ? 'animate-add-flash' : ''}`}
                         >
-                          remove
+                          Remove
                         </button>
                       )
                     ) : (
@@ -167,7 +168,7 @@ export default function RewardList() {
                         disabled={soldOut || unavailable}
                         className="btrl-button text-sm"
                       >
-                        {soldOut ? 'sold out' : 'add'}
+                        {soldOut ? 'Sold out' : 'Add'}
                       </button>
                     )}
                   </div>
@@ -182,33 +183,21 @@ export default function RewardList() {
       </div>
 
       {claiming && (
-        <Modal title={`add: ${claiming.title}`} onClose={() => setClaiming(null)}>
-          <p className="font-body text-sm text-off-white/55 mb-3">
-            This will use your reward Pool for{' '}
-            <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
-          </p>
-          {fieldsFor(claiming).map((f) => (
-            <div className="mb-3" key={f.key}>
-              <label className="block font-data font-bold text-sm mb-1 text-off-white">
-                {f.label}{' '}
-                {!f.required && <span className="text-off-white/40 font-normal">(optional)</span>}
-              </label>
-              <input
-                className="w-full px-3 py-2 text-sm"
-                value={formData[f.key] || ''}
-                onChange={(e) => setFormData((d) => ({ ...d, [f.key]: e.target.value }))}
-              />
-            </div>
-          ))}
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setClaiming(null)} className="btrl-button btrl-button-outline">
-              cancel
-            </button>
-            <button onClick={handleModalSubmit} className="btrl-button">
-              add selection
-            </button>
-          </div>
-        </Modal>
+        <RewardClaimModal
+          reward={claiming}
+          intro={
+            <p className="font-body text-sm text-off-white/55 mb-3">
+              This will use your reward Pool for{' '}
+              <strong className="text-d-yellow">{fmt(claiming.cost_cents)}</strong>.
+            </p>
+          }
+          submitLabel="Add reward"
+          onSubmit={(data) => {
+            commitAdd(claiming, data);
+            setClaiming(null);
+          }}
+          onClose={() => setClaiming(null)}
+        />
       )}
     </div>
   );

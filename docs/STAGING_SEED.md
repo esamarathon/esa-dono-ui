@@ -9,6 +9,10 @@ The seed script (`server/prisma/seed.ts`) creates:
 - ✅ Moderator account at `moderator@localhost`
 - ✅ Admin account at `admin@localhost`
 - ✅ Broadcast banner displaying current API keys from env vars
+- ✅ Default feature flags (`feedback`, `auctions`, `donation-acknowledgements`),
+  installed with their `SEED_FLAG_*` env initial states (disabled when unset);
+  operator toggles survive re-seeding (but not the nightly volume drop — set
+  the `SEED_FLAG_*` variables in the host env to keep flags on across resets)
 
 These accounts and the banner persist across database restarts, including staging's daily resets.
 
@@ -164,9 +168,14 @@ Wait a moment and retry - the database might be in use by background tasks.
 2. Run `seed-dev.sh` from a helper container on the app network. It creates
    the demo Channels, incentives and donations and, when `SEED_RABBITMQ_URL`
    is set, the RabbitMQ Destination ("MQ Server", exchange `tiltify`, routing
-   key `dono-platform.donation`).
+   key `dono-platform.donation`). When `DEMO_SCHEDULE_SLUG` is set, it also
+   stores that Crew Corner event slug (and `DEMO_SCHEDULE_STREAM_ID`, when set,
+   the stream id) on both demo Channels, so the "Live / Up next" strip
+   survives the reset; the event must be published on the configured
+   `SCHEDULE_SOURCE_BASE_URL` and have current or future rows or the strip
+   still hides.
 3. Run `prisma/seed.ts` in the backend container. It creates the dev accounts,
-   the key banner, and one active Event with a primary Channel (Main Marathon).
+   the key banner, and one active Event with a primary Channel (Stream 1).
 
 To keep the staging RabbitMQ Destination across resets, add this line to the
 host's `.env`. The broker is the `staging-rabbitmq` container, reachable as

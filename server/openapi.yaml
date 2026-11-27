@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.3.0'
+  version: '0.13.0'
 
 servers:
   - url: /api
@@ -86,6 +86,7 @@ servers:
 
 tags:
   - name: Health
+  - name: Schedule
   - name: Campaign
   - name: Donor
   - name: Auth
@@ -97,6 +98,8 @@ tags:
   - name: Webhook
   - name: Admin
   - name: Moderator
+  - name: Feedback
+    description: Public feedback widget (POST, gated on the `feedback` feature flag) and the admin-only resolver queue
   - name: Tiltify
     description: Tiltify-compatible read API for kollekt and esa-layouts-v2 (PRD-0002 §R)
 
@@ -127,30 +130,127 @@ paths:
                   db: { enum: [false] }
                   error: { type: string }
 
-  # ─── Campaign ───
-  /campaign:
+  # ─── Schedule ───
+  /schedule:
     get:
-      tags: [Campaign]
-      summary: Get campaign totals
+      tags: [Schedule]
+      summary: Live / Up next schedule slots for the donor-site strip
+      description: >-
+        The computed current and next slot of a Channel's schedule (Crew
+        Corner's published schedule API,
+        `{SCHEDULE_SOURCE_BASE_URL}/api/v1/events/{eventSlug}/schedule`,
+        fetched and cached server-side; the browser never calls the schedule
+        source) and, while the
+        `donation-acknowledgements` feature flag is on, the Event's recent
+        donations for the strip's brief acknowledgements (computed fresh per
+        request, outside the timetable cache). Unclear states — no Channel,
+        no single active Event with a primary Channel, no configured slug,
+        empty schedule or an ended/failing one — return nulls and carry no
+        acknowledgements.
+      parameters:
+        - name: channel
+          in: query
+          required: false
+          description: >-
+            Channel slug. When absent, the primary Channel of the single active
+            Event is used; with zero or several active Events the result is
+            nulls.
+          schema:
+            type: string
       responses:
         '200':
-          description: Campaign stats
+          description: Computed slots; null when the strip must render nothing
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  name: { type: string }
-                  description: { type: string }
-                  amount_raised:
-                    type: object
-                    description: One overall total. Counts COMPLETED and REFUNDED donations (refunds go to the donor's wallet), not CHARGEBACK or PENDING; hidden donations count.
-                    properties:
-                      value: { type: string, description: 'Dollars formatted string' }
-                  goal:
-                    type: object
-                    properties:
-                      value: { type: string }
+                  live:
+                    allOf:
+                      - $ref: '#/components/schemas/ScheduleSlot'
+                    nullable: true
+                    description: The item whose planned slot contains now
+                  next:
+                    allOf:
+                      - $ref: '#/components/schemas/ScheduleSlot'
+                    nullable: true
+                    description: The first item starting after now
+                  recent_donations:
+                    type: array
+                    description: >-
+                      The Event's ack-eligible donations (the money-counted
+                      statuses) of the last minute, for the strip's donation
+                      acknowledgements. Present only while the
+                      `donation-acknowledgements` feature flag is on and the
+                      strip renders; omitted otherwise (the schedule itself is
+                      never gated).
+                    items:
+                      $ref: '#/components/schemas/ScheduleRecentDonation'
+        '500':
+          description: Schedule lookup failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+
+  # ─── Campaign ───
+  /campaign:
+    get:
+      tags: [Campaign]
+      summary: Get a donation total (overall, per Event, or per Channel)
+      description: >-
+        The money total for API consumers (#148 amendment). The donor site does not
+        display it; the stream overlay owns the public fundraising display. Without a
+        scope parameter this is the deployment-wide total. There is no goal. The
+        pre-0.10.0 shape (name, description, amount_raised, goal) is gone.
+      parameters:
+        - name: event
+          in: query
+          required: false
+          description: >-
+            Event slug. Returns that Event's total: its assigned donations only (an
+            unassigned donation counts in the overall total). The slug resolves whether
+            the Event is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          description: >-
+            Channel slug. Returns that Channel's total. The slug resolves whether the
+            Channel is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Donation total for the requested scope
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total_raised_cents]
+                properties:
+                  total_raised_cents:
+                    type: integer
+                    description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping is excluded. Same rule as GET /api/admin/stats.
+        '400':
+          description: Both event and channel given, or a scope parameter is empty, repeated, or not a plain slug string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+        '404':
+          description: No Event or Channel with that slug
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
 
   /campaign/broadcast:
     get:
@@ -327,6 +427,33 @@ paths:
           description: Rate limit exceeded
 
   /auth/session:
+    get:
+      tags: [Auth]
+      summary: Read-only session probe
+      description: |
+        Anonymous-tolerant login check for the SPA. ALWAYS answers 200 — "no
+        session" is an expected outcome, not an error. An anonymous visitor
+        gets `{ authenticated: false }`; a signed-in donor gets a small
+        identity payload. Never mutates state.
+      responses:
+        '200':
+          description: Session state (200 even without a session)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+                  donor:
+                    type: object
+                    description: Present only when authenticated
+                    required: [id, email, role, balance_remaining]
+                    properties:
+                      id: { type: string, format: uuid }
+                      email: { type: string, format: email }
+                      role: { type: string, enum: [USER, MODERATOR, ADMIN] }
+                      balance_remaining: { type: integer }
     post:
       tags: [Auth]
       summary: Exchange a magic token for an httpOnly session cookie
@@ -498,7 +625,13 @@ paths:
                 channel_id:
                   type: string
                   description: Active Channel the donor spends on. Required.
-                claim_data: {}
+                claim_data:
+                  description: >-
+                    The claim answer, keyed by the collecting client (e.g. the answer
+                    field or the shoutout message). A CUSTOM reward whose Custom Label
+                    (`custom_type_label`) is set requires a non-blank answer; the answer
+                    is capped at 200 characters. The same answer is stored on every
+                    unit row of a multi-unit claim.
                 quantity:
                   type: integer
                   minimum: 1
@@ -508,7 +641,7 @@ paths:
         '200':
           description: Claim created
         '400':
-          description: Insufficient balance / sold out / physical reward; `channel_id is required`; or the reward is not available on this Channel (nothing is debited or written)
+          description: Insufficient balance / sold out / physical reward; blank claim answer on a labeled CUSTOM reward, or a claim answer over 200 characters; `channel_id is required`; or the reward is not available on this Channel (nothing is debited or written)
         '404':
           description: Reward not found or inactive; Channel not found or inactive
         '401':
@@ -626,7 +759,9 @@ paths:
       summary: Contribute to a fund goal
       description: >-
         Spends Wallet credit on one Channel (ADR-0012). The goal must be available on
-        `channel_id`: owned by that Channel, or shared by the Channel's Event.
+        `channel_id`: owned by that Channel, or shared by the Channel's Event. A goal
+        takes at most its live remaining need (#201); money that does not fit stays in
+        the wallet.
       security: [{ DonorSession: [] }, { DonorBearer: [] }]
       parameters:
         - name: id
@@ -647,7 +782,17 @@ paths:
                 amount_cents: { type: integer, minimum: 100 }
       responses:
         '200':
-          description: Contribution recorded
+          description: Contribution recorded, capped at the goal's remaining need
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, cost]
+                properties:
+                  success: { type: boolean }
+                  cost:
+                    type: integer
+                    description: Cents actually placed. 0 means the goal already reached its target; the wallet is not debited.
         '400':
           description: Validation error / insufficient balance; `channel_id is required`; or the goal is not available on this Channel (nothing is debited or written)
         '404':
@@ -1184,7 +1329,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [goal]
+                required: [goal, chain]
                 properties:
                   goal:
                     type: object
@@ -1193,6 +1338,17 @@ paths:
                     properties:
                       id: { type: string }
                       title: { type: string }
+                  chain:
+                    type: array
+                    maxItems: 5
+                    description: Up to five goals that would take goal-Pool money, in resolver order, each with its live remaining need.
+                    items:
+                      type: object
+                      required: [id, title, remaining_cents]
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        remaining_cents: { type: integer, minimum: 0 }
         '404':
           description: Unknown or inactive Channel
         '429':
@@ -2297,6 +2453,10 @@ paths:
                   type: string
                   format: date-time
                   description: Optional; backdates the created Donation's created_at to when the donation actually occurred (e.g. on the external platform). Defaults to now.
+                send_email:
+                  type: boolean
+                  default: true
+                  description: Set false for synthetic/simulator donors whose addresses are undeliverable (e.g. @demo.test) so the magic-link email is not sent; the response still returns the token. Real recorded donations keep the default.
       responses:
         '200':
           description: Donation added
@@ -3005,6 +3165,105 @@ paths:
         '200':
           description: Cleared
 
+  /admin/feedback:
+    get:
+      tags: [Feedback]
+      summary: List feedback reports for the resolver queue
+      description: Admin-only. Reports carry the sender's page state, so this never appears on moderator routes.
+      security: [{ AdminKey: [] }]
+      parameters:
+        - in: query
+          name: filter
+          schema: { type: string, enum: [open, done, all], default: open }
+          description: open = NEW + SEEN; done = DONE + DECLINED
+      responses:
+        '200':
+          description: Open count plus up to 500 reports, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  open_count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedbackQueueItem' }
+
+  /admin/feedback/{id}:
+    get:
+      tags: [Feedback]
+      summary: One report with its full diagnostics record
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: The queue item plus user_agent and the parsed diagnostics (null when not captured)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackQueueItem' }
+        '404':
+          description: Unknown report id
+    patch:
+      tags: [Feedback]
+      summary: Resolve a report (the shared parse/apply write the CLI also uses)
+      description: >
+        Answering (DONE/DECLINED) stamps resolved_by/resolved_at; reopening
+        (NEW/SEEN) clears the stamp. The CLI calls the same helpers.
+      security: [{ AdminKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [NEW, SEEN, DONE, DECLINED] }
+                resolution_note:
+                  type: string
+                  description: The visible answer the report ends in, including "no, because"
+                resolution_pr:
+                  type: string
+                  description: http(s) PR link, when one exists
+      responses:
+        '200':
+          description: Updated
+        '400':
+          description: Invalid status, over-long note or non-http(s) PR link
+
+  /admin/feedback/{id}/seen:
+    post:
+      tags: [Feedback]
+      summary: Mark a NEW report SEEN (a no-op beyond that state)
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: Marked
+
+  /admin/feedback/{id}/screenshot:
+    get:
+      tags: [Feedback]
+      summary: The stored screenshot (admin-only)
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: PNG/JPEG bytes, typed from the stored magic bytes
+        '404':
+          description: No screenshot was captured, or the file is gone
+
+  /admin/feedback/{id}/snapshot:
+    get:
+      tags: [Feedback]
+      summary: The stored DOM snapshot (admin-only)
+      description: >
+        text/html served under a `sandbox` Content-Security-Policy: it renders
+        with the page's real values, never runs scripts, and cannot navigate away.
+      security: [{ AdminKey: [] }]
+      responses:
+        '200':
+          description: The snapshot HTML
+        '404':
+          description: No snapshot was captured, or the file is gone
+
   /admin/destinations:
     get:
       tags: [Admin]
@@ -3073,11 +3332,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '201':
-          description: Endpoint created (secret included on creation only)
+          description: Destination created (copy the secret now; only create and rotate disclose it)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '400':
           description: Validation error
 
@@ -3134,7 +3393,9 @@ paths:
                 verify_ssl: { type: boolean }
                 is_active: { type: boolean }
                 description: { type: string }
-                amqp_url: { type: string }
+                amqp_url:
+                  type: string
+                  description: 'Omit to keep the stored URL. A password of **** preserves the stored password (or no password) while applying other URL changes.'
                 amqp_exchange: { type: string }
                 amqp_routing_key:
                   { type: string, description: 'Required for NATIVE RabbitMQ Destinations only' }
@@ -3145,7 +3406,11 @@ paths:
                   description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
       responses:
         '200':
-          description: Endpoint updated
+          description: Destination updated (the signing secret is unchanged and never returned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDestination'
         '400':
           description: Validation error
         '404':
@@ -3163,11 +3428,11 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: New secret returned
+          description: New secret returned once; copy it before closing the dialog
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookDestination'
+                $ref: '#/components/schemas/WebhookDestinationWithSecret'
         '404':
           description: Endpoint not found
 
@@ -4467,7 +4732,7 @@ paths:
           }
       responses:
         '200':
-          description: All category unused cents and eligible targets; positive cents, overshoot and no age limit
+          description: All category unused cents and eligible targets; positive cents, goals capped at their remaining need, no age limit
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UnusedPicker' }
@@ -4603,6 +4868,52 @@ paths:
             description: Event not ended or converted credit consumed by live post-end moderator assignments,
           }
 
+  # ─── Feedback ───
+  /feedback:
+    post:
+      tags: [Feedback]
+      summary: Submit feedback from the floating widget (multipart)
+      description: >
+        Gated on the `feedback` feature flag (404 when disabled) and rate-limited
+        per IP. Multipart: text, metadata (JSON), optional screenshot (jpeg/png),
+        optional snapshot (HTML), optional diagnostics (JSON). The row is
+        persisted first (feedback queue), then Discord and email notifications
+        are best-effort: they never fail the sender's request. Sensitive
+        metadata keys (anything resembling email/token) are stripped.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 5000 }
+                metadata:
+                  type: string
+                  description: JSON blob — url, donor_id, channel_id, channel_name, viewport, cart_summary
+                scrollY:
+                  { type: string, description: Decimal string of the page scroll at capture time }
+                screenshot: { type: string, format: binary }
+                snapshot: { type: string, format: binary }
+                diagnostics:
+                  type: string
+                  description: Bounded client error record; re-validated server-side, dropped when malformed
+      responses:
+        '200':
+          description: Report stored (id + FB-<short id> ref); notifications may still have failed silently
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  id: { type: string }
+                  ref: { type: string, example: FB-1a2b3c4d }
+        '400': { description: Missing/over-long text or an invalid screenshot type }
+        '404': { description: The feedback feature flag is disabled }
+        '413': { description: Multipart body over the screenshot+snapshot cap }
+
 components:
   responses:
     PaymentRefundResult:
@@ -4655,6 +4966,29 @@ components:
       scheme: bearer
       description: '`Authorization: Bearer <magic_token>` (or `donor_<magic_token>`), for non-browser clients.'
   schemas:
+    ScheduleSlot:
+      type: object
+      required: [game, players]
+      description: One slot of the donor strip's schedule (game and players only)
+      properties:
+        game: { type: string }
+        players: { type: string }
+    ScheduleRecentDonation:
+      type: object
+      required: [id, display_name, amount_cents, created_at]
+      description: >-
+        One donation the donor-site strip may acknowledge (#250): an Event
+        donation of the last minute that counts toward money totals. The
+        donor's comment is never included.
+      properties:
+        id: { type: string }
+        display_name:
+          type: string
+          description: >-
+            Display name after the hidden/blank mapping: a hidden donation or
+            a blank name reads "Anonymous".
+        amount_cents: { type: integer, description: 'Current amount in integer cents' }
+        created_at: { type: string, format: date-time }
     SpendReversalPreview:
       type: object
       required: [destinations]
@@ -5015,6 +5349,12 @@ components:
                           cost_cents: { type: integer, minimum: 1 }
                           type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
                           remaining: { type: integer, minimum: 1, nullable: true }
+                          custom_type_label:
+                            type: string
+                            nullable: true
+                            description: >-
+                              The CUSTOM answer field's label; when set, the claim
+                              answer is required (maximum 200 characters).
                 polls:
                   type: array
                   items:
@@ -5117,6 +5457,10 @@ components:
             quantity: { type: integer, minimum: 1, maximum: 1000 }
             unit_price_cents: { type: integer, minimum: 1 }
             reward_type: { type: string, enum: [DIGITAL, SHOUTOUT, CUSTOM] }
+            claim_data:
+              description: >-
+                The claim answer for this pick, required when the reward's Custom Label
+                is set (maximum 200 characters); shared across whole units.
         - type: object
           required: [kind, target_id, poll_id, amount_cents]
           properties:
@@ -5696,16 +6040,43 @@ components:
               slug: { type: string }
               event_id: { type: string }
               is_active: { type: boolean }
+    FeedbackQueueItem:
+      type: object
+      description: One feedback report for the admin resolver queue. Diagnostics hold client errors and failed request lines only — never form values, bodies, or secrets in URLs.
+      properties:
+        id: { type: string }
+        ref: { type: string, example: FB-1a2b3c4d }
+        message: { type: string }
+        page_url: { type: string }
+        route: { type: string }
+        viewport: { type: string }
+        scroll_y: { type: integer }
+        status: { type: string, enum: [NEW, SEEN, DONE, DECLINED] }
+        created_at: { type: string, format: date-time }
+        sender:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            email: { type: string, nullable: true }
+        has_screenshot: { type: boolean }
+        has_snapshot: { type: boolean }
+        diagnostics_error_count: { type: integer }
+        resolution_note: { type: string }
+        resolution_pr: { type: string }
+        resolved_by: { type: string, nullable: true }
+        resolved_at: { type: string, format: date-time, nullable: true }
     WebhookDestination:
       type: object
       properties:
         id: { type: string }
         url: { type: string }
-        secret:
-          {
-            type: string,
-            description: 'Returned in full by the admin API (create, list, update); see #127. Use rotate-secret to replace it.',
-          }
+        has_secret:
+          type: boolean
+          description: 'Whether a signing secret is set. The secret itself is omitted except on create and rotate-secret (#127).'
+        has_amqp_url:
+          type: boolean
+          description: 'Whether an AMQP URL is configured.'
         is_active: { type: boolean }
         event_types:
           type: array
@@ -5733,7 +6104,7 @@ components:
           {
             type: string,
             nullable: true,
-            description: 'Required for RabbitMQ endpoints. amqp:// or amqps://',
+            description: 'amqp:// or amqps:// URL with the password masked as **** (#127). User, host, port, vhost and query are preserved. Null when absent or invalid.',
           }
         amqp_exchange:
           {
@@ -5753,6 +6124,15 @@ components:
           description: 'NATIVE: our envelope {id,type,created_at,data}. TILTIFY: bare Tiltify-v5 objects for kollekt and esa-layouts-v2; requires destination_type RABBITMQ (400 otherwise); ignores event_types and amqp_routing_key (routing keys are <channel-slug>.donation and <slug>.fact.updated); exchange defaults to tiltify.'
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    WebhookDestinationWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/WebhookDestination'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: 'Disclosed only on create and rotate-secret. Copy it then; list and update never return it.'
     WebhookDelivery:
       type: object
       properties:

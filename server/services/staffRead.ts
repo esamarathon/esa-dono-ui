@@ -1,7 +1,12 @@
 import type { Prisma } from '@prisma/client';
-import { readDonationAccountingTx } from './poolAccounting.js';
-import { readRewardFundingTx } from './rewardFunding.js';
-import { claimStatusReasonTx, previewDonationReversalTx } from './reversal.js';
+import {
+  liveClaimWhere,
+  liveRowWhere,
+  readDonationAccountingTx,
+  readRewardFundingTx,
+} from './poolAccounting.js';
+import { previewDonationReversalTx } from './reversal.js';
+import { claimStatusReasonTx } from './spendReversal.js';
 import type { previewPoolShrinkTx } from './paymentRefundShrink.js';
 
 type Tx = Prisma.TransactionClient;
@@ -13,8 +18,7 @@ export async function incentiveAllocationTx(tx: Tx, kind: 'reward' | 'poll' | 'g
     const claims = await tx.rewardClaim.findMany({
       where: {
         reward_id: id,
-        reversed_at: null,
-        status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
+        ...liveClaimWhere(),
       },
     });
     count = claims.length;
@@ -28,11 +32,11 @@ export async function incentiveAllocationTx(tx: Tx, kind: 'reward' | 'poll' | 'g
     const rows =
       kind === 'poll'
         ? await tx.pollVote.findMany({
-            where: { poll_id: id, reversed_at: null },
+            where: { poll_id: id, ...liveRowWhere() },
             select: { source: true, amount_cents: true },
           })
         : await tx.fundContribution.findMany({
-            where: { goal_id: id, reversed_at: null },
+            where: { goal_id: id, ...liveRowWhere() },
             select: { source: true, amount_cents: true },
           });
     count = rows.length;
@@ -178,9 +182,7 @@ export async function donationActionReasonsTx(tx: Tx, id: string) {
 /** All admin records, live-only moderator records; own donation null names never fall back. */
 export async function readStaffClaimsTx(tx: Tx, liveOnly = false) {
   const claims = await tx.rewardClaim.findMany({
-    where: liveOnly
-      ? { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } }
-      : {},
+    where: liveOnly ? liveClaimWhere() : {},
     include: {
       reward: true,
       donation: { select: { donor_name: true } },

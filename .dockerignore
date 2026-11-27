@@ -6,6 +6,8 @@ client/node_modules
 # Build output
 client/dist
 client/build
+server/generated
+server/prisma/postgresql/schema.prisma
 
 # Local databases
 server/dev.db

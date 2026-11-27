@@ -4,7 +4,13 @@ import { httpError } from '../lib/httpError.js';
 import { withWebhooks } from './webhooks/outbox.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 import { previewPoolShrinkTx, applyPoolShrinkTx } from './paymentRefundShrink.js';
-import { confirmedRewardType, readRewardFundingTx } from './rewardFunding.js';
+import {
+  assertNoRequestedPaymentRefundTx,
+  confirmedRewardType,
+  hasRequestedPaymentRefundTx,
+  liveDirectClaimWhere,
+  readRewardFundingTx,
+} from './poolAccounting.js';
 import {
   createPaymentRefund,
   listPaymentRefunds,
@@ -14,9 +20,6 @@ import {
 } from './stripe.js';
 
 type Tx = Prisma.TransactionClient;
-async function lock(tx: Tx) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
-}
 export async function getPaymentRefundTx(tx: Tx, id: string) {
   const record = await tx.paymentRefund.findUnique({ where: { id } });
   if (!record) throw httpError(404, 'Payment refund not found');
@@ -83,11 +86,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
           event: true,
           pledge: { include: { items: true } },
           reward_claims: {
-            where: {
-              reversed_at: null,
-              status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
-              credit_redemptions: { none: {} },
-            },
+            where: liveDirectClaimWhere(),
             include: { reward: { select: { type: true } } },
           },
         },
@@ -116,9 +115,7 @@ export async function previewPaymentRefundTx(tx: Tx, claimId: string) {
                     ? 'Shipping must be recorded before a Payment refund'
                     : Math.min(claim.amount_cents, donation.amount_cents) <= 0
                       ? 'No refundable item money remains'
-                      : (await tx.paymentRefund.count({
-                            where: { donation_id: donation.id, status: 'REQUESTED' },
-                          }))
+                      : (await hasRequestedPaymentRefundTx(tx, donation.id))
                         ? 'A Payment refund is requested for this donation'
                         : null;
   if (reason || !donation)
@@ -183,7 +180,6 @@ export async function reconcilePaymentRefundTx(
   receipt: PaymentRefundReceipt,
   publisher: DonationPublisher,
 ) {
-  await lock(tx);
   const id = receipt.metadata?.payment_refund_id;
   if (!id) return null;
   const record = await tx.paymentRefund.findUnique({ where: { id } });
@@ -329,7 +325,6 @@ async function executePaymentRefund(id: string, retry: boolean) {
     });
   } catch (error) {
     return withWebhooks(async (tx, _emit, publisher) => {
-      await lock(tx);
       const latest = await getPaymentRefundTx(tx, id);
       if (latest.status !== 'REQUESTED') return latest;
       if (isDefiniteRefundRejection(error))
@@ -352,7 +347,6 @@ async function executePaymentRefund(id: string, retry: boolean) {
 export async function requestPaymentRefund(claimId: string, actor: string) {
   if (!actor) throw httpError(400, 'Payment refund actor required');
   const record = await withWebhooks(async (tx, _emit, publisher) => {
-    await lock(tx);
     const preview = await previewPaymentRefundTx(tx, claimId);
     if (!preview.eligible) throw httpError(409, preview.reason ?? 'Claim is not eligible');
     const before = await publisher.snapshot(preview.donation_id);
@@ -387,7 +381,6 @@ export async function resolvePaymentRefundItem(id: string, resolution: unknown, 
   )
     throw httpError(400, 'Invalid item resolution or actor');
   return withWebhooks(async (tx, _emit, publisher) => {
-    await lock(tx);
     const record = await getPaymentRefundTx(tx, id);
     if (record.resolution) {
       if (record.resolution === resolution) return record;
@@ -396,8 +389,7 @@ export async function resolvePaymentRefundItem(id: string, resolution: unknown, 
     if (record.status !== 'FAILED' || !record.accepted_at)
       throw httpError(409, 'Only an accepted, later-failed Payment refund can be resolved');
     const donation = await tx.donation.findUniqueOrThrow({ where: { id: record.donation_id } });
-    if (await tx.paymentRefund.count({ where: { donation_id: donation.id, status: 'REQUESTED' } }))
-      throw httpError(409, 'A Payment refund is requested for this donation');
+    await assertNoRequestedPaymentRefundTx(tx, donation.id);
     if (resolution === 'SETTLED_BY_DISPUTE' && donation.status !== 'CHARGEBACK')
       throw httpError(409, 'Only a CHARGEBACK can settle this item by dispute');
     if (resolution === 'WALLET_CREDIT' && !['COMPLETED', 'REFUNDED'].includes(donation.status))
@@ -456,7 +448,6 @@ export async function resolvePaymentRefundShipping(id: string, resolution: unkno
   )
     throw httpError(400, 'Invalid shipping resolution or actor');
   return prisma.$transaction(async (tx) => {
-    await lock(tx);
     const record = await getPaymentRefundTx(tx, id);
     if (record.shipping_resolution) {
       if (record.shipping_resolution === resolution) return record;

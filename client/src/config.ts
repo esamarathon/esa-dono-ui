@@ -5,7 +5,7 @@ import { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS } from '@dono/shared';
 
 export { MIN_SPEND_CENTS, MIN_SPEND_DOLLARS };
 
-/** Prefilled amount for a new poll vote / custom write-in input. */
+/** Default amount when a poll share link prefills a vote without ?amount= (#76). */
 export const DEFAULT_VOTE_AMOUNT = '1.00';
 
 /** Prefilled amount for a new fund-goal contribution input. */
@@ -19,10 +19,21 @@ export const DEFAULT_GOAL_AMOUNT = '5.00';
 export const CART_SYNC_DEBOUNCE_MS = 400;
 
 /**
- * How often the homepage re-fetches campaign totals so the raised amount
- * updates for clients without a manual reload.
+ * How often the "Live / Up next" schedule strip re-fetches GET /api/schedule.
+ * #250 D8: the combined strip (schedule + donation acknowledgements) polls
+ * ~15 s — faster than the server's ~60 s schedule timetable cache — so an
+ * individual acknowledgement plausibly just happened. The strip must keep a
+ * constant height across updates so an acknowledgement can replace its
+ * content in place.
  */
-export const CAMPAIGN_POLL_MS = 15000;
+export const SCHEDULE_POLL_MS = 15000;
+
+/**
+ * How long one donation acknowledgement (individual or aggregate) replaces
+ * the schedule text before the schedule returns (#250 derived item 3, "a few
+ * seconds" from #148).
+ */
+export const ACK_SLOT_MS = 5000;
 
 /**
  * How often the incentive data (rewards/polls/goals/channels) is refreshed.

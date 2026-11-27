@@ -5,6 +5,7 @@ import { httpError } from '../lib/httpError.js';
 import { assertUsableSlug, availableSlugFrom } from '../lib/slugs.js';
 import { activeEventWithPrimary } from './events.js';
 import { defaultGoal } from './defaultGoal.js';
+import { optionalScheduleSlug, optionalScheduleStreamId } from './schedule.js';
 
 /** Live staff editor projection; uses the fulfillment resolver, never private donor data. */
 export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
@@ -18,7 +19,7 @@ export async function readStaffChannelsTx(tx: Prisma.TransactionClient) {
     channels.map(async (channel) => ({
       ...channelResponse(channel),
       default_goal: await goal(await defaultGoal(tx, channel.id)),
-      fallback_goal: await goal(await defaultGoal(tx, channel.id, true)),
+      fallback_goal: await goal(await defaultGoal(tx, channel.id, { skipOwnList: true })),
       has_eligible_default: channel.default_goals.some(
         ({ goal }) => goal.is_active && !goal.is_complete && isAvailableOn(goal, channel),
       ),
@@ -38,6 +39,10 @@ export interface ChannelInput {
   slug?: unknown;
   event_id?: unknown;
   is_active?: unknown;
+  /** Crew Corner event slug for the donor-site schedule strip (#286). Empty clears. */
+  schedule_slug?: unknown;
+  /** Optional Crew Corner stream id for the donor-site schedule strip (#286). Empty clears. */
+  schedule_stream_id?: unknown;
   /** Update only: ordered goal ids (own or shared), including ineligible entries. */
   default_goals?: unknown;
 }
@@ -110,12 +115,22 @@ export async function createChannel(input: ChannelInput) {
         throw httpError(409, 'Channel id already exists');
       }
       const event_id = await resolveEventId(tx, input.event_id);
+      const schedule_slug = optionalScheduleSlug(input.schedule_slug) ?? null;
+      const schedule_stream_id = optionalScheduleStreamId(input.schedule_stream_id) ?? null;
       const slug =
         input.slug === undefined || input.slug === ''
           ? await availableSlugFrom(tx, name, 'channel')
           : await assertUsableSlug(tx, input.slug);
       return tx.channel.create({
-        data: { id, name, slug, event_id, is_active: isActive ?? true },
+        data: {
+          id,
+          name,
+          slug,
+          event_id,
+          is_active: isActive ?? true,
+          schedule_slug,
+          schedule_stream_id,
+        },
       });
     });
   } catch (e) {
@@ -178,6 +193,12 @@ export async function updateChannel(id: string, input: ChannelInput) {
         data.event_id = await resolveEventId(tx, eventId);
       }
       if (isActive !== undefined) data.is_active = isActive;
+      if (input.schedule_slug !== undefined) {
+        data.schedule_slug = optionalScheduleSlug(input.schedule_slug);
+      }
+      if (input.schedule_stream_id !== undefined) {
+        data.schedule_stream_id = optionalScheduleStreamId(input.schedule_stream_id);
+      }
 
       if (input.default_goals !== undefined) {
         const ids = input.default_goals;

@@ -41,7 +41,6 @@ services:
       - STRIPE_CURRENCY=${STRIPE_CURRENCY:-usd}
       - STRIPE_SHIPPING_RATE_ID=${STRIPE_SHIPPING_RATE_ID:-}
       - STRIPE_SHIPPING_ALLOWED_COUNTRIES=${STRIPE_SHIPPING_ALLOWED_COUNTRIES:-US}
-      - CAMPAIGN_GOAL_CENTS=${CAMPAIGN_GOAL_CENTS:-500000}
 
       # Auth
       - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
@@ -70,9 +69,11 @@ services:
       - EMAIL_FROM=${EMAIL_FROM:-Donation Platform <no-reply@example.com>}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost:8080}
 
-      # Feedback widget
+      # Feedback queue: reports persist to the DB and FEEDBACK_DIR; Discord
+      # and email are best-effort notifications on top.
       - RATE_LIMIT_FEEDBACK=${RATE_LIMIT_FEEDBACK:-5}
       - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL:-}
+      - FEEDBACK_RECIPIENTS=${FEEDBACK_RECIPIENTS:-}
 
       # OpenTelemetry (optional tracing)
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otelcol:4318}

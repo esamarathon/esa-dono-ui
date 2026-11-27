@@ -1,11 +1,16 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import prisma from '../../lib/prisma.js';
-import { planPledge, type PledgePlan } from '@dono/shared';
+import { DEFAULT_MAX_ENTRY_CHARS, planPledge, type PledgePlan } from '@dono/shared';
 import { createPledge, type PledgeItemInput } from '../../services/pledge.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 
@@ -14,14 +19,22 @@ const donors: string[] = [];
 const drafts: string[] = [];
 const rewards: string[] = [];
 const goals: string[] = [];
+const polls: string[] = [];
 afterEach(async () => {
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS reject_pledge_hold');
+  await dropFailTrigger(prisma, 'reject_pledge_hold');
   await prisma.pendingPledge.deleteMany({ where: { draft_id: { in: drafts } } });
   await prisma.donor.deleteMany({ where: { id: { in: donors } } });
   await prisma.reward.deleteMany({ where: { id: { in: rewards } } });
   await prisma.fundGoal.deleteMany({ where: { id: { in: goals } } });
+  await prisma.poll.deleteMany({ where: { id: { in: polls } } });
   await prisma.channel.deleteMany({ where: { id: { in: channels } } });
-  channels.length = donors.length = drafts.length = rewards.length = goals.length = 0;
+  channels.length =
+    donors.length =
+    drafts.length =
+    rewards.length =
+    goals.length =
+    polls.length =
+      0;
 });
 afterAll(() => prisma.$disconnect());
 
@@ -83,8 +96,12 @@ describe('pooled pledge creation on SQLite', () => {
     donors.push(donor.id);
     const draft_id = crypto.randomUUID();
     drafts.push(draft_id);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_pledge_hold BEFORE INSERT ON PendingPledge
-      BEGIN SELECT RAISE(ABORT, 'reject pledge after hold'); END`);
+    await createFailTrigger(prisma, {
+      name: 'reject_pledge_hold',
+      table: 'PendingPledge',
+      operation: 'INSERT',
+      message: 'reject pledge after hold',
+    });
     await expect(
       createPledge({
         draft_id,
@@ -387,6 +404,159 @@ describe('pooled pledge creation on SQLite', () => {
     expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
       balance_remaining: 975,
       balance_held_cents: 0,
+    });
+  });
+
+  it('rejects a blank claim answer on a labeled CUSTOM reward item at staging, and stores a supplied one (#78)', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const reward = await prisma.reward.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Pick the Next Game',
+        type: 'CUSTOM',
+        custom_type_label: 'Your game pick',
+        cost_cents: 500,
+      },
+    });
+    rewards.push(reward.id);
+    const planned = (data: unknown) =>
+      planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: [
+          {
+            kind: 'REWARD',
+            target_id: reward.id,
+            amount_cents: 500,
+            quantity: 1,
+            unit_price_cents: 500,
+            reward_type: 'CUSTOM',
+            insertion_order: 0,
+            data,
+          },
+        ],
+      });
+    const blankDraft = crypto.randomUUID();
+    drafts.push(blankDraft);
+    await expect(
+      createPledge({
+        draft_id: blankDraft,
+        pledge_amount_cents: 1000,
+        items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1, data: { data: '  ' } }],
+        channel_id: channel.id,
+        plan: planned(null),
+      }),
+    ).rejects.toMatchObject({ status: 400, message: 'answer is required' });
+    expect(await prisma.pendingPledge.count({ where: { draft_id: blankDraft } })).toBe(0);
+
+    const answeredDraft = crypto.randomUUID();
+    drafts.push(answeredDraft);
+    const answered = await createPledge({
+      draft_id: answeredDraft,
+      pledge_amount_cents: 1000,
+      items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1, data: { data: 'Outer Wilds' } }],
+      channel_id: channel.id,
+      plan: planned({ data: 'Outer Wilds' }),
+    });
+    expect(answered.items).toMatchObject([{ data: '{"data":"Outer Wilds"}' }]);
+
+    // Clearing the Custom Label makes the same answer field optional.
+    await prisma.reward.update({ where: { id: reward.id }, data: { custom_type_label: null } });
+    const optionalDraft = crypto.randomUUID();
+    drafts.push(optionalDraft);
+    const optional = await createPledge({
+      draft_id: optionalDraft,
+      pledge_amount_cents: 1000,
+      items: [{ kind: 'REWARD', target_id: reward.id, quantity: 1 }],
+      channel_id: channel.id,
+      plan: planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: [
+          {
+            kind: 'REWARD',
+            target_id: reward.id,
+            amount_cents: 500,
+            quantity: 1,
+            unit_price_cents: 500,
+            reward_type: 'CUSTOM',
+            insertion_order: 0,
+          },
+        ],
+      }),
+    });
+    expect(optional.items).toMatchObject([{ data: null }]);
+  });
+
+  it('caps a POLL_CUSTOM label at the shared default when max_entry_chars is null (#76)', async () => {
+    const channel = await createTestChannel(prisma);
+    channels.push(channel.id);
+    const poll = await prisma.poll.create({
+      data: {
+        event_id: DEFAULT_EVENT_ID,
+        title: 'Write-in',
+        allow_custom_entries: true,
+        max_entry_chars: null,
+      },
+    });
+    polls.push(poll.id);
+    const selections = (label: string) => [
+      {
+        kind: 'POLL_CUSTOM' as const,
+        target_id: poll.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        insertion_order: 0,
+        data: { label },
+      },
+    ];
+    const planFor = (label: string) =>
+      planPledge({
+        pledge_amount_cents: 1000,
+        available_wallet_cents: null,
+        selections: selections(label),
+      });
+    const items = (label: string) => [
+      {
+        kind: 'POLL_CUSTOM' as const,
+        target_id: poll.id,
+        poll_id: poll.id,
+        amount_cents: 100,
+        data: { label },
+      },
+    ];
+
+    const tooLongDraft = crypto.randomUUID();
+    drafts.push(tooLongDraft);
+    const tooLong = 'x'.repeat(DEFAULT_MAX_ENTRY_CHARS + 1);
+    await expect(
+      createPledge({
+        draft_id: tooLongDraft,
+        pledge_amount_cents: 1000,
+        items: items(tooLong),
+        channel_id: channel.id,
+        plan: planFor(tooLong),
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: `Entry exceeds maximum of ${DEFAULT_MAX_ENTRY_CHARS} characters`,
+    });
+    expect(await prisma.pendingPledge.count({ where: { draft_id: tooLongDraft } })).toBe(0);
+
+    const exactDraft = crypto.randomUUID();
+    drafts.push(exactDraft);
+    const exact = 'y'.repeat(DEFAULT_MAX_ENTRY_CHARS);
+    const created = await createPledge({
+      draft_id: exactDraft,
+      pledge_amount_cents: 1000,
+      items: items(exact),
+      channel_id: channel.id,
+      plan: planFor(exact),
+    });
+    expect(created.items[0]).toMatchObject({
+      source: 'donor',
+      data: JSON.stringify({ label: exact }),
     });
   });
 });

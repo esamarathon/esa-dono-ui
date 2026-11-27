@@ -14,9 +14,10 @@ npm run dev
 # Build client only
 npm run build
 
-# DB migrations (run from server/)
-cd server && npx prisma migrate dev --name <name>
-cd server && npx prisma generate
+# Generate both clients; deploy migrations selected by DATABASE_URL
+npm run db:generate --workspace server
+npm run db:migrate --workspace server
+# Model changes need migrations in BOTH provider histories; see docs/database.md.
 
 # DB seed (creates dev moderator/admin accounts + banner with API keys)
 cd server && npx prisma db seed
@@ -24,8 +25,17 @@ cd server && npx prisma db seed
 # DB studio
 cd server && npx prisma studio
 
+# Prepare a release on the dev→main PR (version bump + changelog section)
+npm run release -- 0.5.0
+# Verify version fields + changelog (CI runs this on every PR)
+npm run release -- --check
+
 # Typecheck (tsc --noEmit per workspace)
 npm run typecheck
+
+# Lint and format check (CI enforces both; the pre-commit hook fixes staged files)
+npm run lint
+npm run format:check
 
 # Tests (vitest, per-workspace configs — run from root)
 npm run test:ci          # lint-free CI run (junit reporter)
@@ -40,35 +50,22 @@ Note: run tests via the npm scripts above (per-workspace vitest configs). Runnin
 ## Language / TypeScript
 
 The codebase is **TypeScript (strict)** across both workspaces (see
-`docs/adr/0001-typescript-for-frontend-and-backend.md`). Key points:
+`docs/adr/0001-typescript-for-frontend-and-backend.md`). The rules that change how you write a
+line of code:
 
-- **Server** runs `.ts` directly via **`tsx`** (`tsx watch index.ts` in dev, `tsx index.ts`
-  in prod) — no build/emit step. `npm run typecheck --workspace server` runs `tsc --noEmit`.
+- **Server** runs `.ts` directly via **`tsx`** — no build step; `npm run typecheck` is `tsc --noEmit`.
   NodeNext ESM: relative imports **keep the `.js` extension** even though sources are `.ts`.
 - **Client** is compiled by Vite (`react-jsx`, `bundler` resolution) — relative imports are
-  **extensionless**. `tsc --noEmit` for typecheck.
-- **`packages/shared`** (`@dono/shared` workspace) holds cross-cutting types consumed by both
-  sides: branded `Cents` money helpers, Stripe webhook payload types, and `claim_data` helpers.
-  It ships as raw `.ts` (no build) via its `exports`/`main` pointing at source.
-- `tsconfig.base.json` at the root holds the strict baseline; each workspace extends it.
-- Tests are TypeScript (`.test.ts`/`.test.tsx`). Config files are TypeScript too
-  (`vite.config.ts`, `vitest.config.ts`, `tailwind.config.ts`, and one `eslint.config.ts` per
-  workspace — loaded via `jiti`). `allowJs` is **off**. The **only** remaining JavaScript file is
-  `client/postcss.config.js`: Vite's bundled `postcss-load-config` cannot load a `.ts`
-  PostCSS config, so it must stay `.js`. No `.js`/`.jsx` source or test files remain.
+  **extensionless**.
+- **`packages/shared`** (`@dono/shared`) holds cross-cutting types consumed by both sides.
+
+Tooling detail (config files, `allowJs`, the single remaining `.js` file): `docs/architecture.md`
+§ Language / TypeScript.
 
 ## Docker
 
-Full deployment and operations guide: `docs/deployment.md`. Image and publish details:
-`docs/architecture.md` § Container images.
-
-```bash
-# Local full stack (needs ADMIN_API_KEY at minimum); frontend on http://localhost:8080
-ADMIN_API_KEY=change-me docker compose up --build
-
-# After building, prove the stack functions (always tears down)
-ADMIN_API_KEY=change-me FRONTEND_PORT=18080 ./scripts/smoke-test.sh
-```
+Full guide (local stack, smoke test, publishing): `docs/deployment.md`. Image and publish
+details: `docs/architecture.md` § Container images.
 
 Behind an external proxy (Caddy, a TLS terminator, a load balancer), set **`TRUST_PROXY=2`**
 (one more per extra proxy), or every visitor shares one rate-limit bucket (#140).
@@ -89,8 +86,10 @@ Each of these has broken before or breaks silently. Detail: `docs/architecture.m
 
 - The Stripe webhook route is mounted **before** `express.json()`: it needs the raw body for
   signature verification (`server/index.ts`).
-- Inside a Prisma transaction, use the **`tx` client**. A query on the global `prisma` waits for
-  the transaction and times out (SQLite `connection_limit=1`, ADR-0007).
+- Inside a Prisma transaction, use the **`tx` client**. Use `createDatabaseClient()` for
+  additional clients: it selects the connector and serializes transactions before reads
+  (SQLite write lock / PostgreSQL advisory lock). A global query inside a SQLite
+  transaction waits for itself (`connection_limit=1`, ADR-0007).
 - Webhook messages are emitted only through `withWebhooks(fn)`
   (`server/services/webhooks/outbox.ts`), so they commit or roll back with the change.
 - **Moderator routes never return donor email.** Only `server/routes/admin.ts` may. See the
@@ -117,6 +116,8 @@ Each of these has broken before or breaks silently. Detail: `docs/architecture.m
   metrics.
 - `docs/api-consumers.md`: callers of this API in sibling repos. Check it before changing an
   endpoint or a response field.
+- `server/openapi.yaml` + `server/test/openapi-coverage.test.ts`: a new or changed server
+  route needs a matching OpenAPI entry; the test enforces exact two-way parity.
 
 ## Agent skills
 
@@ -127,6 +128,14 @@ Issues and PRDs live as GitHub issues in `esamarathon/esa-dono-ui` (`origin`) �
 ### Triage labels
 
 Five canonical triage roles mapped to default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Release flow
+
+`dev` accumulates bullets under `## [Unreleased]` in `CHANGELOG.md` (per-PR, CI-enforced;
+`no-changelog` label exempts). The `dev` → `main` merge is the release gate: `npm run
+release` bumps all six version fields and turns Unreleased into a dated `## [x.y.z]`
+section; CI refuses the merge otherwise. Dependency patch PRs automerge into `dev`
+without version bumps. See `docs/agents/release.md`.
 
 ### Domain docs
 

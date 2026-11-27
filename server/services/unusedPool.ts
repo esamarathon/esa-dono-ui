@@ -1,7 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { readDonationAccountingTx } from './poolAccounting.js';
-import { reverseSpendTx } from './reversal.js';
+import {
+  assertPaymentRefundFreeze,
+  liveRowWhere,
+  readDonationAccountingTx,
+} from './poolAccounting.js';
+import { goalRemainingCents } from './spend.js';
+import { reverseSpendTx } from './spendReversal.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
 
 type Tx = Prisma.TransactionClient;
@@ -15,8 +20,7 @@ async function sourceTx(tx: Tx, id: string) {
   if (donation.pledge_amount_cents === null || donation.status !== 'COMPLETED')
     throw httpError(409, 'Only COMPLETED pooled donations have Unused pool money');
   if (!donation.channel_id) throw httpError(409, 'An admin must route this donation first');
-  if (await tx.paymentRefund.count({ where: { donation_id: id, status: 'REQUESTED' } }))
-    throw httpError(409, 'A Payment refund is requested for this donation');
+  assertPaymentRefundFreeze(donation.payment_refund_requested);
   return donation;
 }
 
@@ -48,7 +52,7 @@ export async function listUnusedTx(
     if (filters.comments_only !== false && !donation.comment?.trim()) continue;
     const state = await readDonationAccountingTx(tx, donation.id);
     const poll = await tx.pollVote.findMany({
-      where: { donation_id: donation.id, source: 'moderator', reversed_at: null },
+      where: { donation_id: donation.id, source: 'moderator', ...liveRowWhere() },
       select: {
         id: true,
         amount_cents: true,
@@ -63,7 +67,7 @@ export async function listUnusedTx(
       },
     });
     const goal = await tx.fundContribution.findMany({
-      where: { donation_id: donation.id, source: 'moderator', reversed_at: null },
+      where: { donation_id: donation.id, source: 'moderator', ...liveRowWhere() },
       select: {
         id: true,
         amount_cents: true,
@@ -154,14 +158,17 @@ export async function unusedTargetsTx(tx: Tx, donationId: string, category: Unus
               target_cents: true,
             },
           })
-        ).map((row) => ({
-          id: row.id,
-          label: row.title,
-          channel_id: row.channel_id,
-          before_cents: row.current_cents,
-          after_cents: row.current_cents + amount,
-          target_cents: row.target_cents,
-        }));
+        )
+          .map((row) => ({
+            id: row.id,
+            label: row.title,
+            channel_id: row.channel_id,
+            before_cents: row.current_cents,
+            // #201: a goal can take at most what its target still needs.
+            after_cents: Math.min(row.current_cents + amount, row.target_cents),
+            target_cents: row.target_cents,
+          }))
+          .filter((row) => row.before_cents < row.target_cents);
   return { amount_cents: amount, targets };
 }
 
@@ -181,7 +188,6 @@ export async function assignUnusedTx(
   if (!actor) throw httpError(400, 'Assignment actor required');
   if (!Number.isSafeInteger(expected) || expected <= 0)
     throw httpError(400, 'Expected amount must be positive integer cents');
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const donation = await sourceTx(tx, donationId);
   const picker = await unusedTargetsTx(tx, donationId, category);
   if (picker.amount_cents !== expected)
@@ -213,12 +219,18 @@ export async function assignUnusedTx(
     });
   } else {
     const goal = await tx.fundGoal.findUniqueOrThrow({ where: { id: targetId } });
-    row = await tx.fundContribution.create({ data: { ...data, goal_id: goal.id } });
+    // #201: cap at the goal's remaining need; the remainder stays Unused pool
+    // money on the donation (it is computed, so it reappears automatically).
+    const placed = Math.min(expected, goalRemainingCents(goal));
+    if (placed <= 0) throw httpError(409, 'Target is no longer eligible');
+    row = await tx.fundContribution.create({
+      data: { ...data, goal_id: goal.id, amount_cents: placed },
+    });
     await tx.fundGoal.update({
       where: { id: goal.id },
       data: {
-        current_cents: { increment: expected },
-        is_complete: goal.current_cents + expected >= goal.target_cents,
+        current_cents: { increment: placed },
+        is_complete: goal.current_cents + placed >= goal.target_cents,
       },
     });
   }
@@ -233,7 +245,6 @@ export async function undoUnusedTx(
   actor: string,
   publisher: DonationPublisher,
 ) {
-  await tx.$executeRaw`UPDATE Donor SET id = id WHERE 0`;
   const row =
     category === 'poll'
       ? await tx.pollVote.findUnique({

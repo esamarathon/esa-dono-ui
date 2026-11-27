@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFailTrigger, dropFailTrigger } from '../helpers/failTrigger.js';
 import crypto from 'node:crypto';
 import prisma from '../../lib/prisma.js';
 import { planPledge } from '@dono/shared';
@@ -11,7 +12,11 @@ import {
 } from '../../services/checkout.js';
 import { pledgeResponse } from '../../services/pledge.js';
 import { intakeDonation } from '../../services/donation.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 import { sendMagicLink } from '../../services/email.js';
 import { drainDestination } from '../../services/webhooks/dispatcher.js';
 
@@ -89,8 +94,8 @@ afterEach(async () => {
     where: { destination_id: { in: destinations } },
   });
   await prisma.webhookDestination.deleteMany({ where: { id: { in: destinations } } });
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS reject_checkout_outbox');
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS reject_checkout_commit');
+  await dropFailTrigger(prisma, 'reject_checkout_outbox');
+  await dropFailTrigger(prisma, 'reject_checkout_commit');
   await prisma.fundContribution.deleteMany({ where: { donor_id: { in: donors } } });
   await prisma.pendingPledge.deleteMany({ where: { pledge_token: { in: tokens } } });
   await prisma.donation.deleteMany({ where: { donor_id: { in: donors } } });
@@ -207,8 +212,12 @@ describe('checkout lifecycle on real SQLite', () => {
       data: { url: 'http://127.0.0.1:1', secret: 'test', event_types: '["donation.created"]' },
     });
     destinations.push(destination.id);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_checkout_outbox BEFORE INSERT ON WebhookDelivery
-      BEGIN SELECT RAISE(ABORT, 'review outbox failure'); END`);
+    await createFailTrigger(prisma, {
+      name: 'reject_checkout_outbox',
+      table: 'WebhookDelivery',
+      operation: 'INSERT',
+      message: 'review outbox failure',
+    });
     const paid = {
       id: 'cs_review_outbox',
       status: 'complete' as const,
@@ -231,7 +240,7 @@ describe('checkout lifecycle on real SQLite', () => {
       status: 'CANCELLED',
       fulfilled_by_donation_id: null,
     });
-    await prisma.$executeRawUnsafe('DROP TRIGGER reject_checkout_outbox');
+    await dropFailTrigger(prisma, 'reject_checkout_outbox');
     expect(await reconcilePledge(pledge.pledge_token)).toMatchObject({
       payment_state: 'PAYMENT_REVIEW',
     });
@@ -342,17 +351,27 @@ describe('checkout lifecycle on real SQLite', () => {
       status: 'expired',
       payment_status: 'unpaid',
     });
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_checkout_commit BEFORE UPDATE ON PendingPledge
-      WHEN NEW.status = 'CANCELLED' BEGIN SELECT RAISE(ABORT, 'release must roll back'); END`);
+    await createFailTrigger(prisma, {
+      name: 'reject_checkout_commit',
+      table: 'PendingPledge',
+      operation: 'UPDATE',
+      when: `NEW."status" = 'CANCELLED'`,
+      message: 'release must roll back',
+    });
     await expect(cancelPledge(pledge.pledge_token, donor)).rejects.toMatchObject({ status: 409 });
     expect(await prisma.donor.findUnique({ where: { id: donor.id } })).toMatchObject({
       balance_remaining: 25,
       balance_held_cents: 950,
     });
-    await prisma.$executeRawUnsafe('DROP TRIGGER reject_checkout_commit');
+    await dropFailTrigger(prisma, 'reject_checkout_commit');
     await cancelPledge(pledge.pledge_token, donor);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_checkout_commit BEFORE UPDATE ON PendingPledge
-      WHEN NEW.status = 'FULFILLED' BEGIN SELECT RAISE(ABORT, 'fulfillment must roll back'); END`);
+    await createFailTrigger(prisma, {
+      name: 'reject_checkout_commit',
+      table: 'PendingPledge',
+      operation: 'UPDATE',
+      when: `NEW."status" = 'FULFILLED'`,
+      message: 'fulfillment must roll back',
+    });
     stripe.retrieve.mockResolvedValue({
       id: 'cs_rollback',
       status: 'complete',

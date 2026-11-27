@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import crypto from 'crypto';
 import rewardsRouter from '../../routes/rewards.js';
 import pollsRouter from '../../routes/polls.js';
@@ -10,7 +10,7 @@ import { createTestChannel } from '../helpers/fixtures.js';
 
 // ADR-0012: a direct Wallet spend targets one Channel and may fund only an
 // incentive available on it, exactly like a pledge.
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 const app = express();
 app.use(express.json());
 app.use('/api/rewards', rewardsRouter);

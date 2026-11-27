@@ -1,8 +1,8 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { createDatabaseClient } from '../../lib/databaseClient.js';
 import { checkBlockedWords } from '../../services/blockedWords.js';
 
-const prisma = new PrismaClient();
+const prisma = createDatabaseClient();
 
 describe('checkBlockedWords', () => {
   afterAll(async () => {

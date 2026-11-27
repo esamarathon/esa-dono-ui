@@ -106,14 +106,14 @@ export default function ProgressBar({
           >
             {/* Spinning Coin */}
             <span
-              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow text-dark-gray font-mono font-bold text-xs shadow-md animate-coin-bounce select-none border border-d-yellow"
+              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow text-dark-gray font-mono font-bold text-sm shadow-md animate-coin-bounce select-none border border-d-yellow"
               title="Coin"
             >
               🪙
             </span>
 
             {/* Plus Gain Label */}
-            <span className="font-data font-bold text-xs text-yellow text-shadow animate-plus-float select-none whitespace-nowrap">
+            <span className="font-data font-bold text-sm text-yellow text-shadow animate-plus-float select-none whitespace-nowrap">
               {gainText || '+'}
             </span>
           </div>

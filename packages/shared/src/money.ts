@@ -30,3 +30,11 @@ export const MIN_SPEND_CENTS = 100;
 
 /** MIN_SPEND_CENTS expressed in dollars, for display/HTML `min` attributes. */
 export const MIN_SPEND_DOLLARS = MIN_SPEND_CENTS / 100;
+
+/**
+ * Default maximum length of a poll custom entry (write-in) when the poll's
+ * `max_entry_chars` is null (#76). A code constant, not a staff field: a
+ * moderator-set per-poll value overrides it. Shared by the client write-in
+ * form and the server length check so both fall back to the same cap.
+ */
+export const DEFAULT_MAX_ENTRY_CHARS = 40;

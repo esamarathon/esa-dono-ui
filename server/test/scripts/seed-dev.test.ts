@@ -1,4 +1,4 @@
-import { afterAll, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { execFile } from 'node:child_process';
@@ -14,7 +14,11 @@ import rewardsRouter from '../../routes/rewards.js';
 import pollsRouter from '../../routes/polls.js';
 import goalsRouter from '../../routes/goals.js';
 import eventsRouter from '../../routes/events.js';
-import { createTestChannel, DEFAULT_EVENT_ID } from '../helpers/fixtures.js';
+import { createTestChannel, DEFAULT_EVENT_ID, ensureDefaultEvent } from '../helpers/fixtures.js';
+
+beforeAll(async () => {
+  await ensureDefaultEvent(prisma);
+});
 
 vi.mock('../../services/email.js', () => ({ sendMagicLink: vi.fn().mockResolvedValue(undefined) }));
 const exec = promisify(execFile);
@@ -66,6 +70,9 @@ it('the demo bootstrap creates an active public Event with both Channels before 
       ]),
     );
     const main = channels.find((channel) => channel.slug === 'main-marathon')!;
+    // #286: without DEMO_SCHEDULE_SLUG the fields stay empty, so the strip hides.
+    expect(main.schedule_slug).toBeNull();
+    expect(main.schedule_stream_id).toBeNull();
     expect(event).toMatchObject({ is_active: true, primary_channel_id: main.id });
     expect(response.body).toContainEqual(
       expect.objectContaining({
@@ -77,6 +84,30 @@ it('the demo bootstrap creates an active public Event with both Channels before 
         ]),
       }),
     );
+    // #286: DEMO_SCHEDULE_SLUG (and the optional DEMO_SCHEDULE_STREAM_ID) seed
+    // the demo Channels' Crew Corner schedule mapping, so the nightly staging
+    // reset keeps the "Live / Up next" strip configured.
+    await prisma.event.updateMany({
+      where: { slug: 'default-event' },
+      data: { primary_channel_id: null },
+    });
+    await prisma.channel.deleteMany({ where: { slug: { in: ['main-marathon', 'bonus-stream'] } } });
+    await exec('bash', ['-c', shell, 'seed-dev.sh', `http://127.0.0.1:${address.port}`], {
+      env: {
+        ...process.env,
+        ADMIN_API_KEY: 'test-admin-key',
+        DEMO_SCHEDULE_SLUG: 'demo-schedule',
+        DEMO_SCHEDULE_STREAM_ID: '3',
+      },
+    });
+    const seeded = await prisma.channel.findMany({
+      where: { slug: { in: ['main-marathon', 'bonus-stream'] } },
+    });
+    expect(seeded).toHaveLength(2);
+    for (const channel of seeded) {
+      expect(channel.schedule_slug).toBe('demo-schedule');
+      expect(channel.schedule_stream_id).toBe(3);
+    }
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

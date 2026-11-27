@@ -3,9 +3,9 @@ import crypto from 'crypto';
 import prisma from '../../lib/prisma.js';
 
 /**
- * The migration's default Event. `test/global-setup.ts` migrates every test
- * database, so the row exists; `ensureDefaultEvent` recreates it if a test
- * deleted it.
+ * Stable default Event for provider-neutral fixtures. Historical SQLite
+ * migrations insert it; an empty PostgreSQL baseline does not. Tests that use
+ * this id call `ensureDefaultEvent` before creating dependent rows.
  */
 export const DEFAULT_EVENT_ID = '00000000-0000-4000-8000-000000000001';
 

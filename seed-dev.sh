@@ -90,13 +90,27 @@ fi
 
 # Fixed ids: consumers key their state by Channel id (Kollekt keeps one
 # Campaign per id), so a nightly reset must not mint new ones.
+# Optional Crew Corner schedule (#286): DEMO_SCHEDULE_SLUG names the event at
+# {SCHEDULE_SOURCE_BASE_URL}/api/v1/events/<slug>/schedule (published source),
+# and DEMO_SCHEDULE_STREAM_ID optionally pins one stream's board. Unset keeps
+# the fields null, so the strip hides; a schedule without current or future
+# rows hides too (D6/D8).
+DEMO_SCHEDULE_JSON=null
+if [ -n "${DEMO_SCHEDULE_SLUG:-}" ]; then
+  DEMO_SCHEDULE_JSON="\"$DEMO_SCHEDULE_SLUG\""
+fi
+DEMO_SCHEDULE_STREAM_JSON=null
+if [ -n "${DEMO_SCHEDULE_STREAM_ID:-}" ]; then
+  DEMO_SCHEDULE_STREAM_JSON="\"$DEMO_SCHEDULE_STREAM_ID\""
+fi
+
 C_MAIN=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"id\":\"00000000-0000-4000-8000-000000000101\",\"name\":\"Main Marathon\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000101\",\"name\":\"Stream 1\",\"slug\":\"main-marathon\",\"event_id\":\"$EVENT\",\"is_active\":true,\"schedule_slug\":$DEMO_SCHEDULE_JSON,\"schedule_stream_id\":$DEMO_SCHEDULE_STREAM_JSON}" | jq -er .id)
 
 C_BONUS=$(curl -sf -X POST "$BASE/api/admin/channels" \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"id\":\"00000000-0000-4000-8000-000000000102\",\"name\":\"Bonus Stream\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true}" | jq -er .id)
+  -d "{\"id\":\"00000000-0000-4000-8000-000000000102\",\"name\":\"Stream 2\",\"slug\":\"bonus-stream\",\"event_id\":\"$EVENT\",\"is_active\":true,\"schedule_slug\":$DEMO_SCHEDULE_JSON,\"schedule_stream_id\":$DEMO_SCHEDULE_STREAM_JSON}" | jq -er .id)
 
 # Activate before incentives/donations, not in the later accounts/banner seed.
 curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \
@@ -105,12 +119,12 @@ curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \
   | jq -e --arg primary "$C_MAIN" '.is_active == true and .primary_channel_id == $primary' >/dev/null
 
 echo "   Event: $EVENT (Default Event; active)"
-echo "   Channels: $C_MAIN (Main Marathon) $C_BONUS (Bonus Stream)"
+echo "   Channels: $C_MAIN (Stream 1) $C_BONUS (Stream 2)"
 
 # --- Rewards ---
 # The 'thank-you card' and the Discord role are left shared (no channel_id)
 # — available from either channel's donate flow. The t-shirt and game pick
-# are scoped to the Main Marathon, to demonstrate a channel-specific
+# are scoped to Stream 1, to demonstrate a channel-specific
 # incentive. All four carry a real uploaded test image.
 #
 # NOTE: a SHOUTOUT-type reward ('Shoutout on Stream') used to live here, but
@@ -164,7 +178,7 @@ echo "   Rewards: $R_THANKS $R_DISC $R_SHIRT $R_GAME $R_CHEATSHEET $R_ARTPRINT $
 
 # --- Auctions ---
 # A1 (signed memorabilia) is left shared — biddable from either channel's
-# donate flow. A2 (dev commentary session) is scoped to the Bonus Stream, to
+# donate flow. A2 (dev commentary session) is scoped to Stream 2, to
 # demonstrate a channel-specific auction alongside the shared one. Bidding
 # requires a verified-email donor with a prior donation (see docs/adr), which
 # simulate-donation-created donors don't have, so no bids are placed here —
@@ -178,13 +192,13 @@ A_SHARED=$(curl -sf -X POST $BASE/api/admin/auctions \
 
 A_STREAM=$(curl -sf -X POST $BASE/api/admin/auctions \
   -H "Content-Type: application/json" -H "$AUTH" \
-  -d "{\"title\":\"1-on-1 Dev Commentary Session\",\"description\":\"30 minutes with a developer during the Bonus Stream\",\"type\":\"CUSTOM\",\"custom_type_label\":\"Session topic\",\"starting_price_cents\":2000,\"min_increment_cents\":1000,\"ends_at\":\"$ENDS_AT\",\"is_active\":true,\"channel_id\":\"$C_BONUS\",\"image_url\":\"$IMG_AUCTION_STREAM\"}" | jq -r .id)
+  -d "{\"title\":\"1-on-1 Dev Commentary Session\",\"description\":\"30 minutes with a developer during Stream 2\",\"type\":\"CUSTOM\",\"custom_type_label\":\"Session topic\",\"starting_price_cents\":2000,\"min_increment_cents\":1000,\"ends_at\":\"$ENDS_AT\",\"is_active\":true,\"channel_id\":\"$C_BONUS\",\"image_url\":\"$IMG_AUCTION_STREAM\"}" | jq -r .id)
 
-echo "   Auctions: $A_SHARED (shared) $A_STREAM (Bonus Stream)"
+echo "   Auctions: $A_SHARED (shared) $A_STREAM (Stream 2)"
 
 # --- Polls ---
-# P1 (pick the finale game) belongs to the Main Marathon; P2 (bonus
-# challenge) belongs to the Bonus Stream — each only shows up once its
+# P1 (pick the finale game) belongs to Stream 1; P2 (bonus
+# challenge) belongs to Stream 2 — each only shows up once its
 # channel is selected on /donate. P3 (overall event vibe) is left shared, so
 # it shows up regardless of channel, alongside the two stream-scoped polls.
 echo "==> Creating polls..."
@@ -211,10 +225,10 @@ OPT_DEV=$(echo $P2_JSON | jq -r '.options[] | select(.label=="Developers comment
 OPT_RACE=$(echo $P2_JSON | jq -r '.options[] | select(.label=="Community race") | .id')
 OPT_NODEATH=$(echo $P3_JSON | jq -r '.options[] | select(.label=="The Celeste no-death run") | .id')
 
-echo "   Polls: $P1 (Main) $P2 (Bonus) $P3 (shared)"
+echo "   Polls: $P1 (Stream 1) $P2 (Stream 2) $P3 (shared)"
 
 # --- Goals ---
-# G1 (bonus couch stream) belongs to the Bonus Stream; G2 and G3 are left
+# G1 (bonus couch stream) belongs to Stream 2; G2 and G3 are left
 # shared (fed by donations to either channel).
 echo "==> Creating goals..."
 G1=$(curl -sf -X POST $BASE/api/admin/goals \
@@ -252,8 +266,8 @@ fi
 # --- Donations (creates donors) ---
 # Uses /api/admin/simulate-donation (rather than a raw webhook payload) so
 # each donation can carry a channel_id, giving the admin dashboard's
-# per-channel totals something to show. Alice/Dave donate to the Main
-# Marathon, Bob/Carol to the Bonus Stream, Eve donates without a channel
+# per-channel totals something to show. Alice/Dave donate to Stream 1,
+# Bob/Carol to Stream 2, Eve donates without a channel
 # (simulating a legacy/direct donation not tied to either).
 echo "==> Simulating donations..."
 sim_donation() {
@@ -275,7 +289,7 @@ CAROL=$(sim_donation "carol@example.com" "Carol Plays" 3500 "$C_BONUS" | jq -r .
 DAVE=$(sim_donation "dave@example.com" "Dave" 20000 "$C_MAIN" | jq -r .token)
 EVE=$(sim_donation "eve@example.com" "Eve the Runner" 7500 "" | jq -r .token)
 sim_donation "alice@example.com" "Alice Speedrun" 3000 "$C_MAIN" > /dev/null
-echo "   6 donations created (Alice/Dave -> Main Marathon, Bob/Carol -> Bonus Stream, Eve -> no channel)."
+echo "   6 donations created (Alice/Dave -> Stream 1, Bob/Carol -> Stream 2, Eve -> no channel)."
 
 # --- Reward claims ---
 # Donor spend routes authenticate via `Authorization: Bearer <magic-token>`
@@ -345,11 +359,11 @@ echo ""
 echo "==> Done. Summary:"
 curl -sf $BASE/api/admin/stats -H "$AUTH" | jq .
 echo ""
-echo "Channels:     Main Marathon ($C_MAIN), Bonus Stream ($C_BONUS)"
-echo "Rewards:      $R_THANKS (shared), $R_DISC (shared), $R_SHIRT (Main), $R_GAME (Main), $R_CHEATSHEET (shared), $R_ARTPRINT (shared), $R_COSTUME (shared) — all with test images or reused images"
-echo "Auctions:     $A_SHARED (shared), $A_STREAM (Bonus) — all with test images, no bids (needs verified-email donor)"
-echo "Polls:        $P1 (Main), $P2 (Bonus), $P3 (shared)"
-echo "Goals:        $G1 (Bonus), $G2 (shared), $G3 (shared)"
+echo "Channels:     Stream 1 ($C_MAIN), Stream 2 ($C_BONUS)"
+echo "Rewards:      $R_THANKS (shared), $R_DISC (shared), $R_SHIRT (Stream 1), $R_GAME (Stream 1), $R_CHEATSHEET (shared), $R_ARTPRINT (shared), $R_COSTUME (shared) — all with test images or reused images"
+echo "Auctions:     $A_SHARED (shared), $A_STREAM (Stream 2) — all with test images, no bids (needs verified-email donor)"
+echo "Polls:        $P1 (Stream 1), $P2 (Stream 2), $P3 (shared)"
+echo "Goals:        $G1 (Stream 2), $G2 (shared), $G3 (shared)"
 if [ -n "${D_MQ:-}" ]; then echo "Destination:  $D_MQ (RabbitMQ)"; fi
 # Magic links are session credentials: only show them to a person at a terminal.
 if [ -t 1 ]; then
