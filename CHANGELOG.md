@@ -7,6 +7,41 @@ breaking changes.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-27
+
+### Added
+
+- **The aggregate donation total stays available to API consumers as
+  `GET /api/campaign`** (#148 amendment): the donor site keeps no public total
+  or goal — the stream overlay owns the public fundraising display — but
+  external tools can still read the total. New minimal shape
+  `{ "total_raised_cents": <integer cents> }`, same money-total rule as
+  `GET /api/admin/stats`. Not compatible with the pre-0.10.0 response (name,
+  description, `amount_raised`, `goal`); the new shape carries no goal.
+
+- **`GET /api/campaign` can scope the total to an Event or Channel**: pass
+  `?event=<event-slug>` or `?channel=<channel-slug>` (exactly one; both or a
+  malformed value is a 400, unknown slugs are 404) and the same
+  `{ "total_raised_cents": … }` shape
+  returns that Event's or Channel's total. An Event total counts its assigned
+  donations; unassigned donations count in the overall total only. Slugs
+  resolve whether active or not, like `GET /api/tiltify/campaigns/{id}`.
+
+### Changed
+
+- **The pooled accounting rules have one home** (no behavior change):
+  `poolAccounting.ts` now owns allocation liveness, the category budget and the
+  REQUESTED Payment-refund freeze, and absorbs `rewardFunding.ts`. Every
+  allocation query in the money modules builds its filter from it, so a rule
+  change is one edit instead of eleven.
+
+### Fixed
+
+- **The frontend image scans clean at HIGH/CRITICAL again**: the nginx runner
+  base shipped `libxml2` `2.13.9-r3`, which carries six HIGH CVEs
+  (CVE-2026-86138/86139/86140/86142/86143/11979, all fixed by `2.13.9-r5`);
+  the image's CVE floor bump now installs `libxml2>=2.13.9-r5`.
+
 ## [0.12.1] — 2026-11-25
 
 ### Fixed

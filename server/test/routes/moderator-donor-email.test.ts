@@ -51,7 +51,6 @@ describe('moderator routes never select/include donor.email', () => {
     '../../services/channels.ts',
     '../../services/events.ts',
     '../../services/staffRead.ts',
-    '../../services/rewardFunding.ts',
     '../../services/defaultGoal.ts',
   ])('has no donor.select.email pattern in %s code (comments excluded)', (file) => {
     const path = fileURLToPath(new URL(file, import.meta.url));

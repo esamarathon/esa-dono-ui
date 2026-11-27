@@ -1,7 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import type { PoolCategory } from '@dono/shared';
 import { countsTowardTotals } from '../lib/donationTotals.js';
-import { computePoolAccounting, type CategoryAmounts } from './poolAccounting.js';
+import {
+  computePoolAccounting,
+  liveClaimWhere,
+  liveRowWhere,
+  type CategoryAmounts,
+} from './poolAccounting.js';
 
 const amounts = (): CategoryAmounts => ({ reward: 0, poll: 0, goal: 0 });
 type Labels = { event: string; channel: string };
@@ -52,7 +57,7 @@ export async function readAccountingStatsTx(tx: Prisma.TransactionClient, now = 
       select: { id: true, name: true, slug: true, event_id: true, is_active: true },
     }),
     tx.rewardClaim.findMany({
-      where: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+      where: liveClaimWhere(),
       select: {
         donation_id: true,
         amount_cents: true,
@@ -68,14 +73,14 @@ export async function readAccountingStatsTx(tx: Prisma.TransactionClient, now = 
     }),
     tx.pollVote.groupBy({
       by: ['donation_id', 'poll_id', 'source'],
-      where: { reversed_at: null },
+      where: liveRowWhere(),
       _sum: { amount_cents: true },
       _count: true,
     }),
     tx.poll.findMany({ select: { id: true, channel_id: true, is_active: true } }),
     tx.fundContribution.groupBy({
       by: ['donation_id', 'goal_id', 'source'],
-      where: { reversed_at: null },
+      where: liveRowWhere(),
       _sum: { amount_cents: true },
     }),
     tx.fundGoal.findMany({ select: { id: true, channel_id: true, is_active: true } }),

@@ -13,7 +13,7 @@ import {
   incentiveAllocationTx,
 } from '../services/staffRead.js';
 import { readPoolCreditSummaryTx } from '../services/poolCredit.js';
-import { readRewardFundingTx } from '../services/rewardFunding.js';
+import { readRewardFundingTx } from '../services/poolAccounting.js';
 import { mountIdentityRoutes } from './identityRoutes.js';
 import { assignDonationChannel } from '../services/routing.js';
 import { handle, sendError } from '../lib/httpError.js';

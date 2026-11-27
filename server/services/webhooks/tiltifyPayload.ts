@@ -1,6 +1,11 @@
 import type { Prisma } from '@prisma/client';
 import { channelTotalCents, eventTotalCents } from '../../lib/donationTotals.js';
-import { readRewardFundingTx } from '../rewardFunding.js';
+import {
+  liveClaimWhere,
+  liveCreditBackedClaimWhere,
+  liveRowWhere,
+  readRewardFundingTx,
+} from '../poolAccounting.js';
 
 /**
  * Tiltify-shaped webhook messages (PRD-0002 §T, ADR-0009) for the consumers that
@@ -69,15 +74,15 @@ export async function buildTiltifyDonation(
       // What the donation actually paid for: a pledge item that failed at
       // fulfilment has no row. Reversed rows are left out.
       reward_claims: {
-        where: { reversed_at: null, status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] } },
+        where: liveClaimWhere(),
         orderBy: { created_at: 'asc' },
       },
       // A write-in (POLL_CUSTOM) vote counts once its option is approved (ACTIVE).
       poll_votes: {
-        where: { reversed_at: null, poll_option: { status: 'ACTIVE' } },
+        where: { ...liveRowWhere(), poll_option: { status: 'ACTIVE' } },
         orderBy: { created_at: 'asc' },
       },
-      contributions: { where: { reversed_at: null }, orderBy: { created_at: 'asc' } },
+      contributions: { where: liveRowWhere(), orderBy: { created_at: 'asc' } },
     },
   });
   if (!donation?.channel) return null;
@@ -101,11 +106,7 @@ export async function buildTiltifyDonation(
       ? donation.contributions.map((c) => ({ target_id: c.goal_id, amount: money(c.amount_cents) }))
       : [...goalAmounts].map(([target_id, cents]) => ({ target_id, amount: money(cents) }));
   const creditClaims = await tx.rewardClaim.findMany({
-    where: {
-      reversed_at: null,
-      status: { in: ['PENDING', 'FULFILLED', 'CANCELLING'] },
-      credit_redemptions: { some: { credit: { donation_id: donationId } } },
-    },
+    where: liveCreditBackedClaimWhere(donationId),
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
   });
   const carried = [];

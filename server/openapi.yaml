@@ -76,7 +76,7 @@ info:
     ## Money
 
     All monetary values are **integer cents**. Display values as `$X.XX` by dividing by 100.
-  version: '0.12.1'
+  version: '0.13.0'
 
 servers:
   - url: /api
@@ -196,6 +196,62 @@ paths:
                   error: { type: string }
 
   # ─── Campaign ───
+  /campaign:
+    get:
+      tags: [Campaign]
+      summary: Get a donation total (overall, per Event, or per Channel)
+      description: >-
+        The money total for API consumers (#148 amendment). The donor site does not
+        display it; the stream overlay owns the public fundraising display. Without a
+        scope parameter this is the deployment-wide total. There is no goal. The
+        pre-0.10.0 shape (name, description, amount_raised, goal) is gone.
+      parameters:
+        - name: event
+          in: query
+          required: false
+          description: >-
+            Event slug. Returns that Event's total: its assigned donations only (an
+            unassigned donation counts in the overall total). The slug resolves whether
+            the Event is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          description: >-
+            Channel slug. Returns that Channel's total. The slug resolves whether the
+            Channel is active or not, like GET /api/tiltify/campaigns/{id}.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Donation total for the requested scope
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total_raised_cents]
+                properties:
+                  total_raised_cents:
+                    type: integer
+                    description: Money total. Counts current amount_cents of COMPLETED and REFUNDED donations, not CHARGEBACK or PENDING; hidden donations count. Shipping is excluded. Same rule as GET /api/admin/stats.
+        '400':
+          description: Both event and channel given, or a scope parameter is empty, repeated, or not a plain slug string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+        '404':
+          description: No Event or Channel with that slug
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+
   /campaign/broadcast:
     get:
       tags: [Campaign]

@@ -1,6 +1,10 @@
 import type { Prisma } from '@prisma/client';
 import { httpError } from '../lib/httpError.js';
-import { readDonationAccountingTx } from './poolAccounting.js';
+import {
+  assertNoRequestedPaymentRefundTx,
+  liveRowWhere,
+  readDonationAccountingTx,
+} from './poolAccounting.js';
 import { goalRemainingCents } from './spend.js';
 import { reverseSpendTx } from './reversal.js';
 import type { DonationPublisher } from './webhooks/donationPublisher.js';
@@ -16,8 +20,7 @@ async function sourceTx(tx: Tx, id: string) {
   if (donation.pledge_amount_cents === null || donation.status !== 'COMPLETED')
     throw httpError(409, 'Only COMPLETED pooled donations have Unused pool money');
   if (!donation.channel_id) throw httpError(409, 'An admin must route this donation first');
-  if (await tx.paymentRefund.count({ where: { donation_id: id, status: 'REQUESTED' } }))
-    throw httpError(409, 'A Payment refund is requested for this donation');
+  await assertNoRequestedPaymentRefundTx(tx, id);
   return donation;
 }
 
@@ -49,7 +52,7 @@ export async function listUnusedTx(
     if (filters.comments_only !== false && !donation.comment?.trim()) continue;
     const state = await readDonationAccountingTx(tx, donation.id);
     const poll = await tx.pollVote.findMany({
-      where: { donation_id: donation.id, source: 'moderator', reversed_at: null },
+      where: { donation_id: donation.id, source: 'moderator', ...liveRowWhere() },
       select: {
         id: true,
         amount_cents: true,
@@ -64,7 +67,7 @@ export async function listUnusedTx(
       },
     });
     const goal = await tx.fundContribution.findMany({
-      where: { donation_id: donation.id, source: 'moderator', reversed_at: null },
+      where: { donation_id: donation.id, source: 'moderator', ...liveRowWhere() },
       select: {
         id: true,
         amount_cents: true,

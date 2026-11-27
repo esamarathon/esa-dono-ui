@@ -33,6 +33,10 @@ npm run release -- --check
 # Typecheck (tsc --noEmit per workspace)
 npm run typecheck
 
+# Lint and format check (CI enforces both; the pre-commit hook fixes staged files)
+npm run lint
+npm run format:check
+
 # Tests (vitest, per-workspace configs — run from root)
 npm run test:ci          # lint-free CI run (junit reporter)
 npm test                 # all workspace tests
@@ -112,6 +116,8 @@ Each of these has broken before or breaks silently. Detail: `docs/architecture.m
   metrics.
 - `docs/api-consumers.md`: callers of this API in sibling repos. Check it before changing an
   endpoint or a response field.
+- `server/openapi.yaml` + `server/test/openapi-coverage.test.ts`: a new or changed server
+  route needs a matching OpenAPI entry; the test enforces exact two-way parity.
 
 ## Agent skills
 
