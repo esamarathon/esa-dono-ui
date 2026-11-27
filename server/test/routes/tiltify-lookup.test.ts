@@ -305,7 +305,7 @@ describe('optional ESA incentive lookup API (#189)', () => {
     expect((await get(`/campaign/${channelA}/lookup/polls/${rewards[0]}`)).status).toBe(404);
   });
 
-  it('does not widen Channel lists, Event lists or ordinary poll detail', async () => {
+  it('does not widen Channel lists or poll detail; an Event lists only its shared incentives', async () => {
     await fixture({
       rewardPrice: 725,
       stock: 10,
@@ -328,19 +328,22 @@ describe('optional ESA incentive lookup API (#189)', () => {
         [channelB, [ids[1], ids[2]]],
         // Another Event's Channel no longer lists this Event's shared incentive.
         [otherChannel, [ids[3]]],
-        [eventId, []],
+        // ADR-0012: the Event (team campaign) lists its shared incentive.
+        [eventId, [ids[1]]],
       ] as const) {
         const res = await get(`/campaign/${context}/${kind}`);
         expect(res.status).toBe(200);
         // Other route suites also create shared incentives in the default Event.
         const ours = res.body.filter((r: { id: string }) => ids.includes(r.id));
         expect(ours.map((r: { id: string }) => r.id).sort()).toEqual([...expected].sort());
-        if (context === eventId) expect(res.body).toEqual([]);
+        if (context === eventId)
+          expect(res.body.map((r: { id: string }) => r.id)).toEqual([ids[1]]);
         for (const resource of res.body) expect(resource).not.toHaveProperty('campaign_id');
       }
     }
     expect((await get(`/campaign/${channelA}/polls/${polls[2]!.id}`)).status).toBe(404);
-    expect((await get(`/campaign/${eventId}/polls/${polls[1]!.id}`)).status).toBe(404);
+    expect((await get(`/campaign/${eventId}/polls/${polls[1]!.id}`)).status).toBe(200);
+    expect((await get(`/campaign/${eventId}/polls/${polls[0]!.id}`)).status).toBe(404);
   });
 
   it('looks up own, shared and same-Event foreign rewards with the true owner and exact bare DTO', async () => {

@@ -58,6 +58,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
   let ownRewardA = '';
   let ownRewardB = '';
   let sharedPoll = '';
+  let sharedGoal = '';
   let ownPollB = '';
   let approvedOption = '';
 
@@ -99,6 +100,7 @@ describe('Tiltify-compatible REST API (#117)', () => {
       },
     });
     ids.goals.push(goal.id);
+    sharedGoal = goal.id;
 
     const poll = await prisma.poll.create({
       data: {
@@ -247,12 +249,12 @@ describe('Tiltify-compatible REST API (#117)', () => {
       expect(unlimited).toMatchObject({ quantity: null, quantity_remaining: null });
     });
 
-    it('an Event lists no incentives (layouts concatenates Event + Channel lists)', async () => {
-      for (const kind of ['rewards', 'targets', 'polls']) {
-        const res = await get(`/campaign/${eventId}/${kind}`);
-        expect(res.status).toBe(200);
-        expect(res.body).toEqual([]);
-      }
+    it('an Event lists only its shared incentives, like a Tiltify team campaign (ADR-0012)', async () => {
+      const listed = async (kind: string) =>
+        (await get(`/campaign/${eventId}/${kind}`)).body.map((r: { id: string }) => r.id);
+      expect(await listed('rewards')).toEqual([sharedReward]);
+      expect(await listed('targets')).toEqual([sharedGoal]);
+      expect(await listed('polls')).toEqual([sharedPoll]);
     });
 
     it('returns 404 for an unknown campaign', async () => {
@@ -304,9 +306,10 @@ describe('Tiltify-compatible REST API (#117)', () => {
       expect(res.body.options.map((o: { id: string }) => o.id)).toEqual([approvedOption]);
     });
 
-    it('polls/{poll_id} is 404 when the poll belongs to another Channel, the Event, or nobody', async () => {
+    it('polls/{poll_id} serves a shared poll from its Event, and is 404 for another Channel or nobody', async () => {
+      expect((await get(`/campaign/${eventId}/polls/${sharedPoll}`)).body.id).toBe(sharedPoll);
+      expect((await get(`/campaign/${eventId}/polls/${ownPollB}`)).status).toBe(404);
       expect((await get(`/campaign/${channelA}/polls/${ownPollB}`)).status).toBe(404);
-      expect((await get(`/campaign/${eventId}/polls/${sharedPoll}`)).status).toBe(404);
       expect((await get(`/campaign/${channelA}/polls/${crypto.randomUUID()}`)).status).toBe(404);
     });
   });

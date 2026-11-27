@@ -22,6 +22,11 @@ breaking changes.
   reason, and `unusedPool.ts` no longer imports the terminal-status
   workflow (#301).
 
+- **Tiltify-compatible Event lists now contain the Event's shared incentives**, like
+  Tiltify team-level incentives (ADR-0012 rollout step 3); Channel lists keep them.
+  Deploy esa-layouts-v2#9 first, or overlays that read both lists show shared polls
+  twice. Deploy Kollekt#44 only after this release.
+
 ## [0.13.0] — 2026-11-27
 
 ### Added
