@@ -125,6 +125,44 @@ it('the demo bootstrap creates an active public Event with both Channels before 
   }
 });
 
+// Keep in sync with the "for word in …" loop in seed-dev.sh.
+const SAMPLE_BLOCKED_WORDS = ['spoiler', 'spam', 'backseat', 'scam'];
+
+it('seeds sample blocked words idempotently (a re-seed skips existing words)', async () => {
+  // Clean slate: the demo-bootstrap test above runs the same slice and leaves
+  // the sample words behind.
+  await prisma.blockedWord.deleteMany({ where: { word: { in: SAMPLE_BLOCKED_WORDS } } });
+  const app = express();
+  app.use(express.json());
+  app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  app.use('/api/admin', adminRouter);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+  try {
+    const source = await readFile(new URL('../../../seed-dev.sh', import.meta.url), 'utf8');
+    const shell =
+      source.slice(0, source.indexOf('# --- Test images ---')) +
+      source.slice(source.indexOf('# --- Blocked words ---'), source.indexOf('# --- Rewards ---'));
+    const run = () =>
+      exec('bash', ['-c', shell, 'seed-dev.sh', `http://127.0.0.1:${address.port}`], {
+        env: { ...process.env, ADMIN_API_KEY: 'test-admin-key' },
+      });
+    await run(); // fresh seed: creates the rows
+    await run(); // re-seed: skips existing words instead of failing on the 409
+    const rows = await prisma.blockedWord.findMany({
+      where: { word: { in: SAMPLE_BLOCKED_WORDS } },
+    });
+    expect(rows.map((row) => row.word).sort()).toEqual([...SAMPLE_BLOCKED_WORDS].sort());
+  } finally {
+    await prisma.blockedWord.deleteMany({ where: { word: { in: SAMPLE_BLOCKED_WORDS } } });
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 it.each([503, 200])(
   'the demo bootstrap fails on an unusable Channel response (HTTP %i)',
   async (status) => {
