@@ -121,6 +121,22 @@ curl -sf -X PUT "$BASE/api/admin/events/$EVENT" \
 echo "   Event: $EVENT (Default Event; active)"
 echo "   Channels: $C_MAIN (Stream 1) $C_BONUS (Stream 2)"
 
+# --- Blocked words ---
+# Harmless sample entries for the global custom-entry filter (comments and
+# poll write-ins), so a demo can show an entry being rejected. Skip-if-exists
+# on re-seed: a duplicate word would 409 and abort the script (set -e).
+echo "==> Seeding sample blocked words..."
+EXISTING_BLOCKED=$(curl -sf "$BASE/api/admin/blocked-words" -H "$AUTH" | jq -r '.[].word')
+for word in spoiler spam backseat scam; do
+  if echo "$EXISTING_BLOCKED" | grep -qx "$word"; then
+    echo "   $word (already blocked, skipped)"
+  else
+    curl -sf -X POST "$BASE/api/admin/blocked-words" \
+      -H "Content-Type: application/json" -H "$AUTH" \
+      -d "{\"word\":\"$word\"}" | jq -r '"   \(.word) (added)"'
+  fi
+done
+
 # --- Rewards ---
 # The 'thank-you card' and the Discord role are left shared (no channel_id)
 # — available from either channel's donate flow. The t-shirt and game pick
